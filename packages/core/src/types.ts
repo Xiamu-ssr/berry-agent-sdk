@@ -135,6 +135,8 @@ export interface SessionMetadata {
 
 export interface AgentConfig {
   provider: ProviderConfig;
+  /** Optional injected provider instance (useful for tests/custom providers) */
+  providerInstance?: Provider;
   /** System prompt — string or array of blocks (for cache optimization) */
   systemPrompt: string | string[];
   tools?: ToolRegistration[];

@@ -12,6 +12,9 @@ export { OpenAIProvider } from './providers/openai.js';
 // Compaction
 export { compact, estimateTokens } from './compaction/compactor.js';
 
+// Session stores
+export { FileSessionStore } from './session/file-store.js';
+
 // Types
 export type {
   // Agent config

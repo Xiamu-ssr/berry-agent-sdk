@@ -25,6 +25,7 @@ import { compact } from './compaction/compactor.js';
 
 export class Agent {
   private provider: Provider;
+  private providerConfig: ProviderConfig;
   private systemPrompt: string[];
   private tools: Map<string, ToolRegistration>;
   private skills: string[];
@@ -45,6 +46,7 @@ export class Agent {
     this.compactionConfig = config.compaction;
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
+    this.providerConfig = config.provider;
 
     // Register tools
     for (const tool of config.tools ?? []) {
@@ -52,7 +54,7 @@ export class Agent {
     }
 
     // Create provider
-    this.provider = createProvider(config.provider);
+    this.provider = config.providerInstance ?? createProvider(config.provider);
   }
 
   /**
@@ -76,7 +78,7 @@ export class Agent {
     const allowedTools = this.resolveAllowedTools(options?.allowedTools);
 
     // 4. Build system prompt (static blocks + dynamic skills)
-    const fullSystemPrompt = await this.buildSystemPrompt(options?.systemPrompt);
+    const fullSystemPrompt = await this.buildSystemPrompt(session.systemPrompt, options?.systemPrompt);
 
     // 5. Agent loop (tool calling)
     let turns = 0;
@@ -183,8 +185,9 @@ export class Agent {
             type: 'tool_result',
             toolUseId: toolUse.id,
             content: result.forLLM ?? result.content,
+            isError: result.isError,
           });
-          this.emit({ type: 'tool_result', name: toolUse.name, isError: false });
+          this.emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
         } catch (err) {
           toolResultBlocks.push({
             type: 'tool_result',
@@ -284,7 +287,7 @@ export class Agent {
       lastAccessedAt: Date.now(),
       metadata: {
         cwd: this.cwd,
-        model: this.config.model,
+        model: this.providerConfig.model,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCacheReadTokens: 0,
@@ -294,10 +297,6 @@ export class Agent {
     };
   }
 
-  private get config(): ProviderConfig {
-    return (this.provider as any).config;
-  }
-
   private resolveAllowedTools(allowed?: string[]): ToolRegistration[] {
     if (!allowed) return [...this.tools.values()];
     return allowed
@@ -305,10 +304,10 @@ export class Agent {
       .filter((t): t is ToolRegistration => t !== undefined);
   }
 
-  private async buildSystemPrompt(override?: string | string[]): Promise<string[]> {
+  private async buildSystemPrompt(basePrompt: string[], override?: string | string[]): Promise<string[]> {
     if (override) return normalizeSystemPrompt(override);
 
-    const base = [...this.systemPrompt];
+    const base = [...basePrompt];
 
     // Load skill files if configured
     if (this.skills.length > 0) {

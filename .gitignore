@@ -7,3 +7,5 @@ dist/
 
 # Claude Code reference source (local only, not committed)
 .cc-reference/
+.cc-agent-sdk-.cc-reference/
+.cc-agent-sdk-py-reference/
