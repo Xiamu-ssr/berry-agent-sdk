@@ -44,6 +44,7 @@ export type {
   ProviderType,
   ProviderRequest,
   ProviderResponse,
+  ProviderStreamEvent,
   TokenUsage,
 
   // Session

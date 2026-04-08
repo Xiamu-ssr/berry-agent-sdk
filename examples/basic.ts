@@ -1,7 +1,7 @@
 // ============================================================
 // Berry Agent SDK — Basic Example
 // ============================================================
-// Shows: create agent → register tool → query with tool loop → resume session
+// Shows: create agent → stream events → tool loop → resume session
 
 import { Agent } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
@@ -48,8 +48,11 @@ const agent = new Agent({
     // threshold defaults to 85% of contextWindow
   },
   onEvent: (event) => {
+    if (event.type === 'text_delta') {
+      process.stdout.write(event.text);
+    }
     if (event.type === 'tool_call') {
-      console.log(`🔧 Tool: ${event.name}`);
+      console.log(`\n🔧 Tool: ${event.name}`);
     }
     if (event.type === 'api_response') {
       const u = event.usage;
@@ -63,9 +66,11 @@ const agent = new Agent({
 
 // 3. Query
 async function main() {
-  // First query
-  const result1 = await agent.query('What is the weather in Tokyo?');
-  console.log('\n🤖:', result1.text);
+  // First query with streaming deltas
+  const result1 = await agent.query('What is the weather in Tokyo?', {
+    stream: true,
+  });
+  console.log('\n\n🤖 final:', result1.text);
   console.log(`Session: ${result1.sessionId} | Tools: ${result1.toolCalls}`);
 
   // Resume same session

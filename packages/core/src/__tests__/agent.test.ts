@@ -5,8 +5,10 @@ import type {
   Provider,
   ProviderRequest,
   ProviderResponse,
+  ProviderStreamEvent,
   ToolRegistration,
   Session,
+  AgentEvent,
 } from '../types.js';
 
 class SequenceProvider implements Provider {
@@ -22,6 +24,30 @@ class SequenceProvider implements Provider {
       throw new Error('No fake response left');
     }
     return structuredClone(response);
+  }
+}
+
+class StreamingProvider implements Provider {
+  readonly type = 'anthropic' as const;
+  readonly requests: ProviderRequest[] = [];
+
+  async chat(): Promise<ProviderResponse> {
+    throw new Error('chat should not be called when stream=true');
+  }
+
+  async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
+    this.requests.push(structuredClone(request));
+    yield { type: 'text_delta', text: 'hel' };
+    yield { type: 'text_delta', text: 'lo' };
+    yield { type: 'thinking_delta', thinking: 'internal' };
+    yield {
+      type: 'response',
+      response: {
+        content: [{ type: 'text', text: 'hello' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    };
   }
 }
 
@@ -197,6 +223,37 @@ describe('Agent', () => {
     expect(forkedSession?.messages[0].content).toBe('first');
     expect(forkedSession?.messages[2].content).toBe('second');
     expect(forkedSession?.messages[4].content).toBe('fork prompt');
+  });
+
+  it('emits streaming events and still returns the final result', async () => {
+    const provider = new StreamingProvider();
+    const events: AgentEvent[] = [];
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      onEvent: (event) => events.push(event),
+    });
+
+    const perQueryEvents: AgentEvent[] = [];
+    const result = await agent.query('stream this', {
+      stream: true,
+      onEvent: (event) => perQueryEvents.push(event),
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(result.text).toBe('hello');
+    expect(events.filter((event) => event.type === 'text_delta')).toEqual([
+      { type: 'text_delta', text: 'hel' },
+      { type: 'text_delta', text: 'lo' },
+    ]);
+    expect(events.some((event) => event.type === 'thinking_delta')).toBe(true);
+    expect(perQueryEvents.at(-1)).toEqual(expect.objectContaining({ type: 'query_end' }));
   });
 
   it('stops after maxTurns when the provider keeps asking for tools', async () => {

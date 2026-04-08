@@ -17,12 +17,14 @@ import type {
   ChatCompletionTool,
   ChatCompletionToolMessageParam,
   ChatCompletionAssistantMessageParam,
+  ChatCompletionChunk,
 } from 'openai/resources/chat/completions';
 import type {
   Provider,
   ProviderConfig,
   ProviderRequest,
   ProviderResponse,
+  ProviderStreamEvent,
   Message,
   ContentBlock,
   ToolDefinition,
@@ -45,29 +47,118 @@ export class OpenAIProvider implements Provider {
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
-      maxRetries: 0, // We handle retries
+      maxRetries: 0,
       timeout: 120_000,
     });
   }
 
   async chat(request: ProviderRequest): Promise<ProviderResponse> {
+    const response = await this.callWithRetry(this.buildParams(request), request.signal);
+    return this.parseResponse(response);
+  }
+
+  async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
+    const stream = await this.callStreamWithRetry(this.buildStreamParams(request), request.signal);
+
+    const textParts: string[] = [];
+    const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+    let stopReason: ProviderResponse['stopReason'] = 'end_turn';
+
+    for await (const chunk of stream) {
+      if (chunk.usage) {
+        usage = this.extractUsage(chunk.usage);
+      }
+
+      const choice = chunk.choices[0];
+      if (!choice) continue;
+
+      if (choice.finish_reason) {
+        stopReason = this.mapStopReason(choice.finish_reason);
+      }
+
+      const delta = choice.delta;
+      if (delta.content) {
+        textParts.push(delta.content);
+        yield { type: 'text_delta', text: delta.content };
+      }
+
+      for (const toolCallDelta of delta.tool_calls ?? []) {
+        const current = toolCalls.get(toolCallDelta.index) ?? {
+          id: '',
+          name: '',
+          arguments: '',
+        };
+
+        if (toolCallDelta.id) {
+          current.id = toolCallDelta.id;
+        }
+        if (toolCallDelta.function?.name) {
+          current.name += toolCallDelta.function.name;
+        }
+        if (toolCallDelta.function?.arguments) {
+          current.arguments += toolCallDelta.function.arguments;
+        }
+
+        toolCalls.set(toolCallDelta.index, current);
+      }
+    }
+
+    const content: ContentBlock[] = [];
+    const text = textParts.join('');
+
+    if (text) {
+      content.push({ type: 'text', text });
+    }
+
+    for (const [, toolCall] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+      content.push({
+        type: 'tool_use',
+        id: toolCall.id || `tool_${Math.random().toString(36).slice(2, 8)}`,
+        name: toolCall.name,
+        input: this.parseToolArguments(toolCall.arguments),
+      });
+    }
+
+    yield {
+      type: 'response',
+      response: {
+        content: content.length > 0 ? content : [{ type: 'text', text: '' }],
+        stopReason,
+        usage,
+      },
+    };
+  }
+
+  // ===== Params =====
+
+  private buildParams(request: ProviderRequest): OpenAI.ChatCompletionCreateParamsNonStreaming {
     const messages = this.buildMessages(request.systemPrompt, request.messages);
     const tools = request.tools ? this.buildTools(request.tools) : undefined;
 
-    const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
+    return {
       model: this.config.model,
       messages,
       max_tokens: this.config.maxTokens ?? 16_384,
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
+  }
 
-    const response = await this.callWithRetry(params, request.signal);
+  private buildStreamParams(request: ProviderRequest): OpenAI.ChatCompletionCreateParamsStreaming {
+    const messages = this.buildMessages(request.systemPrompt, request.messages);
+    const tools = request.tools ? this.buildTools(request.tools) : undefined;
 
-    return this.parseResponse(response);
+    return {
+      model: this.config.model,
+      messages,
+      max_tokens: this.config.maxTokens ?? 16_384,
+      stream: true,
+      stream_options: { include_usage: true },
+      ...(tools && tools.length > 0 ? { tools } : {}),
+    };
   }
 
   // ===== Message Building =====
-  // Berry internal format → OpenAI ChatCompletionMessageParam[]
 
   private buildMessages(
     systemPrompt: string[],
@@ -75,14 +166,11 @@ export class OpenAIProvider implements Provider {
   ): ChatCompletionMessageParam[] {
     const result: ChatCompletionMessageParam[] = [];
 
-    // System prompt: join all blocks into one system message
-    // (OpenAI only supports one system message, no block-level cache control)
     const systemText = systemPrompt.filter(Boolean).join('\n\n');
     if (systemText) {
       result.push({ role: 'system', content: systemText });
     }
 
-    // Convert each Berry message
     for (const msg of messages) {
       const converted = this.convertMessage(msg);
       result.push(...converted);
@@ -91,12 +179,6 @@ export class OpenAIProvider implements Provider {
     return result;
   }
 
-  /**
-   * Convert one Berry Message → one or more OpenAI messages.
-   * 
-   * Why multiple? A Berry user message with tool_result blocks
-   * becomes separate role:"tool" messages in OpenAI format.
-   */
   private convertMessage(msg: Message): ChatCompletionMessageParam[] {
     if (msg.role === 'user') {
       return this.convertUserMessage(msg);
@@ -108,12 +190,10 @@ export class OpenAIProvider implements Provider {
   }
 
   private convertUserMessage(msg: Message): ChatCompletionMessageParam[] {
-    // Simple text message
     if (typeof msg.content === 'string') {
       return [{ role: 'user', content: msg.content }];
     }
 
-    // Content blocks — may contain tool_result and/or text
     const results: ChatCompletionMessageParam[] = [];
     const textParts: string[] = [];
 
@@ -122,7 +202,6 @@ export class OpenAIProvider implements Provider {
         textParts.push((block as TextContent).text);
       } else if (block.type === 'tool_result') {
         const tr = block as ToolResultContent;
-        // OpenAI: tool results are separate role:"tool" messages
         results.push({
           role: 'tool',
           tool_call_id: tr.toolUseId,
@@ -131,7 +210,6 @@ export class OpenAIProvider implements Provider {
       }
     }
 
-    // If there's text alongside tool results, add as user message AFTER
     if (textParts.length > 0) {
       results.push({ role: 'user', content: textParts.join('\n') });
     }
@@ -144,7 +222,6 @@ export class OpenAIProvider implements Provider {
       return [{ role: 'assistant', content: msg.content }];
     }
 
-    // Build assistant message with possible tool_calls
     const textParts: string[] = [];
     const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
 
@@ -158,11 +235,10 @@ export class OpenAIProvider implements Provider {
           type: 'function',
           function: {
             name: tu.name,
-            arguments: JSON.stringify(tu.input), // OpenAI: JSON string!
+            arguments: JSON.stringify(tu.input),
           },
         });
       }
-      // thinking blocks: skip (OpenAI doesn't have them)
     }
 
     const assistantMsg: ChatCompletionAssistantMessageParam = {
@@ -188,7 +264,6 @@ export class OpenAIProvider implements Provider {
   }
 
   // ===== Response Parsing =====
-  // OpenAI response → Berry internal format
 
   private parseResponse(response: OpenAI.ChatCompletion): ProviderResponse {
     const choice = response.choices[0];
@@ -202,43 +277,35 @@ export class OpenAIProvider implements Provider {
 
     const content: ContentBlock[] = [];
 
-    // Text content
     if (choice.message.content) {
       content.push({ type: 'text', text: choice.message.content });
     }
 
-    // Tool calls → Berry ToolUseContent
     if (choice.message.tool_calls) {
       for (const tc of choice.message.tool_calls) {
-        // OpenAI SDK v5: ToolCall = FunctionToolCall | CustomToolCall
-        // We only handle function tool calls
         if (!('function' in tc) || !tc.function) continue;
-        const fn = tc.function as { name: string; arguments: string };
-        let input: Record<string, unknown> = {};
-        try {
-          input = JSON.parse(fn.arguments);
-        } catch {
-          input = { _raw: fn.arguments };
-        }
         content.push({
           type: 'tool_use',
           id: tc.id,
-          name: fn.name,
-          input,
+          name: tc.function.name,
+          input: this.parseToolArguments(tc.function.arguments),
         });
       }
     }
 
-    // If no content at all, add empty text
-    if (content.length === 0) {
-      content.push({ type: 'text', text: '' });
-    }
-
     return {
-      content,
+      content: content.length > 0 ? content : [{ type: 'text', text: '' }],
       stopReason: this.mapStopReason(choice.finish_reason),
       usage: this.extractUsage(response.usage),
     };
+  }
+
+  private parseToolArguments(raw: string): Record<string, unknown> {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return { _raw: raw };
+    }
   }
 
   private mapStopReason(reason: string | null): ProviderResponse['stopReason'] {
@@ -247,16 +314,15 @@ export class OpenAIProvider implements Provider {
     return 'end_turn';
   }
 
-  private extractUsage(usage?: OpenAI.CompletionUsage): TokenUsage {
+  private extractUsage(usage?: OpenAI.CompletionUsage | null): TokenUsage {
     if (!usage) return { inputTokens: 0, outputTokens: 0 };
 
-    // OpenAI provides cache info in prompt_tokens_details (when available)
     const details = (usage as any).prompt_tokens_details;
     return {
       inputTokens: usage.prompt_tokens ?? 0,
       outputTokens: usage.completion_tokens ?? 0,
       cacheReadTokens: details?.cached_tokens ?? 0,
-      cacheWriteTokens: 0, // OpenAI doesn't charge for cache writes
+      cacheWriteTokens: 0,
     };
   }
 
@@ -270,10 +336,35 @@ export class OpenAIProvider implements Provider {
 
     for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
       try {
-        return await this.client.chat.completions.create(
-          params,
-          { signal },
-        );
+        return await this.client.chat.completions.create(params, { signal });
+      } catch (error: any) {
+        lastError = error;
+
+        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
+          throw error;
+        }
+
+        const retryAfter = error.headers?.['retry-after'];
+        const delayMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000
+          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
+
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async callStreamWithRetry(
+    params: OpenAI.ChatCompletionCreateParamsStreaming,
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<ChatCompletionChunk>> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+      try {
+        return await this.client.chat.completions.create(params, { signal });
       } catch (error: any) {
         lastError = error;
 

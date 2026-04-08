@@ -12,12 +12,15 @@ import type {
   ToolUseBlockParam,
   ToolResultBlockParam,
   MessageCreateParamsNonStreaming,
+  MessageCreateParamsStreaming,
+  RawMessageStreamEvent,
 } from '@anthropic-ai/sdk/resources/messages';
 import type {
   Provider,
   ProviderConfig,
   ProviderRequest,
   ProviderResponse,
+  ProviderStreamEvent,
   Message,
   ContentBlock,
   ToolDefinition,
@@ -47,6 +50,109 @@ export class AnthropicProvider implements Provider {
   }
 
   async chat(request: ProviderRequest): Promise<ProviderResponse> {
+    const response = await this.callWithRetry(this.buildParams(request), request.signal);
+
+    return {
+      content: this.parseResponseContent(response.content),
+      stopReason: this.mapStopReason(response.stop_reason),
+      usage: this.extractUsage(response.usage),
+    };
+  }
+
+  async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
+    const stream = await this.callStreamWithRetry(this.buildStreamParams(request), request.signal);
+
+    const content: Array<ContentBlock | undefined> = [];
+    const toolInputJson = new Map<number, string>();
+    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+    let stopReason: ProviderResponse['stopReason'] = 'end_turn';
+
+    for await (const event of stream) {
+      switch (event.type) {
+        case 'message_start': {
+          usage = this.extractUsage(event.message.usage);
+          break;
+        }
+        case 'content_block_start': {
+          const block = this.parseStreamStartBlock(event.content_block);
+          content[event.index] = block;
+
+          if (block?.type === 'text' && block.text) {
+            yield { type: 'text_delta', text: block.text };
+          }
+          if (block?.type === 'thinking' && block.thinking) {
+            yield { type: 'thinking_delta', thinking: block.thinking };
+          }
+          break;
+        }
+        case 'content_block_delta': {
+          const block = content[event.index];
+          const delta = event.delta;
+
+          if (delta.type === 'text_delta') {
+            const text = delta.text ?? '';
+            const target = block && block.type === 'text'
+              ? block
+              : ({ type: 'text', text: '' } satisfies TextContent);
+            target.text += text;
+            content[event.index] = target;
+            if (text) {
+              yield { type: 'text_delta', text };
+            }
+          } else if (delta.type === 'thinking_delta') {
+            const thinking = (delta as any).thinking ?? '';
+            const target = block && block.type === 'thinking'
+              ? block
+              : ({ type: 'thinking', thinking: '' } satisfies ThinkingContent);
+            target.thinking += thinking;
+            content[event.index] = target;
+            if (thinking) {
+              yield { type: 'thinking_delta', thinking };
+            }
+          } else if (delta.type === 'input_json_delta') {
+            toolInputJson.set(event.index, (toolInputJson.get(event.index) ?? '') + delta.partial_json);
+          }
+          break;
+        }
+        case 'content_block_stop': {
+          const block = content[event.index];
+          const partialJson = toolInputJson.get(event.index);
+          if (block?.type === 'tool_use' && partialJson) {
+            try {
+              block.input = JSON.parse(partialJson) as Record<string, unknown>;
+            } catch {
+              block.input = { _raw: partialJson };
+            }
+          }
+          break;
+        }
+        case 'message_delta': {
+          usage = this.extractUsage(event.usage);
+          stopReason = this.mapStopReason(event.delta.stop_reason);
+          break;
+        }
+        case 'message_stop':
+          break;
+        default:
+          break;
+      }
+    }
+
+    const finalContent = content.filter((block): block is ContentBlock => block !== undefined);
+
+    yield {
+      type: 'response',
+      response: {
+        content: finalContent.length > 0 ? finalContent : [{ type: 'text', text: '' }],
+        stopReason,
+        usage,
+      },
+    };
+  }
+
+  // ===== Params =====
+
+  private buildParams(request: ProviderRequest): Record<string, unknown> {
     const system = this.buildSystemBlocks(request.systemPrompt);
     const messages = this.buildMessages(request.messages);
     const tools = request.tools ? this.buildTools(request.tools) : undefined;
@@ -59,25 +165,24 @@ export class AnthropicProvider implements Provider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
-    // Extended thinking
     if (this.config.thinkingBudget && this.config.thinkingBudget > 0) {
       params.thinking = {
         type: 'enabled',
         budget_tokens: this.config.thinkingBudget,
       };
-      // max_tokens must be > thinking budget
       params.max_tokens = Math.max(
-        (this.config.maxTokens ?? 16_384),
+        this.config.maxTokens ?? 16_384,
         this.config.thinkingBudget + 1,
       );
     }
 
-    const response = await this.callWithRetry(params, request.signal);
+    return params;
+  }
 
+  private buildStreamParams(request: ProviderRequest): Record<string, unknown> {
     return {
-      content: this.parseResponseContent(response.content),
-      stopReason: this.mapStopReason(response.stop_reason),
-      usage: this.extractUsage(response.usage),
+      ...this.buildParams(request),
+      stream: true,
     };
   }
 
@@ -125,7 +230,6 @@ export class AnthropicProvider implements Provider {
       return { role: 'user', content: [block] };
     }
 
-    // Content blocks — may contain tool_result
     const content: ContentBlockParam[] = msg.content.map((block, idx) => {
       const isLast = idx === msg.content.length - 1;
       const cache = addCache && isLast
@@ -144,7 +248,6 @@ export class AnthropicProvider implements Provider {
           ...cache,
         } as ToolResultBlockParam;
       }
-      // Fallback: treat as text
       return { type: 'text' as const, text: JSON.stringify(block), ...cache };
     });
 
@@ -162,7 +265,7 @@ export class AnthropicProvider implements Provider {
     }
 
     const content: ContentBlockParam[] = msg.content
-      .filter(block => block.type !== 'thinking') // Don't send thinking blocks back
+      .filter(block => block.type !== 'thinking')
       .map((block, idx, arr) => {
         const isLast = idx === arr.length - 1;
         const cache = addCache && isLast
@@ -218,9 +321,29 @@ export class AnthropicProvider implements Provider {
           thinking: (block as any).thinking ?? '',
         } as ThinkingContent;
       }
-      // Unknown block type
       return { type: 'text', text: JSON.stringify(block) } as TextContent;
     });
+  }
+
+  private parseStreamStartBlock(block: Anthropic.ContentBlock): ContentBlock | undefined {
+    if (block.type === 'text') {
+      return { type: 'text', text: block.text };
+    }
+    if (block.type === 'tool_use') {
+      return {
+        type: 'tool_use',
+        id: block.id,
+        name: block.name,
+        input: (block.input as Record<string, unknown>) ?? {},
+      };
+    }
+    if (block.type === 'thinking') {
+      return {
+        type: 'thinking',
+        thinking: (block as any).thinking ?? '',
+      };
+    }
+    return undefined;
   }
 
   private mapStopReason(reason: string | null): ProviderResponse['stopReason'] {
@@ -231,10 +354,10 @@ export class AnthropicProvider implements Provider {
 
   private extractUsage(usage: any): TokenUsage {
     return {
-      inputTokens: usage.input_tokens ?? 0,
-      outputTokens: usage.output_tokens ?? 0,
-      cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
-      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+      inputTokens: usage?.input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+      cacheWriteTokens: usage?.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
     };
   }
 
@@ -249,11 +372,41 @@ export class AnthropicProvider implements Provider {
 
     for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
       try {
-        const response = await this.client.messages.create(
+        return await this.client.messages.create(
           params as unknown as MessageCreateParamsNonStreaming,
           { signal },
         );
-        return response;
+      } catch (error: any) {
+        lastError = error;
+
+        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
+          throw error;
+        }
+
+        const retryAfter = error.headers?.['retry-after'];
+        const delayMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000
+          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
+
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async callStreamWithRetry(
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<RawMessageStreamEvent>> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+      try {
+        return await this.client.messages.create(
+          params as unknown as MessageCreateParamsStreaming,
+          { signal },
+        );
       } catch (error: any) {
         lastError = error;
 
@@ -274,10 +427,10 @@ export class AnthropicProvider implements Provider {
   }
 
   private shouldRetry(error: any): boolean {
-    if (error?.status === 429) return true; // rate limit
-    if (error?.status === 408) return true; // timeout
-    if (error?.status === 409) return true; // lock
-    if (error?.status >= 500) return true;  // server error
+    if (error?.status === 429) return true;
+    if (error?.status === 408) return true;
+    if (error?.status === 409) return true;
+    if (error?.status >= 500) return true;
     if (error?.code === 'ECONNRESET' || error?.code === 'ETIMEDOUT') return true;
     return false;
   }

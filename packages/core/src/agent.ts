@@ -11,6 +11,7 @@ import type {
   Message,
   Provider,
   ProviderConfig,
+  ProviderRequest,
   ToolRegistration,
   Session,
   SessionStore,
@@ -64,8 +65,9 @@ export class Agent {
   async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
+    const emit = (event: AgentEvent) => this.emit(event, options?.onEvent);
 
-    this.emit({ type: 'query_start', prompt, sessionId: session.id });
+    emit({ type: 'query_start', prompt, sessionId: session.id });
 
     // 2. Add user message
     session.messages.push({
@@ -105,7 +107,7 @@ export class Agent {
         session.metadata.compactionCount++;
         compacted = true;
 
-        this.emit({
+        emit({
           type: 'compaction',
           layersApplied: result.layersApplied,
           tokensFreed: result.tokensFreed,
@@ -113,20 +115,22 @@ export class Agent {
       }
 
       // 5b. Call provider
-      this.emit({
+      emit({
         type: 'api_call',
         messages: session.messages.length,
         tools: allowedTools.length,
       });
 
-      const response = await this.provider.chat({
+      const providerRequest: ProviderRequest = {
         systemPrompt: fullSystemPrompt,
         messages: session.messages,
         tools: allowedTools.map(t => t.definition),
         signal: options?.abortSignal,
-      });
+      };
 
-      this.emit({
+      const response = await this.callProvider(providerRequest, options?.stream === true, emit);
+
+      emit({
         type: 'api_response',
         usage: response.usage,
         stopReason: response.stopReason,
@@ -162,7 +166,7 @@ export class Agent {
 
       for (const toolUse of toolUses) {
         toolCalls++;
-        this.emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
+        emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
 
         const tool = this.tools.get(toolUse.name);
         if (!tool) {
@@ -172,7 +176,7 @@ export class Agent {
             content: `Error: unknown tool "${toolUse.name}"`,
             isError: true,
           });
-          this.emit({ type: 'tool_result', name: toolUse.name, isError: true });
+          emit({ type: 'tool_result', name: toolUse.name, isError: true });
           continue;
         }
 
@@ -187,7 +191,7 @@ export class Agent {
             content: result.forLLM ?? result.content,
             isError: result.isError,
           });
-          this.emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
+          emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
         } catch (err) {
           toolResultBlocks.push({
             type: 'tool_result',
@@ -195,7 +199,7 @@ export class Agent {
             content: `Error: ${err instanceof Error ? err.message : String(err)}`,
             isError: true,
           });
-          this.emit({ type: 'tool_result', name: toolUse.name, isError: true });
+          emit({ type: 'tool_result', name: toolUse.name, isError: true });
         }
       }
 
@@ -230,7 +234,7 @@ export class Agent {
       compacted,
     };
 
-    this.emit({ type: 'query_end', result });
+    emit({ type: 'query_end', result });
     return result;
   }
 
@@ -342,8 +346,37 @@ export class Agent {
     return estimated > threshold;
   }
 
-  private emit(event: AgentEvent): void {
+  private async callProvider(
+    request: ProviderRequest,
+    stream: boolean,
+    emit: (event: AgentEvent) => void,
+  ): Promise<import('./types.js').ProviderResponse> {
+    if (stream && this.provider.stream) {
+      let finalResponse: import('./types.js').ProviderResponse | null = null;
+
+      for await (const event of this.provider.stream(request)) {
+        if (event.type === 'text_delta') {
+          emit({ type: 'text_delta', text: event.text });
+        } else if (event.type === 'thinking_delta') {
+          emit({ type: 'thinking_delta', thinking: event.thinking });
+        } else if (event.type === 'response') {
+          finalResponse = event.response;
+        }
+      }
+
+      if (!finalResponse) {
+        throw new Error('Provider stream ended without a final response');
+      }
+
+      return finalResponse;
+    }
+
+    return this.provider.chat(request);
+  }
+
+  private emit(event: AgentEvent, queryOnEvent?: (event: AgentEvent) => void): void {
     this.onEvent?.(event);
+    queryOnEvent?.(event);
   }
 }
 

@@ -181,6 +181,10 @@ export interface QueryOptions {
   systemPrompt?: string | string[];
   /** Max tool-calling iterations (default: 25) */
   maxTurns?: number;
+  /** Stream model deltas when the provider supports it */
+  stream?: boolean;
+  /** Per-query event handler */
+  onEvent?: (event: AgentEvent) => void;
   /** Abort signal */
   abortSignal?: AbortSignal;
 }
@@ -208,13 +212,21 @@ export interface SessionStore {
 export interface Provider {
   readonly type: ProviderType;
   chat(request: ProviderRequest): Promise<ProviderResponse>;
+  stream?(request: ProviderRequest): AsyncIterable<ProviderStreamEvent>;
 }
+
+export type ProviderStreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; thinking: string }
+  | { type: 'response'; response: ProviderResponse };
 
 // ----- Events -----
 
 export type AgentEvent =
   | { type: 'query_start'; prompt: string; sessionId: string }
   | { type: 'api_call'; messages: number; tools: number }
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; thinking: string }
   | { type: 'api_response'; usage: TokenUsage; stopReason: string }
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; isError: boolean }
