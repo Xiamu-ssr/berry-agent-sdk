@@ -1,100 +1,266 @@
 # Berry Agent SDK 🍓
 
-A standalone, pure-library Agent SDK with built-in compaction, cache optimization, and multi-provider support.
+A pure-library Agent SDK for TypeScript with:
 
-**The missing middle ground** — no CLI dependency, no black box. Just a clean library that manages your agent's context intelligently.
+- **agent loop**
+- **session resume / fork**
+- **batch compaction**
+- **cache-aware provider adapters**
+- **tool calling**
+- **streaming + events**
+- **Anthropic + OpenAI-compatible providers**
 
-## Why?
+Berry is aimed at the gap between thin model SDKs and black-box agent CLIs.
 
-| Existing SDK | Problem |
-|---|---|
-| Claude Agent SDK | Wraps Claude Code CLI — not a real library |
-| OpenAI Agents SDK | No compaction, no cache optimization |
-| LangChain/CrewAI | No compaction, no cache optimization |
-| OpenClaw | Incremental compression destroys cache |
+## Why
 
-Berry Agent SDK fills the gap: **a pure library with compaction + cache + multi-model support**.
+Most agent SDKs give you one or two of these:
 
-## Features
+- tool calling
+- session state
+- multi-model support
+- compaction
+- cache optimization
 
-- 🧠 **7-layer compaction pipeline** — Inspired by Claude Code's proven approach
-- ⚡ **Cache-aware context management** — Stable prefix strategy for maximum cache hit rate
-- 🔌 **Multi-provider** — Anthropic (explicit cache_control) + OpenAI (automatic caching)
-- 🛠️ **Tool registration** — Define, register, and permission-scope custom tools
-- 📋 **Skill injection** — Markdown-based skill definitions injected into system prompt
-- 💾 **Session management** — messages[] + persistence + resume/fork
-- 🏗️ **Pure library** — No CLI dependency, no subprocess spawning, zero startup overhead
+Berry tries to make those core pieces work **together** in one small library.
 
-## Quick Start
+## Current status
 
-```typescript
-import { Agent, AnthropicProvider } from '@berry-agent/core';
+This repo is currently **alpha**.
+
+What exists today:
+
+- Anthropic provider
+  - system prompt block splitting
+  - `cache_control` breakpoints
+  - extended thinking support
+  - streaming
+- OpenAI-compatible provider
+  - OpenAI / DeepSeek / Qwen / Groq / Together / Ollama style endpoints
+  - automatic cache-friendly prefix handling
+  - streaming
+- Agent loop
+  - tool execution loop
+  - `resume` / `fork`
+  - per-query tool restriction
+- Compaction
+  - 7-layer batch compaction pipeline
+- Session store
+  - in-memory store
+  - file-backed JSON store
+- Events
+  - query lifecycle
+  - streaming deltas
+  - tool execution events
+- Tests
+  - agent loop
+  - compaction
+  - session store
+  - provider adapters
+
+## Install
+
+```bash
+npm install @berry-agent/core
+```
+
+## Quick start
+
+```ts
+import { Agent } from '@berry-agent/core'
 
 const agent = new Agent({
-  provider: new AnthropicProvider({
-    baseUrl: process.env.ANTHROPIC_BASE_URL,  // zenmux, etc.
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    model: 'claude-sonnet-4',
-  }),
-  systemPrompt: 'You are a helpful assistant.',
-  tools: [myCustomTool],
-  cwd: './my-workspace',
-});
+  provider: {
+    type: 'anthropic',
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    model: 'claude-sonnet-4-20250514',
+  },
+  systemPrompt: [
+    'You are a helpful assistant.',
+    'Prefer concise answers.',
+  ],
+})
 
-// Simple query
-const result = await agent.query('Hello!');
-
-// With tool restrictions
-const result2 = await agent.query('Analyze this code', {
-  allowedTools: ['read_file', 'grep'],
-});
-
-// Resume previous session
-const result3 = await agent.query('Continue where we left off', {
-  resume: 'session-id',
-});
+const result = await agent.query('Say hello')
+console.log(result.text)
 ```
 
-## Architecture
+## Tool loop
 
+```ts
+import { Agent, type ToolRegistration } from '@berry-agent/core'
+
+const readFileTool: ToolRegistration = {
+  definition: {
+    name: 'read_file',
+    description: 'Read a file',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+      },
+      required: ['path'],
+    },
+  },
+  execute: async (input) => {
+    return {
+      content: `fake contents of ${String(input.path)}`,
+    }
+  },
+}
+
+const agent = new Agent({
+  provider: {
+    type: 'openai',
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: 'gpt-5.4',
+  },
+  systemPrompt: 'Use tools when needed.',
+  tools: [readFileTool],
+})
+
+const result = await agent.query('Read src/index.ts')
+console.log(result.text)
 ```
-packages/
-  ├── core/           # TypeScript core (agent loop, compaction, cache, session)
-  ├── python/         # Python binding (Phase 2)
-  └── rust/           # Rust binding (Phase 2)
+
+## Sessions
+
+Berry keeps canonical conversation state as:
+
+- `systemPrompt: string[]`
+- `messages: Message[]`
+- `metadata`
+
+Resume an existing session:
+
+```ts
+const first = await agent.query('Plan the work')
+const second = await agent.query('Continue', {
+  resume: first.sessionId,
+})
 ```
 
-## Compaction Pipeline (7 layers)
+Fork a session:
 
-1. Clear old thinking blocks
-2. Truncate oversized tool results (head + tail)
-3. Clear completed tool_use/tool_result pairs (keep summary)
-4. Merge consecutive same-type messages
-5. Summarize old conversation (LLM-generated)
-6. Remove redundant assistant message parts
-7. Last resort — truncate oldest messages
-
-## Cache Strategy
-
-### Anthropic (explicit breakpoints)
-```
-[system_static]     ← cache breakpoint 1 (never changes)
-[system_dynamic]    ← cache breakpoint 2 (skills/CLAUDE.md, rarely changes)
-[conversation]      ← cache breakpoint 3 (grows, compaction resets)
-[latest_message]    ← cache breakpoint 4 (auto-moves)
+```ts
+const forked = await agent.query('Take another approach', {
+  fork: first.sessionId,
+})
 ```
 
-### OpenAI (automatic prefix caching)
-- Keep request prefix stable → automatic cache hit
-- No explicit markers needed
+## File session store
 
-## Roadmap
+```ts
+import { Agent, FileSessionStore } from '@berry-agent/core'
 
-- [ ] Phase 1: TypeScript core MVP (compaction + cache + session + multi-provider)
-- [ ] Phase 2: Python binding
-- [ ] Phase 3: Rust binding
-- [ ] Phase 4: Memory tools (memory_get / memory_search / memory_store)
-- [ ] Phase 5: Skill system
+const agent = new Agent({
+  provider: {
+    type: 'anthropic',
+    apiKey: process.env.ANTHROPIC_API_KEY!,
+    model: 'claude-sonnet-4-20250514',
+  },
+  systemPrompt: 'You are helpful.',
+  sessionStore: new FileSessionStore('.berry/sessions'),
+})
+```
+
+This stores one session per JSON file.
+
+## Streaming + events
+
+```ts
+const result = await agent.query('Explain compaction briefly', {
+  stream: true,
+  onEvent(event) {
+    if (event.type === 'text_delta') {
+      process.stdout.write(event.text)
+    }
+
+    if (event.type === 'tool_call') {
+      console.log(`\n[tool] ${event.name}`)
+    }
+
+    if (event.type === 'api_response') {
+      console.log('\nusage:', event.usage)
+    }
+  },
+})
+
+console.log('\nfinal:', result.text)
+```
+
+Supported event kinds:
+
+- `query_start`
+- `api_call`
+- `text_delta`
+- `thinking_delta`
+- `api_response`
+- `tool_call`
+- `tool_result`
+- `compaction`
+- `query_end`
+
+## Provider notes
+
+### Anthropic
+
+Berry uses explicit cache breakpoints for stable prefixes:
+
+- system prompt blocks
+- recent turn boundaries
+
+### OpenAI-compatible
+
+Berry relies on provider-side automatic prefix caching when available.
+No explicit cache breakpoint API is required.
+
+## Compaction
+
+Berry currently uses a **batch compaction** strategy rather than progressive per-request mutation.
+
+Current layers:
+
+1. clear thinking
+2. truncate oversized tool results
+3. clear old tool pairs
+4. merge consecutive messages
+5. summarize old messages
+6. trim long assistant messages
+7. truncate oldest messages
+
+## Examples
+
+See:
+
+- `examples/basic.ts`
+- `examples/smoke-anthropic.ts`
+- `examples/smoke-openai.ts`
+
+## Development
+
+```bash
+npm install
+npm run build
+npm test
+```
+
+Package-only test run:
+
+```bash
+npm test --workspace=packages/core -- --run
+```
+
+## Not in scope yet
+
+Not implemented yet:
+
+- MCP
+- sandbox / permissions
+- memory system
+- multi-language bindings
+- benchmark harness
+- npm-stable release hardening
 
 ## License
 
