@@ -1,0 +1,23 @@
+{
+  "name": "@berry-agent/core",
+  "version": "0.1.0",
+  "description": "Pure-library Agent SDK with compaction, cache optimization, and multi-provider support",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "openai": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT"
+}
