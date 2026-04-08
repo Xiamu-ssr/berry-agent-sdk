@@ -4,6 +4,7 @@ dist/
 .env
 .env.local
 .DS_Store
+.berry/
 
 # Claude Code reference source (local only, not committed)
 .cc-reference/
