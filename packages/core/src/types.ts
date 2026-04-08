@@ -1,15 +1,16 @@
 // ============================================================
-// Agentic SDK — Core Type Definitions
+// Berry Agent SDK — Core Type Definitions
 // ============================================================
 
-// ----- Messages -----
+// ----- Messages (Internal Format) -----
+// This is Berry's canonical message format.
+// Provider adapters convert to/from wire format.
 
-export type Role = 'system' | 'user' | 'assistant' | 'tool';
+export type Role = 'user' | 'assistant';
 
 export interface TextContent {
   type: 'text';
   text: string;
-  cacheControl?: { type: 'ephemeral' };
 }
 
 export interface ToolUseContent {
@@ -36,8 +37,6 @@ export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | Th
 export interface Message {
   role: Role;
   content: string | ContentBlock[];
-  /** Original token count before any compaction */
-  originalTokens?: number;
   /** Whether this message has been compacted */
   compacted?: boolean;
   /** Timestamp */
@@ -46,19 +45,12 @@ export interface Message {
 
 // ----- Tools -----
 
-export interface ToolParameter {
-  type: string;
-  description?: string;
-  enum?: string[];
-  required?: boolean;
-}
-
 export interface ToolDefinition {
   name: string;
   description: string;
-  parameters: {
+  inputSchema: {
     type: 'object';
-    properties: Record<string, ToolParameter>;
+    properties: Record<string, unknown>;
     required?: string[];
   };
 }
@@ -84,25 +76,25 @@ export interface ToolResult {
 
 // ----- Provider -----
 
+export type ProviderType = 'anthropic' | 'openai';
+
 export interface ProviderConfig {
+  type: ProviderType;
   baseUrl?: string;
   apiKey: string;
   model: string;
+  maxTokens?: number;
+  /** Anthropic extended thinking budget (0 = disabled) */
+  thinkingBudget?: number;
 }
 
 export interface ProviderRequest {
-  systemPrompt: string;
+  /** System prompt blocks (split for cache optimization) */
+  systemPrompt: string[];
   messages: Message[];
   tools?: ToolDefinition[];
-  /** Anthropic-specific: where to place cache breakpoints */
-  cacheBreakpoints?: CacheBreakpoint[];
-}
-
-export interface CacheBreakpoint {
-  /** Which part of the request to mark */
-  target: 'system' | 'tools' | 'message';
-  /** Index (for messages) */
-  index?: number;
+  /** Abort signal */
+  signal?: AbortSignal;
 }
 
 export interface ProviderResponse {
@@ -123,7 +115,7 @@ export interface TokenUsage {
 export interface Session {
   id: string;
   messages: Message[];
-  systemPrompt: string;
+  systemPrompt: string[];
   createdAt: number;
   lastAccessedAt: number;
   metadata: SessionMetadata;
@@ -142,8 +134,9 @@ export interface SessionMetadata {
 // ----- Agent Config -----
 
 export interface AgentConfig {
-  provider: ProviderConfig & { type: 'anthropic' | 'openai' };
-  systemPrompt: string;
+  provider: ProviderConfig;
+  /** System prompt — string or array of blocks (for cache optimization) */
+  systemPrompt: string | string[];
   tools?: ToolRegistration[];
   skills?: string[];  // paths to skill .md files
   cwd?: string;
@@ -151,6 +144,8 @@ export interface AgentConfig {
   compaction?: CompactionConfig;
   /** Session store (default: in-memory) */
   sessionStore?: SessionStore;
+  /** Event handler for streaming / logging */
+  onEvent?: (event: AgentEvent) => void;
 }
 
 export interface CompactionConfig {
@@ -163,25 +158,25 @@ export interface CompactionConfig {
 }
 
 export type CompactionLayer =
-  | 'clear_thinking'       // Layer 1: Clear old thinking blocks
-  | 'truncate_tool_results' // Layer 2: Truncate oversized tool results
-  | 'clear_tool_pairs'     // Layer 3: Clear old tool_use/tool_result pairs
-  | 'merge_messages'       // Layer 4: Merge consecutive same-type messages
-  | 'summarize'            // Layer 5: LLM-generated summary
-  | 'trim_assistant'       // Layer 6: Remove redundant assistant parts
-  | 'truncate_oldest';     // Layer 7: Last resort — drop oldest messages
+  | 'clear_thinking'
+  | 'truncate_tool_results'
+  | 'clear_tool_pairs'
+  | 'merge_messages'
+  | 'summarize'
+  | 'trim_assistant'
+  | 'truncate_oldest';
 
 // ----- Query Options -----
 
 export interface QueryOptions {
-  /** Restrict which tools the agent can use for this query */
+  /** Restrict which tools the agent can use */
   allowedTools?: string[];
   /** Resume a previous session */
   resume?: string;
   /** Fork from a previous session */
   fork?: string;
-  /** Override system prompt for this query */
-  systemPrompt?: string;
+  /** Override system prompt */
+  systemPrompt?: string | string[];
   /** Max tool-calling iterations (default: 25) */
   maxTurns?: number;
   /** Abort signal */
@@ -189,17 +184,11 @@ export interface QueryOptions {
 }
 
 export interface QueryResult {
-  /** Final text response */
   text: string;
-  /** Session ID (for resume/fork) */
   sessionId: string;
-  /** Token usage for this query */
   usage: TokenUsage;
-  /** Total usage across the session */
   totalUsage: TokenUsage;
-  /** Number of tool calls made */
   toolCalls: number;
-  /** Whether compaction occurred during this query */
   compacted: boolean;
 }
 
@@ -215,6 +204,17 @@ export interface SessionStore {
 // ----- Provider Interface -----
 
 export interface Provider {
-  readonly type: 'anthropic' | 'openai';
+  readonly type: ProviderType;
   chat(request: ProviderRequest): Promise<ProviderResponse>;
 }
+
+// ----- Events -----
+
+export type AgentEvent =
+  | { type: 'query_start'; prompt: string; sessionId: string }
+  | { type: 'api_call'; messages: number; tools: number }
+  | { type: 'api_response'; usage: TokenUsage; stopReason: string }
+  | { type: 'tool_call'; name: string; input: unknown }
+  | { type: 'tool_result'; name: string; isError: boolean }
+  | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number }
+  | { type: 'query_end'; result: QueryResult };

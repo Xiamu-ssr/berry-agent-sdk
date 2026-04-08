@@ -1,8 +1,8 @@
 // ============================================================
-// Agentic SDK — Agent Core
+// Berry Agent SDK — Agent Core
 // ============================================================
-// The main Agent class. Manages the agent loop, tools, sessions,
-// compaction, and cache strategy. No CLI dependency — pure library.
+// The main Agent class. Pure library, no CLI dependency.
+// Manages: agent loop, tools, sessions, compaction, cache.
 
 import type {
   AgentConfig,
@@ -10,51 +10,59 @@ import type {
   QueryResult,
   Message,
   Provider,
+  ProviderConfig,
   ToolRegistration,
   Session,
   SessionStore,
   ContentBlock,
   ToolUseContent,
   TokenUsage,
+  AgentEvent,
 } from './types.js';
+import { AnthropicProvider } from './providers/anthropic.js';
+import { compact } from './compaction/compactor.js';
 
 export class Agent {
   private provider: Provider;
-  private systemPrompt: string;
+  private systemPrompt: string[];
   private tools: Map<string, ToolRegistration>;
   private skills: string[];
   private cwd: string;
   private sessionStore: SessionStore;
   private compactionConfig: AgentConfig['compaction'];
-
-  // Current session state
-  private currentSession: Session | null = null;
+  private onEvent?: (event: AgentEvent) => void;
 
   constructor(config: AgentConfig) {
-    this.systemPrompt = config.systemPrompt;
+    // Normalize system prompt to array of blocks
+    this.systemPrompt = Array.isArray(config.systemPrompt)
+      ? config.systemPrompt
+      : [config.systemPrompt];
+
     this.tools = new Map();
     this.skills = config.skills ?? [];
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
+    this.onEvent = config.onEvent;
 
     // Register tools
     for (const tool of config.tools ?? []) {
       this.tools.set(tool.definition.name, tool);
     }
 
-    // Provider will be initialized by factory (TODO)
-    this.provider = null as any; // placeholder
+    // Create provider
+    this.provider = createProvider(config.provider);
   }
 
   /**
    * Send a message to the agent and get a response.
-   * Automatically handles: tool calling loop, compaction, cache, session.
+   * Handles: tool loop, compaction, cache, session persistence.
    */
   async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
-    // 1. Resolve session
+    // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
-    this.currentSession = session;
+
+    this.emit({ type: 'query_start', prompt, sessionId: session.id });
 
     // 2. Add user message
     session.messages.push({
@@ -63,10 +71,13 @@ export class Agent {
       createdAt: Date.now(),
     });
 
-    // 3. Build allowed tools for this query
+    // 3. Resolve tools for this query
     const allowedTools = this.resolveAllowedTools(options?.allowedTools);
 
-    // 4. Agent loop (ReAct)
+    // 4. Build system prompt (static blocks + dynamic skills)
+    const fullSystemPrompt = await this.buildSystemPrompt(options?.systemPrompt);
+
+    // 5. Agent loop (tool calling)
     let turns = 0;
     const maxTurns = options?.maxTurns ?? 25;
     let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
@@ -76,64 +87,89 @@ export class Agent {
     while (turns < maxTurns) {
       turns++;
 
-      // 4a. Check compaction need BEFORE calling API
+      // 5a. Check compaction BEFORE API call
       if (this.shouldCompact(session)) {
-        await this.compact(session);
+        const result = await compact(
+          session.messages,
+          {
+            contextWindow: this.compactionConfig?.contextWindow ?? 200_000,
+            threshold: this.compactionConfig?.threshold,
+            enabledLayers: this.compactionConfig?.enabledLayers,
+          },
+          this.provider,
+        );
+        session.messages = result.messages;
+        session.metadata.compactionCount++;
         compacted = true;
+
+        this.emit({
+          type: 'compaction',
+          layersApplied: result.layersApplied,
+          tokensFreed: result.tokensFreed,
+        });
       }
 
-      // 4b. Build system prompt (static + dynamic skills)
-      const fullSystemPrompt = await this.buildSystemPrompt(options?.systemPrompt);
+      // 5b. Call provider
+      this.emit({
+        type: 'api_call',
+        messages: session.messages.length,
+        tools: allowedTools.length,
+      });
 
-      // 4c. Build cache breakpoints
-      const cacheBreakpoints = this.provider.type === 'anthropic'
-        ? this.computeCacheBreakpoints(fullSystemPrompt, session.messages)
-        : []; // OpenAI: automatic, no breakpoints needed
-
-      // 4d. Call provider
       const response = await this.provider.chat({
         systemPrompt: fullSystemPrompt,
         messages: session.messages,
         tools: allowedTools.map(t => t.definition),
-        cacheBreakpoints,
+        signal: options?.abortSignal,
       });
 
-      // 4e. Accumulate usage
-      totalUsage.inputTokens += response.usage.inputTokens;
-      totalUsage.outputTokens += response.usage.outputTokens;
-      totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens ?? 0) + (response.usage.cacheReadTokens ?? 0);
-      totalUsage.cacheWriteTokens = (totalUsage.cacheWriteTokens ?? 0) + (response.usage.cacheWriteTokens ?? 0);
+      this.emit({
+        type: 'api_response',
+        usage: response.usage,
+        stopReason: response.stopReason,
+      });
 
-      // 4f. Add assistant message
+      // 5c. Accumulate usage
+      totalUsage = accumulateUsage(totalUsage, response.usage);
+      session.metadata.totalInputTokens += response.usage.inputTokens;
+      session.metadata.totalOutputTokens += response.usage.outputTokens;
+      session.metadata.totalCacheReadTokens += response.usage.cacheReadTokens ?? 0;
+      session.metadata.totalCacheWriteTokens += response.usage.cacheWriteTokens ?? 0;
+
+      // 5d. Add assistant message to session
       session.messages.push({
         role: 'assistant',
         content: response.content,
         createdAt: Date.now(),
       });
 
-      // 4g. If no tool calls, we're done
+      // 5e. If no tool calls → done
       if (response.stopReason !== 'tool_use') {
         break;
       }
 
-      // 4h. Execute tool calls
+      // 5f. Execute tool calls
       const toolUses = (response.content as ContentBlock[]).filter(
-        (b): b is ToolUseContent => b.type === 'tool_use'
+        (b): b is ToolUseContent => b.type === 'tool_use',
       );
+
+      // Collect all tool results into a single user message
+      // (Anthropic expects tool_result blocks in the same user message)
+      const toolResultBlocks: ContentBlock[] = [];
 
       for (const toolUse of toolUses) {
         toolCalls++;
+        this.emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
+
         const tool = this.tools.get(toolUse.name);
         if (!tool) {
-          session.messages.push({
-            role: 'user', // tool results go as user messages in Anthropic format
-            content: [{
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: `Error: unknown tool "${toolUse.name}"`,
-              isError: true,
-            }],
+          toolResultBlocks.push({
+            type: 'tool_result',
+            toolUseId: toolUse.id,
+            content: `Error: unknown tool "${toolUse.name}"`,
+            isError: true,
           });
+          this.emit({ type: 'tool_result', name: toolUse.name, isError: true });
           continue;
         }
 
@@ -142,63 +178,98 @@ export class Agent {
             cwd: this.cwd,
             abortSignal: options?.abortSignal,
           });
-          session.messages.push({
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: result.forLLM ?? result.content,
-            }],
+          toolResultBlocks.push({
+            type: 'tool_result',
+            toolUseId: toolUse.id,
+            content: result.forLLM ?? result.content,
           });
+          this.emit({ type: 'tool_result', name: toolUse.name, isError: false });
         } catch (err) {
-          session.messages.push({
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-              isError: true,
-            }],
+          toolResultBlocks.push({
+            type: 'tool_result',
+            toolUseId: toolUse.id,
+            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
           });
+          this.emit({ type: 'tool_result', name: toolUse.name, isError: true });
         }
       }
+
+      // Add all tool results as one user message
+      session.messages.push({
+        role: 'user',
+        content: toolResultBlocks,
+        createdAt: Date.now(),
+      });
 
       // Loop continues → next API call with tool results
     }
 
-    // 5. Save session
+    // 6. Persist session
     session.lastAccessedAt = Date.now();
     await this.sessionStore.save(session);
 
-    // 6. Extract final text
-    const lastMessage = session.messages[session.messages.length - 1];
-    const text = this.extractText(lastMessage);
+    // 7. Extract final text
+    const text = extractText(session.messages[session.messages.length - 1]);
 
-    return {
+    const result: QueryResult = {
       text,
       sessionId: session.id,
       usage: totalUsage,
-      totalUsage,
+      totalUsage: {
+        inputTokens: session.metadata.totalInputTokens,
+        outputTokens: session.metadata.totalOutputTokens,
+        cacheReadTokens: session.metadata.totalCacheReadTokens,
+        cacheWriteTokens: session.metadata.totalCacheWriteTokens,
+      },
       toolCalls,
       compacted,
     };
+
+    this.emit({ type: 'query_end', result });
+    return result;
   }
 
-  // ----- Internal Methods -----
+  // ===== Public API =====
+
+  /** Get a session by ID */
+  async getSession(id: string): Promise<Session | null> {
+    return this.sessionStore.load(id);
+  }
+
+  /** List all session IDs */
+  async listSessions(): Promise<string[]> {
+    return this.sessionStore.list();
+  }
+
+  /** Register an additional tool at runtime */
+  addTool(tool: ToolRegistration): void {
+    this.tools.set(tool.definition.name, tool);
+  }
+
+  /** Remove a tool at runtime */
+  removeTool(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
+  // ===== Internal Methods =====
 
   private async resolveSession(options?: QueryOptions): Promise<Session> {
     if (options?.resume) {
       const session = await this.sessionStore.load(options.resume);
       if (!session) throw new Error(`Session not found: ${options.resume}`);
+      // Allow overriding system prompt on resume
+      if (options.systemPrompt) {
+        session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
+      }
       return session;
     }
     if (options?.fork) {
       const source = await this.sessionStore.load(options.fork);
       if (!source) throw new Error(`Session not found: ${options.fork}`);
       return {
-        ...source,
+        ...structuredClone(source),
         id: generateId(),
-        messages: [...source.messages], // shallow copy
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       };
@@ -212,7 +283,7 @@ export class Agent {
       lastAccessedAt: Date.now(),
       metadata: {
         cwd: this.cwd,
-        model: '', // set by provider
+        model: this.config.model,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCacheReadTokens: 0,
@@ -222,6 +293,10 @@ export class Agent {
     };
   }
 
+  private get config(): ProviderConfig {
+    return (this.provider as any).config;
+  }
+
   private resolveAllowedTools(allowed?: string[]): ToolRegistration[] {
     if (!allowed) return [...this.tools.values()];
     return allowed
@@ -229,53 +304,122 @@ export class Agent {
       .filter((t): t is ToolRegistration => t !== undefined);
   }
 
-  private async buildSystemPrompt(override?: string): Promise<string> {
-    const base = override ?? this.systemPrompt;
-    // TODO: load and inject skill files from this.skills
-    // TODO: separate into static (cacheable) and dynamic parts
+  private async buildSystemPrompt(override?: string | string[]): Promise<string[]> {
+    if (override) return normalizeSystemPrompt(override);
+
+    const base = [...this.systemPrompt];
+
+    // Load skill files if configured
+    if (this.skills.length > 0) {
+      const skillContent = await this.loadSkills();
+      if (skillContent) {
+        base.push(skillContent);
+      }
+    }
+
     return base;
   }
 
-  private computeCacheBreakpoints(systemPrompt: string, messages: Message[]) {
-    // TODO: implement Anthropic-specific cache breakpoint strategy
-    // Key insight: place breakpoints at stable boundaries
-    // - breakpoint 1: end of static system prompt
-    // - breakpoint 2: end of dynamic system prompt (skills)
-    // - breakpoint 3: end of stable conversation history
-    // - breakpoint 4: auto-moves to latest message
-    return [];
+  private async loadSkills(): Promise<string | null> {
+    // Read skill .md files and concatenate
+    const { readFile } = await import('node:fs/promises');
+    const parts: string[] = [];
+    for (const path of this.skills) {
+      try {
+        const content = await readFile(path, 'utf-8');
+        parts.push(content);
+      } catch {
+        // Skip unreadable skills
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n') : null;
   }
 
   private shouldCompact(session: Session): boolean {
-    // TODO: estimate token count of session.messages
-    // Trigger at threshold (default 85% of context window)
-    return false;
+    const contextWindow = this.compactionConfig?.contextWindow ?? 200_000;
+    const threshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * 0.85);
+    const estimated = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
+    return estimated > threshold;
   }
 
-  private async compact(session: Session): Promise<void> {
-    // TODO: implement 7-layer compaction pipeline
-    // See compaction/compactor.ts
-  }
-
-  private extractText(message: Message): string {
-    if (typeof message.content === 'string') return message.content;
-    const textBlocks = message.content.filter(b => b.type === 'text');
-    return textBlocks.map(b => (b as any).text).join('\n');
+  private emit(event: AgentEvent): void {
+    this.onEvent?.(event);
   }
 }
 
-// ----- Helpers -----
+// ===== Provider Factory =====
+
+function createProvider(config: ProviderConfig): Provider {
+  switch (config.type) {
+    case 'anthropic':
+      return new AnthropicProvider(config);
+    case 'openai':
+      // TODO: implement OpenAI provider
+      throw new Error('OpenAI provider not yet implemented');
+    default:
+      throw new Error(`Unknown provider type: ${config.type}`);
+  }
+}
+
+// ===== Helpers =====
 
 function generateId(): string {
   return `ses_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function createInMemoryStore() {
-  const sessions = new Map<string, any>();
+function normalizeSystemPrompt(prompt: string | string[]): string[] {
+  return Array.isArray(prompt) ? prompt : [prompt];
+}
+
+function extractText(message: Message): string {
+  if (!message) return '';
+  if (typeof message.content === 'string') return message.content;
+  return message.content
+    .filter(b => b.type === 'text')
+    .map(b => (b as any).text)
+    .join('\n');
+}
+
+/** Rough token estimation: ~4 chars per token */
+function estimateTokens(messages: Message[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') {
+      total += Math.ceil(msg.content.length / 4);
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if ('text' in block) total += Math.ceil(String((block as any).text).length / 4);
+        if ('content' in block) total += Math.ceil(String((block as any).content).length / 4);
+        if ('thinking' in block) total += Math.ceil(String((block as any).thinking).length / 4);
+        if ('input' in block) total += Math.ceil(JSON.stringify((block as any).input).length / 4);
+      }
+    }
+  }
+  return total;
+}
+
+function estimateTokens_system(blocks: string[]): number {
+  return blocks.reduce((sum, b) => sum + Math.ceil(b.length / 4), 0);
+}
+
+function accumulateUsage(total: TokenUsage, delta: TokenUsage): TokenUsage {
   return {
-    save: async (s: any) => { sessions.set(s.id, structuredClone(s)); },
-    load: async (id: string) => sessions.get(id) ?? null,
+    inputTokens: total.inputTokens + delta.inputTokens,
+    outputTokens: total.outputTokens + delta.outputTokens,
+    cacheReadTokens: (total.cacheReadTokens ?? 0) + (delta.cacheReadTokens ?? 0),
+    cacheWriteTokens: (total.cacheWriteTokens ?? 0) + (delta.cacheWriteTokens ?? 0),
+  };
+}
+
+function createInMemoryStore(): SessionStore {
+  const sessions = new Map<string, Session>();
+  return {
+    save: async (s) => { sessions.set(s.id, structuredClone(s)); },
+    load: async (id) => {
+      const s = sessions.get(id);
+      return s ? structuredClone(s) : null;
+    },
     list: async () => [...sessions.keys()],
-    delete: async (id: string) => { sessions.delete(id); },
+    delete: async (id) => { sessions.delete(id); },
   };
 }
