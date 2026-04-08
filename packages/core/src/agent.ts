@@ -20,6 +20,7 @@ import type {
   AgentEvent,
 } from './types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
+import { OpenAIProvider } from './providers/openai.js';
 import { compact } from './compaction/compactor.js';
 
 export class Agent {
@@ -354,8 +355,7 @@ function createProvider(config: ProviderConfig): Provider {
     case 'anthropic':
       return new AnthropicProvider(config);
     case 'openai':
-      // TODO: implement OpenAI provider
-      throw new Error('OpenAI provider not yet implemented');
+      return new OpenAIProvider(config);
     default:
       throw new Error(`Unknown provider type: ${config.type}`);
   }

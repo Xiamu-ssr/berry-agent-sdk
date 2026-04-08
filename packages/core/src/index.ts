@@ -7,7 +7,7 @@ export { Agent } from './agent.js';
 
 // Providers
 export { AnthropicProvider } from './providers/anthropic.js';
-// export { OpenAIProvider } from './providers/openai.js'; // TODO: next phase
+export { OpenAIProvider } from './providers/openai.js';
 
 // Compaction
 export { compact, estimateTokens } from './compaction/compactor.js';
