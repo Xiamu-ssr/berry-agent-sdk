@@ -1,0 +1,41 @@
+{
+  "name": "@berry-agent/mcp",
+  "version": "0.1.0-alpha.0",
+  "description": "MCP (Model Context Protocol) client adapter for Berry Agent SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "peerDependencies": {
+    "@berry-agent/core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@berry-agent/core": "*",
+    "@types/node": "^25.5.2",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "MIT"
+}

@@ -5,9 +5,12 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=packages/core",
+    "build": "npm run build --workspaces",
+    "build:core": "npm run build --workspace=packages/core",
+    "build:mcp": "npm run build --workspace=packages/mcp",
     "dev": "npm run dev --workspace=packages/core",
-    "test": "npm run test --workspace=packages/core",
+    "test": "npx vitest run --exclude '**/integration*'",
+    "test:integration": "npx vitest run packages/core/src/__tests__/integration.test.ts",
     "smoke:basic": "node examples/basic.ts",
     "smoke:anthropic": "node examples/smoke-anthropic.ts",
     "smoke:openai": "node examples/smoke-openai.ts"
