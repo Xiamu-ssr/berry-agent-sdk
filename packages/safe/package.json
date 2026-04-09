@@ -1,0 +1,28 @@
+{
+  "name": "@berry-agent/safe",
+  "version": "0.1.0-alpha.0",
+  "description": "Safety guards, LLM classifier, and audit for Berry Agent SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@berry-agent/core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@berry-agent/core": "*",
+    "vitest": "^3.2.4",
+    "typescript": "^5.8.3"
+  },
+  "license": "MIT"
+}
