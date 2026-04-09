@@ -10,14 +10,33 @@ import {
   MAX_BACKOFF_MS,
 } from '../constants.js';
 
+/** Classify an error as transient (retryable) or permanent. */
+export type ErrorKind = 'transient' | 'permanent';
+
+/** Classify an API error. */
+export function classifyError(error: any): ErrorKind {
+  if (!error) return 'permanent';
+  // Transient: rate limit, timeouts, server errors, network issues
+  if (error.status === 429) return 'transient';   // rate limit
+  if (error.status === 408) return 'transient';   // request timeout
+  if (error.status === 409) return 'transient';   // lock timeout
+  if (error.status === 503) return 'transient';   // service unavailable
+  if (error.status === 502) return 'transient';   // bad gateway
+  if (error.status >= 500) return 'transient';    // other server errors
+  if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') return 'transient';
+  if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') return 'transient';
+  if (error.code === 'UND_ERR_CONNECT_TIMEOUT') return 'transient';
+  if (error.name === 'AbortError') return 'permanent'; // intentional abort
+  // Permanent: auth errors, bad requests, not found
+  if (error.status === 401 || error.status === 403) return 'permanent';
+  if (error.status === 404) return 'permanent';
+  if (error.status === 400) return 'permanent'; // bad request (except PTL, handled elsewhere)
+  return 'permanent';
+}
+
 /** Determine whether an API error is transient and should be retried. */
 export function isRetryableError(error: any): boolean {
-  if (error?.status === 429) return true;   // rate limit
-  if (error?.status === 408) return true;   // request timeout
-  if (error?.status === 409) return true;   // lock timeout
-  if (error?.status >= 500) return true;    // server errors
-  if (error?.code === 'ECONNRESET' || error?.code === 'ETIMEDOUT') return true;
-  return false;
+  return classifyError(error) === 'transient';
 }
 
 /**
@@ -39,10 +58,13 @@ export function getRetryDelay(attempt: number, retryAfterHeader?: string | null)
 /**
  * Generic retry wrapper. Calls `operation` up to MAX_RETRIES+1 times.
  * Only retries when `isRetryableError` returns true.
+ *
+ * @param onRetry Optional callback for logging/observability on each retry.
  */
 export async function withRetry<T>(
   operation: () => Promise<T>,
   signal?: AbortSignal,
+  onRetry?: (attempt: number, error: unknown, delayMs: number) => void,
 ): Promise<T> {
   let lastError: unknown;
 
@@ -60,8 +82,9 @@ export async function withRetry<T>(
         throw error;
       }
 
-      const retryAfter = error.headers?.['retry-after'] ?? null;
+      const retryAfter = error.headers?.['retry-after'] ?? error.headers?.get?.('retry-after') ?? null;
       const delayMs = getRetryDelay(attempt, retryAfter);
+      onRetry?.(attempt, error, delayMs);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }

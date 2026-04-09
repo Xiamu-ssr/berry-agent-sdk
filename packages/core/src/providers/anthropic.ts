@@ -29,6 +29,7 @@ import type {
   ToolUseContent,
   ToolResultContent,
   ThinkingContent,
+  ImageContent,
 } from '../types.js';
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
@@ -162,7 +163,9 @@ export class AnthropicProvider implements Provider {
   private buildParams(request: ProviderRequest): Record<string, unknown> {
     const system = this.buildSystemBlocks(request.systemPrompt);
     const messages = this.buildMessages(request.messages);
-    const tools = request.tools ? this.buildTools(request.tools) : undefined;
+    const tools = (request.tools || request.responseFormat)
+      ? this.buildTools(request.tools ?? [], request.responseFormat)
+      : undefined;
 
     const maxTokens = this.config.maxTokens ?? DEFAULT_MAX_TOKENS;
 
@@ -254,6 +257,17 @@ export class AnthropicProvider implements Provider {
           ...cache,
         } as ToolResultBlockParam;
       }
+      if (block.type === 'image') {
+        return {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: (block as ImageContent).mediaType,
+            data: (block as ImageContent).data,
+          },
+          ...cache,
+        } as any;
+      }
       return { type: 'text' as const, text: JSON.stringify(block), ...cache };
     });
 
@@ -298,12 +312,23 @@ export class AnthropicProvider implements Provider {
 
   // ===== Tools =====
 
-  private buildTools(tools: ToolDefinition[]): Anthropic.Tool[] {
-    return tools.map(tool => ({
+  private buildTools(tools: ToolDefinition[], responseFormat?: ProviderRequest['responseFormat']): Anthropic.Tool[] {
+    const mapped = tools.map(tool => ({
       name: tool.name,
       description: tool.description,
       input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
     }));
+
+    // Structured output: add a virtual tool for JSON extraction
+    if (responseFormat) {
+      mapped.push({
+        name: responseFormat.name,
+        description: responseFormat.description ?? `Return structured JSON output matching the ${responseFormat.name} schema.`,
+        input_schema: responseFormat.schema as Anthropic.Tool.InputSchema,
+      });
+    }
+
+    return mapped;
   }
 
   // ===== Response Parsing =====

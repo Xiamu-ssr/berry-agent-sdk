@@ -20,6 +20,11 @@ import type {
   TokenUsage,
   AgentEvent,
   ToolGuard,
+  DelegateConfig,
+  DelegateResult,
+  SpawnConfig,
+  Middleware,
+  MiddlewareContext,
 } from './types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
@@ -46,6 +51,10 @@ export class Agent {
   private compactionConfig: AgentConfig['compaction'];
   private onEvent?: (event: AgentEvent) => void;
   private toolGuard?: ToolGuard;
+  private middleware: Middleware[];
+  private _children = new Map<string, Agent>();
+  private _isSubAgent = false;
+  private _lastSessionId?: string;
 
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
@@ -59,9 +68,11 @@ export class Agent {
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
     this.toolGuard = config.toolGuard;
+    this.middleware = config.middleware ?? [];
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
     this.providerConfig = config.provider;
+    this._isSubAgent = (config as any)._isSubAgent ?? false;
 
     // Register tools
     for (const tool of config.tools ?? []) {
@@ -147,15 +158,32 @@ export class Agent {
       let ptlRetries = 0;
 
       while (true) {
-        const providerRequest: ProviderRequest = {
+        let providerRequest: ProviderRequest = {
           systemPrompt: fullSystemPrompt,
           messages: session.messages,
           tools: allowedTools.map(t => t.definition),
           signal: options?.abortSignal,
+          responseFormat: options?.responseFormat,
         };
 
         try {
+          // Middleware: onBeforeApiCall
+          const mwCtx = this.getMiddlewareContext(session);
+          for (const mw of this.middleware) {
+            if (mw.onBeforeApiCall) {
+              providerRequest = await mw.onBeforeApiCall(providerRequest, mwCtx);
+            }
+          }
+
           response = await this.callProvider(providerRequest, options?.stream === true, emit);
+
+          // Middleware: onAfterApiCall
+          for (const mw of this.middleware) {
+            if (mw.onAfterApiCall) {
+              await mw.onAfterApiCall(providerRequest, response, mwCtx);
+            }
+          }
+
           break; // Success
         } catch (err) {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
@@ -289,10 +317,26 @@ export class Agent {
         }
 
         try {
+          // Middleware: onBeforeToolExec
+          const mwCtx = this.getMiddlewareContext(session);
+          for (const mw of this.middleware) {
+            if (mw.onBeforeToolExec) {
+              guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
+            }
+          }
+
           const result = await tool.execute(guardedInput, {
             cwd: this.cwd,
             abortSignal: options?.abortSignal,
           });
+
+          // Middleware: onAfterToolExec
+          for (const mw of this.middleware) {
+            if (mw.onAfterToolExec) {
+              await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
+            }
+          }
+
           toolResultBlocks.push({
             type: 'tool_result',
             toolUseId: toolUse.id,
@@ -342,6 +386,7 @@ export class Agent {
       compacted,
     };
 
+    this._lastSessionId = session.id;
     emit({ type: 'query_end', result });
     return result;
   }
@@ -368,7 +413,252 @@ export class Agent {
     return this.tools.delete(name);
   }
 
+  // ===== Delegate (one-shot fork with cache sharing) =====
+
+  /**
+   * One-shot forked execution with cache sharing.
+   * The delegate sees the main agent's system prompt + tools + conversation
+   * history as a cache prefix, then executes its own tool loop independently.
+   *
+   * @param message - The prompt for the delegate
+   * @param config - Optional configuration overrides
+   * @returns Final text + usage from the delegate's execution
+   */
+  async delegate(message: string, config?: DelegateConfig): Promise<DelegateResult> {
+    const emit = (event: AgentEvent) => {
+      this.onEvent?.(event);
+      config?.onEvent?.(event);
+    };
+    emit({ type: 'delegate_start', message });
+
+    // Build system prompt for the delegate
+    let delegateSystemPrompt: string[];
+    if (config?.overrideSystemPrompt) {
+      delegateSystemPrompt = normalizeSystemPrompt(config.overrideSystemPrompt);
+    } else {
+      // Start with main agent's system prompt (cache sharing)
+      delegateSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
+      if (config?.appendSystemPrompt) {
+        const extra = normalizeSystemPrompt(config.appendSystemPrompt);
+        delegateSystemPrompt = [...delegateSystemPrompt, ...extra];
+      }
+    }
+
+    // Build conversation prefix (main agent's messages for cache sharing)
+    let contextMessages: Message[] = [];
+    if (config?.includeHistory !== false) {
+      const sid = config?.sessionId ?? this._lastSessionId;
+      if (sid) {
+        const session = await this.sessionStore.load(sid);
+        if (session) contextMessages = [...session.messages];
+      }
+    }
+
+    // Resolve tools
+    let delegateTools: ToolRegistration[];
+    if (config?.allowedTools) {
+      delegateTools = this.resolveAllowedTools(config.allowedTools);
+    } else {
+      delegateTools = [...this.tools.values()];
+    }
+    if (config?.additionalTools) {
+      delegateTools = [...delegateTools, ...config.additionalTools];
+    }
+
+    // Create a transient provider (same instance for cache sharing, or new for model override)
+    const delegateProvider = config?.model
+      ? createProvider({ ...this.providerConfig, model: config.model })
+      : this.provider;
+
+    const delegateGuard = config?.toolGuard ?? this.toolGuard;
+
+    // Build messages: context prefix + delegate prompt
+    const messages: Message[] = [
+      ...contextMessages,
+      { role: 'user' as const, content: message, createdAt: Date.now() },
+    ];
+
+    // Run the delegate's tool loop
+    let turns = 0;
+    const maxTurns = config?.maxTurns ?? DEFAULT_MAX_TURNS;
+    let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+    let toolCalls = 0;
+    const toolMap = new Map(delegateTools.map(t => [t.definition.name, t]));
+
+    while (turns < maxTurns) {
+      turns++;
+
+      let request: ProviderRequest = {
+        systemPrompt: delegateSystemPrompt,
+        messages,
+        tools: delegateTools.map(t => t.definition),
+        signal: config?.abortSignal,
+      };
+
+      // Middleware: onBeforeApiCall
+      const mwCtx: MiddlewareContext = {
+        sessionId: `delegate_${Date.now()}`,
+        model: config?.model ?? this.providerConfig.model,
+        cwd: this.cwd,
+      };
+      for (const mw of this.middleware) {
+        if (mw.onBeforeApiCall) request = await mw.onBeforeApiCall(request, mwCtx);
+      }
+
+      const response = await (config?.stream && delegateProvider.stream
+        ? this.callProvider_delegate(delegateProvider, request, emit)
+        : delegateProvider.chat(request));
+
+      // Middleware: onAfterApiCall
+      for (const mw of this.middleware) {
+        if (mw.onAfterApiCall) await mw.onAfterApiCall(request, response, mwCtx);
+      }
+
+      totalUsage = accumulateUsage(totalUsage, response.usage);
+      emit({ type: 'api_response', usage: response.usage, stopReason: response.stopReason, model: config?.model ?? this.providerConfig.model });
+
+      // Add assistant message
+      messages.push({ role: 'assistant', content: response.content, createdAt: Date.now() });
+
+      if (response.stopReason !== 'tool_use') break;
+
+      // Execute tools
+      const toolUses = (response.content as ContentBlock[]).filter(
+        (b): b is ToolUseContent => b.type === 'tool_use',
+      );
+      const toolResultBlocks: ContentBlock[] = [];
+
+      for (const toolUse of toolUses) {
+        toolCalls++;
+        const tool = toolMap.get(toolUse.name);
+        if (!tool) {
+          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Error: unknown tool "${toolUse.name}"`, isError: true });
+          continue;
+        }
+
+        let guardedInput = toolUse.input;
+        if (delegateGuard) {
+          const decision = await delegateGuard({ toolName: toolUse.name, input: toolUse.input, session: { id: mwCtx.sessionId, cwd: this.cwd, model: mwCtx.model }, callIndex: toolCalls });
+          if (decision.action === 'deny') {
+            toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Permission denied: ${decision.reason}`, isError: true });
+            continue;
+          }
+          if (decision.action === 'modify') guardedInput = decision.input;
+        }
+
+        try {
+          // Middleware: onBeforeToolExec
+          for (const mw of this.middleware) {
+            if (mw.onBeforeToolExec) guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
+          }
+          const result = await tool.execute(guardedInput, { cwd: this.cwd, abortSignal: config?.abortSignal });
+          // Middleware: onAfterToolExec
+          for (const mw of this.middleware) {
+            if (mw.onAfterToolExec) await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
+          }
+          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: result.forLLM ?? result.content, isError: result.isError });
+        } catch (err) {
+          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true });
+        }
+      }
+
+      messages.push({ role: 'user', content: toolResultBlocks, createdAt: Date.now() });
+    }
+
+    const lastMsg = messages[messages.length - 1];
+    const text = extractText(lastMsg);
+    const result: DelegateResult = { text, usage: totalUsage, turns, toolCalls };
+    emit({ type: 'delegate_end', result });
+    return result;
+  }
+
+  private async callProvider_delegate(
+    provider: Provider,
+    request: ProviderRequest,
+    emit: (event: AgentEvent) => void,
+  ): Promise<import('./types.js').ProviderResponse> {
+    if (!provider.stream) return provider.chat(request);
+    let finalResponse: import('./types.js').ProviderResponse | null = null;
+    for await (const event of provider.stream(request)) {
+      if (event.type === 'text_delta') emit({ type: 'text_delta', text: event.text });
+      else if (event.type === 'thinking_delta') emit({ type: 'thinking_delta', thinking: event.thinking });
+      else if (event.type === 'response') finalResponse = event.response;
+    }
+    if (!finalResponse) throw new Error('Provider stream ended without a final response');
+    return finalResponse;
+  }
+
+  // ===== Spawn (persistent sub-agent) =====
+
+  /**
+   * Create a persistent sub-agent. Inherits provider by default.
+   * Sub-agents cannot spawn further sub-agents.
+   */
+  spawn(config: SpawnConfig): Agent {
+    if (this._isSubAgent) {
+      throw new Error('Sub-agents cannot spawn further sub-agents');
+    }
+
+    const id = config.id ?? `child_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    // Merge tools
+    let tools: ToolRegistration[];
+    if (config.tools && config.inheritTools !== false) {
+      // Specified tools + parent's tools
+      tools = [...this.tools.values(), ...config.tools];
+    } else if (config.tools) {
+      tools = config.tools;
+    } else {
+      tools = [...this.tools.values()]; // inherit all
+    }
+
+    const child = new Agent({
+      provider: config.model
+        ? { ...this.providerConfig, model: config.model }
+        : this.providerConfig,
+      // Share provider instance for cache sharing (only when same model)
+      providerInstance: config.model ? undefined : this.provider,
+      systemPrompt: config.systemPrompt,
+      tools,
+      cwd: config.cwd ?? this.cwd,
+      compaction: config.compaction ?? this.compactionConfig,
+      toolGuard: config.toolGuard ?? this.toolGuard,
+      middleware: this.middleware,
+      onEvent: this.onEvent,
+      _isSubAgent: true,
+    } as any);
+
+    this._children.set(id, child);
+    this.emit({ type: 'child_spawned', childId: id });
+    return child;
+  }
+
+  /** Get all active sub-agents */
+  get children(): ReadonlyMap<string, Agent> {
+    return this._children;
+  }
+
+  /** Destroy a sub-agent */
+  destroyChild(id: string): boolean {
+    const deleted = this._children.delete(id);
+    if (deleted) this.emit({ type: 'child_destroyed', childId: id });
+    return deleted;
+  }
+
+  /** Whether this agent is a sub-agent */
+  get isSubAgent(): boolean {
+    return this._isSubAgent;
+  }
+
   // ===== Internal Methods =====
+
+  private getMiddlewareContext(session: Session): MiddlewareContext {
+    return {
+      sessionId: session.id,
+      model: session.metadata.model,
+      cwd: session.metadata.cwd,
+    };
+  }
 
   private async resolveSession(options?: QueryOptions): Promise<Session> {
     if (options?.resume) {

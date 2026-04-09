@@ -32,7 +32,15 @@ export interface ThinkingContent {
   thinking: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ThinkingContent;
+export interface ImageContent {
+  type: 'image';
+  /** Base64-encoded image data */
+  data: string;
+  /** Media type, e.g., 'image/jpeg', 'image/png', 'image/webp', 'image/gif' */
+  mediaType: string;
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ThinkingContent | ImageContent;
 
 export interface Message {
   role: Role;
@@ -95,6 +103,8 @@ export interface ProviderRequest {
   tools?: ToolDefinition[];
   /** Abort signal */
   signal?: AbortSignal;
+  /** Force JSON schema output (structured output) */
+  responseFormat?: JsonSchema;
 }
 
 export interface ProviderResponse {
@@ -153,6 +163,8 @@ export interface AgentConfig {
   sessionStore?: SessionStore;
   /** Event handler for streaming / logging */
   onEvent?: (event: AgentEvent) => void;
+  /** Middleware pipeline (runs in order) */
+  middleware?: Middleware[];
   /**
    * Tool execution guard. Called before every tool execution.
    * Return { action: 'allow' } to proceed, { action: 'deny', reason } to block,
@@ -226,6 +238,119 @@ export interface QueryOptions {
   onEvent?: (event: AgentEvent) => void;
   /** Abort signal */
   abortSignal?: AbortSignal;
+  /**
+   * Force JSON schema output. The model will return valid JSON matching this schema.
+   * Supported on Anthropic (tool-based extraction) and OpenAI (response_format).
+   */
+  responseFormat?: JsonSchema;
+}
+
+/** JSON Schema for structured output */
+export interface JsonSchema {
+  name: string;
+  description?: string;
+  schema: Record<string, unknown>;
+}
+
+// ----- Delegate (one-shot fork) -----
+
+export interface DelegateConfig {
+  /** System prompt to append after the main agent's prompt (e.g., skill body) */
+  appendSystemPrompt?: string | string[];
+  /** Override system prompt entirely (disables cache sharing for system prompt prefix) */
+  overrideSystemPrompt?: string | string[];
+  /** Whitelist tools by name (from the main agent's registered tools) */
+  allowedTools?: string[];
+  /** Additional tools only for the delegate */
+  additionalTools?: ToolRegistration[];
+  /** Override model (WARNING: changes model = breaks prompt cache) */
+  model?: string;
+  /** Max tool-calling turns */
+  maxTurns?: number;
+  /** Override the main agent's tool guard */
+  toolGuard?: ToolGuard;
+  /** Include main conversation history as prefix for cache sharing (default: true) */
+  includeHistory?: boolean;
+  /** Session ID to use as conversation context (default: last queried session) */
+  sessionId?: string;
+  /** Stream deltas */
+  stream?: boolean;
+  /** Per-delegate event handler */
+  onEvent?: (event: AgentEvent) => void;
+  /** Abort signal */
+  abortSignal?: AbortSignal;
+}
+
+export interface DelegateResult {
+  /** Final text from the delegate */
+  text: string;
+  /** Token usage accumulated across all turns */
+  usage: TokenUsage;
+  /** Number of tool-calling turns */
+  turns: number;
+  /** Number of tool calls */
+  toolCalls: number;
+}
+
+// ----- Spawn (persistent sub-agent) -----
+
+export interface SpawnConfig {
+  /** Custom sub-agent ID */
+  id?: string;
+  /** System prompt (required for spawn, since sub-agent is independent) */
+  systemPrompt: string | string[];
+  /** Tools — if not set, inherits all from parent */
+  tools?: ToolRegistration[];
+  /** Inherit parent's tools in addition to any specified */
+  inheritTools?: boolean;
+  /** Override model */
+  model?: string;
+  /** Override tool guard — if not set, inherits parent's */
+  toolGuard?: ToolGuard;
+  /** Override compaction config */
+  compaction?: CompactionConfig;
+  /** Max turns per query */
+  maxTurns?: number;
+  /** Override cwd */
+  cwd?: string;
+}
+
+// ----- Middleware -----
+
+export interface MiddlewareContext {
+  sessionId: string;
+  model: string;
+  cwd: string;
+}
+
+export interface Middleware {
+  /** Called before each provider API call. Can modify the request. */
+  onBeforeApiCall?: (
+    request: ProviderRequest,
+    context: MiddlewareContext,
+  ) => Promise<ProviderRequest> | ProviderRequest;
+
+  /** Called after each provider API call. Can observe the response. */
+  onAfterApiCall?: (
+    request: ProviderRequest,
+    response: ProviderResponse,
+    context: MiddlewareContext,
+  ) => Promise<void> | void;
+
+  /** Called before each tool execution. Can modify input or deny. */
+  onBeforeToolExec?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    context: MiddlewareContext,
+  ) => Promise<Record<string, unknown>> | Record<string, unknown>;
+
+  /** Called after each tool execution. Can observe the result. */
+  onAfterToolExec?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    result: ToolResult,
+    context: MiddlewareContext,
+  ) => Promise<void> | void;
 }
 
 export interface QueryResult {
@@ -270,4 +395,8 @@ export type AgentEvent =
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; isError: boolean }
   | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number }
-  | { type: 'query_end'; result: QueryResult };
+  | { type: 'query_end'; result: QueryResult }
+  | { type: 'delegate_start'; message: string }
+  | { type: 'delegate_end'; result: DelegateResult }
+  | { type: 'child_spawned'; childId: string }
+  | { type: 'child_destroyed'; childId: string };

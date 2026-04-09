@@ -21,7 +21,8 @@ export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from '
 export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';
 
 // Retry utility (for custom providers)
-export { withRetry, isRetryableError, getRetryDelay } from './utils/retry.js';
+export { withRetry, isRetryableError, getRetryDelay, classifyError } from './utils/retry.js';
+export type { ErrorKind } from './utils/retry.js';
 
 // Constants (for custom configs)
 export * from './constants.js';
@@ -71,4 +72,19 @@ export type {
   ToolGuard,
   ToolGuardContext,
   ToolGuardDecision,
+
+  // Delegate / Spawn
+  DelegateConfig,
+  DelegateResult,
+  SpawnConfig,
+
+  // Middleware
+  Middleware,
+  MiddlewareContext,
+
+  // Structured output
+  JsonSchema,
+
+  // Multi-modal
+  ImageContent,
 } from './types.js';

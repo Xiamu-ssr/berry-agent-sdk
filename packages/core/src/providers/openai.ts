@@ -32,6 +32,7 @@ import type {
   TextContent,
   ToolUseContent,
   ToolResultContent,
+  ImageContent,
 } from '../types.js';
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
@@ -143,19 +144,34 @@ export class OpenAIProvider implements Provider {
     const messages = this.buildMessages(request.systemPrompt, request.messages);
     const tools = request.tools ? this.buildTools(request.tools) : undefined;
 
-    return {
+    const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
       model: this.config.model,
       messages,
       max_tokens: this.config.maxTokens ?? DEFAULT_MAX_TOKENS,
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
+
+    // Structured output (JSON schema)
+    if (request.responseFormat) {
+      params.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: request.responseFormat.name,
+          ...(request.responseFormat.description ? { description: request.responseFormat.description } : {}),
+          schema: request.responseFormat.schema,
+          strict: true,
+        },
+      } as any;
+    }
+
+    return params;
   }
 
   private buildStreamParams(request: ProviderRequest): OpenAI.ChatCompletionCreateParamsStreaming {
     const messages = this.buildMessages(request.systemPrompt, request.messages);
     const tools = request.tools ? this.buildTools(request.tools) : undefined;
 
-    return {
+    const params: OpenAI.ChatCompletionCreateParamsStreaming = {
       model: this.config.model,
       messages,
       max_tokens: this.config.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -163,6 +179,20 @@ export class OpenAIProvider implements Provider {
       stream_options: { include_usage: true },
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
+
+    if (request.responseFormat) {
+      params.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: request.responseFormat.name,
+          ...(request.responseFormat.description ? { description: request.responseFormat.description } : {}),
+          schema: request.responseFormat.schema,
+          strict: true,
+        },
+      } as any;
+    }
+
+    return params;
   }
 
   // ===== Message Building =====
@@ -207,6 +237,22 @@ export class OpenAIProvider implements Provider {
     for (const block of msg.content) {
       if (block.type === 'text') {
         textParts.push((block as TextContent).text);
+      } else if (block.type === 'image') {
+        // Flush any pending text first, then add image
+        if (textParts.length > 0) {
+          results.push({ role: 'user', content: textParts.join('\n') });
+          textParts.length = 0;
+        }
+        const img = block as ImageContent;
+        results.push({
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: { url: `data:${img.mediaType};base64,${img.data}` },
+            },
+          ],
+        } as any);
       } else if (block.type === 'tool_result') {
         const tr = block as ToolResultContent;
         results.push({

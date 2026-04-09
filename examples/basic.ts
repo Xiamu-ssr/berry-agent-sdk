@@ -1,91 +1,32 @@
-// ============================================================
-// Berry Agent SDK — Basic Example
-// ============================================================
-// Shows: create agent → stream events → tool loop → resume session
-
-import './load-env.ts';
+/**
+ * Berry Agent SDK — Basic Example
+ * Simple question → answer with streaming.
+ */
 import { Agent } from '@berry-agent/core';
-import type { ToolRegistration } from '@berry-agent/core';
 
-// 1. Define a tool
-const searchTool: ToolRegistration = {
-  definition: {
-    name: 'web_search',
-    description: 'Search the web for information',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query' },
-      },
-      required: ['query'],
-    },
-  },
-  execute: async (input) => {
-    const query = input.query as string;
-    // In real usage, call a search API
-    return {
-      content: `Search results for "${query}": [mock results]`,
-    };
-  },
-};
-
-// 2. Create agent
 const agent = new Agent({
   provider: {
     type: 'anthropic',
     apiKey: process.env.ANTHROPIC_API_KEY!,
     model: 'claude-sonnet-4-20250514',
-    // baseUrl: 'https://your-proxy.example.com/v1', // optional: proxy/gateway
   },
-  systemPrompt: [
-    // Block 1: static instructions (cached)
-    'You are a helpful assistant.',
-    // Block 2: dynamic context (cached separately)
-    'Today is ' + new Date().toISOString().split('T')[0],
-  ],
-  tools: [searchTool],
-  compaction: {
-    contextWindow: 200_000,
-    // threshold defaults to 85% of contextWindow
-  },
+  systemPrompt: 'You are a helpful coding assistant. Be concise.',
   onEvent: (event) => {
-    if (event.type === 'text_delta') {
-      process.stdout.write(event.text);
-    }
-    if (event.type === 'tool_call') {
-      console.log(`\n🔧 Tool: ${event.name}`);
-    }
-    if (event.type === 'api_response') {
-      const u = event.usage;
-      console.log(`📊 Tokens: ${u.inputTokens} in / ${u.outputTokens} out | cache read: ${u.cacheReadTokens ?? 0}`);
-    }
-    if (event.type === 'compaction') {
-      console.log(`🗜️ Compacted! Freed ${event.tokensFreed} tokens via ${event.layersApplied.join(', ')}`);
-    }
+    if (event.type === 'text_delta') process.stdout.write(event.text);
+    if (event.type === 'api_response') console.log(`\n[tokens: ${event.usage.inputTokens}in / ${event.usage.outputTokens}out]`);
   },
 });
 
-// 3. Query
-async function main() {
-  // First query with streaming deltas
-  const result1 = await agent.query('What is the weather in Tokyo?', {
-    stream: true,
-  });
-  console.log('\n\n🤖 final:', result1.text);
-  console.log(`Session: ${result1.sessionId} | Tools: ${result1.toolCalls}`);
+const result = await agent.query('What is the difference between map and flatMap in JavaScript?', {
+  stream: true,
+});
 
-  // Resume same session
-  const result2 = await agent.query('What about Osaka?', {
-    resume: result1.sessionId,
-  });
-  console.log('\n🤖:', result2.text);
+console.log(`\nSession: ${result.sessionId}`);
 
-  // Resume with restricted tools
-  const result3 = await agent.query('Summarize what you found', {
-    resume: result1.sessionId,
-    allowedTools: [], // no tools allowed for this query
-  });
-  console.log('\n🤖:', result3.text);
-}
+// Resume the same session
+const followUp = await agent.query('Give me an example with arrays', {
+  resume: result.sessionId,
+  stream: true,
+});
 
-main().catch(console.error);
+console.log(`\nTotal usage: ${followUp.totalUsage.inputTokens}in / ${followUp.totalUsage.outputTokens}out`);
