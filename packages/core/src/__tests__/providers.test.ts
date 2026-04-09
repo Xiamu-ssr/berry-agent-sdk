@@ -17,11 +17,11 @@ describe('AnthropicProvider adapters', () => {
       'dynamic context',
     ]);
 
+    // Only the LAST system block gets cache_control (to stay within 4-block limit)
     expect(systemBlocks).toEqual([
       {
         type: 'text',
         text: 'static rules',
-        cache_control: { type: 'ephemeral' },
       },
       {
         type: 'text',

@@ -200,10 +200,16 @@ export class AnthropicProvider implements Provider {
   // This maximizes cache hits — stable prefix stays cached.
 
   buildSystemBlocks(systemPrompt: string[]): TextBlockParam[] {
-    return systemPrompt.filter(Boolean).map(text => ({
+    const blocks = systemPrompt.filter(Boolean);
+    // Only place cache_control on the LAST system block.
+    // Anthropic limits total cache_control breakpoints to 4.
+    // We use: 1 on system (here) + up to 2 on recent turns = 3 max.
+    return blocks.map((text, idx) => ({
       type: 'text' as const,
       text,
-      cache_control: { type: 'ephemeral' as const },
+      ...(idx === blocks.length - 1
+        ? { cache_control: { type: 'ephemeral' as const } }
+        : {}),
     }));
   }
 
