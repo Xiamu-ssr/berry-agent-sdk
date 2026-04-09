@@ -389,6 +389,104 @@ describe('Agent', () => {
     expect(callCount).toBe(2);
   });
 
+  it('toolGuard denies tool calls and returns error to model', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          { type: 'tool_use', id: 'tu_1', name: 'dangerous_tool', input: { cmd: 'rm -rf /' } },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'tool was denied, noted' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const dangerousTool: ToolRegistration = {
+      definition: {
+        name: 'dangerous_tool',
+        description: 'Does something dangerous',
+        inputSchema: { type: 'object', properties: { cmd: { type: 'string' } } },
+      },
+      execute: async () => ({ content: 'should not reach here' }),
+    };
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      tools: [dangerousTool],
+      toolGuard: async ({ toolName }) => {
+        if (toolName === 'dangerous_tool') {
+          return { action: 'deny', reason: 'Tool blocked by policy' };
+        }
+        return { action: 'allow' };
+      },
+    });
+
+    const result = await agent.query('do something dangerous');
+    const session = await agent.getSession(result.sessionId);
+    const toolResultMsg = (session as Session).messages[2];
+
+    expect(result.text).toBe('tool was denied, noted');
+    expect(Array.isArray(toolResultMsg.content)).toBe(true);
+    expect(toolResultMsg.content).toEqual([
+      {
+        type: 'tool_result',
+        toolUseId: 'tu_1',
+        content: 'Permission denied: Tool blocked by policy',
+        isError: true,
+      },
+    ]);
+  });
+
+  it('toolGuard modifies tool input before execution', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          { type: 'tool_use', id: 'tu_1', name: 'echo', input: { value: 'original' } },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'done' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    let executedInput: Record<string, unknown> | null = null;
+    const echoTool: ToolRegistration = {
+      definition: {
+        name: 'echo',
+        description: 'Echo',
+        inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+      },
+      execute: async (input) => {
+        executedInput = input;
+        return { content: `echo:${String(input.value)}` };
+      },
+    };
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      tools: [echoTool],
+      toolGuard: async () => ({
+        action: 'modify',
+        input: { value: 'sanitized' },
+      }),
+    });
+
+    await agent.query('echo something');
+    expect(executedInput).toEqual({ value: 'sanitized' });
+  });
+
   it('stops after maxTurns when the provider keeps asking for tools', async () => {
     const provider = new SequenceProvider([
       {

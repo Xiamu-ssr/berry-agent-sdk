@@ -264,6 +264,91 @@ describe('compact', () => {
     expect(result.layersApplied).not.toContain('summarize');
   });
 
+  // ===== Forked Compact (cache sharing) =====
+  it('forked compact passes main system prompt + tools to summarize call', async () => {
+    const messages: Message[] = Array.from({ length: 12 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `message ${i + 1}`,
+      createdAt: i + 1,
+    }));
+
+    // Capture what the provider receives
+    let capturedRequest: ProviderRequest | null = null;
+    const spyProvider: Provider = {
+      type: 'anthropic',
+      async chat(request: ProviderRequest) {
+        capturedRequest = request;
+        return {
+          content: [{ type: 'text' as const, text: '<summary>forked summary</summary>' }],
+          stopReason: 'end_turn' as const,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+      },
+    };
+
+    const forkContext = {
+      systemPrompt: ['You are a coding assistant.', 'Be concise.'],
+      tools: [
+        {
+          name: 'read_file',
+          description: 'Read a file',
+          inputSchema: { type: 'object' as const, properties: { path: { type: 'string' } } },
+        },
+      ],
+    };
+
+    const result = await compact(
+      messages,
+      { ...FORCE_COMPACT, enabledLayers: ['summarize'] },
+      spyProvider,
+      forkContext,
+    );
+
+    // Verify forked compact used main system prompt instead of COMPACT_SYSTEM_PROMPT
+    expect(capturedRequest).not.toBeNull();
+    expect(capturedRequest!.systemPrompt).toEqual(['You are a coding assistant.', 'Be concise.']);
+    // Verify tools were passed through
+    expect(capturedRequest!.tools).toEqual(forkContext.tools);
+    // Summary still works correctly
+    expect(result.layersApplied).toEqual(['summarize']);
+    expect((result.messages[0].content as string)).toContain('forked summary');
+  });
+
+  it('without forkContext, uses standalone COMPACT_SYSTEM_PROMPT', async () => {
+    const messages: Message[] = Array.from({ length: 12 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `message ${i + 1}`,
+      createdAt: i + 1,
+    }));
+
+    let capturedRequest: ProviderRequest | null = null;
+    const spyProvider: Provider = {
+      type: 'anthropic',
+      async chat(request: ProviderRequest) {
+        capturedRequest = request;
+        return {
+          content: [{ type: 'text' as const, text: '<summary>standalone summary</summary>' }],
+          stopReason: 'end_turn' as const,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        };
+      },
+    };
+
+    await compact(
+      messages,
+      { ...FORCE_COMPACT, enabledLayers: ['summarize'] },
+      spyProvider,
+      // no forkContext
+    );
+
+    // Without fork, should use COMPACT_SYSTEM_PROMPT (a single string)
+    expect(capturedRequest).not.toBeNull();
+    expect(capturedRequest!.systemPrompt).toHaveLength(1);
+    expect(capturedRequest!.systemPrompt[0]).toContain('summarizing conversation');
+    // No tools passed
+    expect(capturedRequest!.tools).toBeUndefined();
+  });
+
   // ===== Layer 6: trim_assistant =====
   it('trims long assistant text messages', async () => {
     const longText = 'x'.repeat(5000);

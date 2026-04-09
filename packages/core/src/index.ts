@@ -11,9 +11,14 @@ export { OpenAIProvider } from './providers/openai.js';
 
 // Compaction
 export { compact, estimateTokens } from './compaction/compactor.js';
+export type { ForkContext } from './compaction/compactor.js';
 
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
+
+// Skills
+export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
+export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';
 
 // Retry utility (for custom providers)
 export { withRetry, isRetryableError, getRetryDelay } from './utils/retry.js';
@@ -61,4 +66,9 @@ export type {
   // Compaction
   CompactionConfig,
   CompactionLayer,
+
+  // Tool Guard (permission hook)
+  ToolGuard,
+  ToolGuardContext,
+  ToolGuardDecision,
 } from './types.js';

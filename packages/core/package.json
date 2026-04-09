@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "gray-matter": "^4.0.3",
     "openai": "^5.0.0"
   },
   "devDependencies": {

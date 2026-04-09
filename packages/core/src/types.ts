@@ -142,7 +142,10 @@ export interface AgentConfig {
   /** System prompt — string or array of blocks (for cache optimization) */
   systemPrompt: string | string[];
   tools?: ToolRegistration[];
-  skills?: string[];  // paths to skill .md files
+  /** @deprecated Use skillDirs instead. Paths to skill .md files (injected directly into system prompt). */
+  skills?: string[];
+  /** Directories containing skills (each subdirectory has a SKILL.md). */
+  skillDirs?: string[];
   cwd?: string;
   /** Compaction config */
   compaction?: CompactionConfig;
@@ -150,7 +153,41 @@ export interface AgentConfig {
   sessionStore?: SessionStore;
   /** Event handler for streaming / logging */
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * Tool execution guard. Called before every tool execution.
+   * Return { action: 'allow' } to proceed, { action: 'deny', reason } to block,
+   * or { action: 'modify', input } to proceed with modified input.
+   *
+   * If not set, all tool calls are allowed (no guard).
+   *
+   * Use this to plug in any permission strategy:
+   * - Static rules (deny dangerous tools)
+   * - LLM-based safety classifier
+   * - User confirmation UI
+   * - Directory scoping
+   */
+  toolGuard?: ToolGuard;
 }
+
+// ----- Tool Guard -----
+
+export type ToolGuard = (context: ToolGuardContext) => Promise<ToolGuardDecision>;
+
+export interface ToolGuardContext {
+  /** Tool being called */
+  toolName: string;
+  /** Input arguments */
+  input: Record<string, unknown>;
+  /** Session info */
+  session: { id: string; cwd: string; model: string };
+  /** Sequential index of this tool call within the current query */
+  callIndex: number;
+}
+
+export type ToolGuardDecision =
+  | { action: 'allow' }
+  | { action: 'deny'; reason: string }
+  | { action: 'modify'; input: Record<string, unknown> };
 
 export interface CompactionConfig {
   /** Token threshold to trigger compaction (default: 85% of context window) */

@@ -19,10 +19,13 @@ import type {
   ToolUseContent,
   TokenUsage,
   AgentEvent,
+  ToolGuard,
 } from './types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
-import { compact, estimateTokens } from './compaction/compactor.js';
+import { compact, estimateTokens, type ForkContext } from './compaction/compactor.js';
+import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
+import type { Skill } from './skills/types.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
@@ -35,11 +38,14 @@ export class Agent {
   private providerConfig: ProviderConfig;
   private systemPrompt: string[];
   private tools: Map<string, ToolRegistration>;
-  private skills: string[];
+  private legacySkills: string[];  // deprecated: raw .md paths
+  private skillDirs: string[];
+  private loadedSkills: Skill[] | null = null;  // lazy-loaded
   private cwd: string;
   private sessionStore: SessionStore;
   private compactionConfig: AgentConfig['compaction'];
   private onEvent?: (event: AgentEvent) => void;
+  private toolGuard?: ToolGuard;
 
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
@@ -48,9 +54,11 @@ export class Agent {
       : [config.systemPrompt];
 
     this.tools = new Map();
-    this.skills = config.skills ?? [];
+    this.legacySkills = config.skills ?? [];
+    this.skillDirs = config.skillDirs ?? [];
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
+    this.toolGuard = config.toolGuard;
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
     this.providerConfig = config.provider;
@@ -101,6 +109,12 @@ export class Agent {
       // 5a. Check compaction BEFORE API call
       // Prefer real usage from last API response; fall back to char-based estimate
       if (this.shouldCompact(session)) {
+        // Build fork context for cache-sharing: use the same system prompt + tools
+        // so the provider's prompt cache prefix is reused during summarization.
+        const forkCtx: ForkContext = {
+          systemPrompt: fullSystemPrompt,
+          tools: allowedTools.map(t => t.definition),
+        };
         const result = await compact(
           session.messages,
           {
@@ -109,6 +123,7 @@ export class Agent {
             enabledLayers: this.compactionConfig?.enabledLayers,
           },
           this.provider,
+          forkCtx,
         );
         session.messages = result.messages;
         session.metadata.compactionCount++;
@@ -146,6 +161,10 @@ export class Agent {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
             // Force compaction to shrink context, then retry
+            const ptlForkCtx: ForkContext = {
+              systemPrompt: fullSystemPrompt,
+              tools: allowedTools.map(t => t.definition),
+            };
             const ptlResult = await compact(
               session.messages,
               {
@@ -154,6 +173,7 @@ export class Agent {
                 enabledLayers: this.compactionConfig?.enabledLayers,
               },
               this.provider,
+              ptlForkCtx,
             );
             session.messages = ptlResult.messages;
             session.metadata.compactionCount++;
@@ -240,8 +260,36 @@ export class Agent {
           continue;
         }
 
+        // Tool guard check
+        let guardedInput = toolUse.input;
+        if (this.toolGuard) {
+          const decision = await this.toolGuard({
+            toolName: toolUse.name,
+            input: toolUse.input,
+            session: {
+              id: session.id,
+              cwd: session.metadata.cwd,
+              model: session.metadata.model,
+            },
+            callIndex: toolCalls,
+          });
+          if (decision.action === 'deny') {
+            toolResultBlocks.push({
+              type: 'tool_result',
+              toolUseId: toolUse.id,
+              content: `Permission denied: ${decision.reason}`,
+              isError: true,
+            });
+            emit({ type: 'tool_result', name: toolUse.name, isError: true });
+            continue;
+          }
+          if (decision.action === 'modify') {
+            guardedInput = decision.input;
+          }
+        }
+
         try {
-          const result = await tool.execute(toolUse.input, {
+          const result = await tool.execute(guardedInput, {
             cwd: this.cwd,
             abortSignal: options?.abortSignal,
           });
@@ -373,22 +421,60 @@ export class Agent {
 
     const base = [...basePrompt];
 
-    // Load skill files if configured
-    if (this.skills.length > 0) {
-      const skillContent = await this.loadSkills();
-      if (skillContent) {
-        base.push(skillContent);
-      }
+    // Legacy skill loading (deprecated: injects full content)
+    if (this.legacySkills.length > 0) {
+      const skillContent = await this.loadLegacySkills();
+      if (skillContent) base.push(skillContent);
+    }
+
+    // New skill system: inject lightweight index (name + description + whenToUse)
+    // Full content is loaded lazily when the skill is invoked.
+    if (this.skillDirs.length > 0) {
+      const skills = await this.getLoadedSkills();
+      const index = buildSkillIndex(skills);
+      if (index) base.push(index);
     }
 
     return base;
   }
 
-  private async loadSkills(): Promise<string | null> {
-    // Read skill .md files and concatenate
+  /** Lazy-load skills from all skill directories (cached). */
+  private async getLoadedSkills(): Promise<Skill[]> {
+    if (this.loadedSkills) return this.loadedSkills;
+
+    const allSkills: Skill[] = [];
+    for (const dir of this.skillDirs) {
+      const skills = await loadSkillsFromDir(dir);
+      allSkills.push(...skills);
+    }
+
+    // Deduplicate by name (first wins)
+    const seen = new Set<string>();
+    this.loadedSkills = allSkills.filter(s => {
+      if (seen.has(s.meta.name)) return false;
+      seen.add(s.meta.name);
+      return true;
+    });
+
+    return this.loadedSkills;
+  }
+
+  /** Get a loaded skill by name (for lazy content loading). */
+  async getSkill(name: string): Promise<Skill | null> {
+    const skills = await this.getLoadedSkills();
+    return skills.find(s => s.meta.name === name) ?? null;
+  }
+
+  /** Get all loaded skill indexes. */
+  async getSkillIndexes(): Promise<Array<{ name: string; description: string; whenToUse?: string }>> {
+    const skills = await this.getLoadedSkills();
+    return skills.map(s => ({ name: s.meta.name, description: s.meta.description, whenToUse: s.meta.whenToUse }));
+  }
+
+  private async loadLegacySkills(): Promise<string | null> {
     const { readFile } = await import('node:fs/promises');
     const parts: string[] = [];
-    for (const path of this.skills) {
+    for (const path of this.legacySkills) {
       try {
         const content = await readFile(path, 'utf-8');
         parts.push(content);

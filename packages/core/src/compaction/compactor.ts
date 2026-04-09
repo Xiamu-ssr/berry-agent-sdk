@@ -4,7 +4,7 @@
 // 7-layer compaction pipeline. Runs as ONE batch operation.
 // KEY: all changes happen at once to preserve cache prefixes.
 
-import type { Message, CompactionConfig, CompactionLayer, ContentBlock, Provider, ToolUseContent, ToolResultContent } from '../types.js';
+import type { Message, CompactionConfig, CompactionLayer, ContentBlock, Provider, ToolUseContent, ToolResultContent, ToolDefinition } from '../types.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
@@ -36,14 +36,29 @@ const LAYER_ORDER: CompactionLayer[] = [
 ];
 
 /**
+ * Context from the main conversation for cache-sharing during compact.
+ * When provided, the summarize layer sends the compact request with the same
+ * system prompt + tools + message prefix as the main conversation, so the
+ * provider's prompt cache is reused (~96% cache hit on Anthropic).
+ */
+export interface ForkContext {
+  systemPrompt: string[];
+  tools?: ToolDefinition[];
+}
+
+/**
  * Run the full compaction pipeline.
  * Returns a new message array (never mutates original).
  * All changes in ONE pass → cache prefix stays stable.
+ *
+ * @param forkContext If provided, summarize layer reuses main conversation's
+ *   system prompt + tools for prompt cache sharing (forked compact).
  */
 export async function compact(
   messages: Message[],
   config: CompactionConfig,
   provider: Provider,
+  forkContext?: ForkContext,
 ): Promise<CompactionResult> {
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const threshold = config.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
@@ -60,7 +75,7 @@ export async function compact(
 
     const beforeLen = current.length;
     const before = currentTokens;
-    current = await applyLayer(layer, current, config, provider);
+    current = await applyLayer(layer, current, config, provider, forkContext);
     currentTokens = estimateTokens(current);
 
     // Detect change: token count decreased OR message count changed.
@@ -83,13 +98,14 @@ async function applyLayer(
   messages: Message[],
   config: CompactionConfig,
   provider: Provider,
+  forkContext?: ForkContext,
 ): Promise<Message[]> {
   switch (layer) {
     case 'clear_thinking':      return clearThinkingBlocks(messages);
     case 'truncate_tool_results': return truncateToolResults(messages);
     case 'clear_tool_pairs':    return clearOldToolPairs(messages);
     case 'merge_messages':      return mergeConsecutiveMessages(messages);
-    case 'summarize':           return await summarizeOldMessages(messages, provider);
+    case 'summarize':           return await summarizeOldMessages(messages, provider, forkContext);
     case 'trim_assistant':      return trimAssistantMessages(messages);
     case 'truncate_oldest':     return truncateOldest(messages);
     default:                    return messages;
@@ -326,7 +342,11 @@ function stripImagesFromMessages(messages: Message[]): Message[] {
   });
 }
 
-async function summarizeOldMessages(messages: Message[], provider: Provider): Promise<Message[]> {
+async function summarizeOldMessages(
+  messages: Message[],
+  provider: Provider,
+  forkContext?: ForkContext,
+): Promise<Message[]> {
   if (messages.length <= SUMMARIZE_MIN_MESSAGES) return messages;
 
   const recentCount = Math.min(SUMMARIZE_MIN_MESSAGES, Math.floor(messages.length * SUMMARIZE_RECENT_RATIO));
@@ -340,10 +360,20 @@ async function summarizeOldMessages(messages: Message[], provider: Provider): Pr
     { role: 'user' as const, content: COMPACT_PROMPT },
   ];
 
+  // When forkContext is provided, we "fork" the API call:
+  // Send the main conversation's system prompt + tools + old messages + compact prompt.
+  // Because the system prompt + tools are identical to the main conversation,
+  // the provider's prompt cache is reused (Anthropic: ~96% cache hit).
+  //
+  // Without forkContext, we use the standalone COMPACT_SYSTEM_PROMPT
+  // (cheaper but no cache sharing).
+  const systemPrompt = forkContext?.systemPrompt ?? [COMPACT_SYSTEM_PROMPT];
+
   try {
     const summaryResponse = await provider.chat({
-      systemPrompt: [COMPACT_SYSTEM_PROMPT],
+      systemPrompt,
       messages: conversationMessages,
+      ...(forkContext?.tools ? { tools: forkContext.tools } : {}),
     });
 
     const textBlock = summaryResponse.content.find(b => b.type === 'text');
