@@ -41,26 +41,44 @@ describe('isRetryableError', () => {
 });
 
 describe('getRetryDelay', () => {
-  it('uses exponential backoff', () => {
-    expect(getRetryDelay(1)).toBe(500);
-    expect(getRetryDelay(2)).toBe(1000);
-    expect(getRetryDelay(3)).toBe(2000);
-    expect(getRetryDelay(4)).toBe(4000);
+  // Jitter adds up to 25% of base delay, so test with ranges
+  it('uses exponential backoff with jitter', () => {
+    const d1 = getRetryDelay(1);
+    expect(d1).toBeGreaterThanOrEqual(500);
+    expect(d1).toBeLessThanOrEqual(625);  // 500 + 25%
+
+    const d2 = getRetryDelay(2);
+    expect(d2).toBeGreaterThanOrEqual(1000);
+    expect(d2).toBeLessThanOrEqual(1250);
+
+    const d3 = getRetryDelay(3);
+    expect(d3).toBeGreaterThanOrEqual(2000);
+    expect(d3).toBeLessThanOrEqual(2500);
   });
 
-  it('caps at MAX_BACKOFF_MS (32s)', () => {
-    expect(getRetryDelay(10)).toBe(32_000);
-    expect(getRetryDelay(20)).toBe(32_000);
+  it('caps at MAX_BACKOFF_MS (32s) + jitter', () => {
+    const d10 = getRetryDelay(10);
+    expect(d10).toBeGreaterThanOrEqual(32_000);
+    expect(d10).toBeLessThanOrEqual(40_000); // 32k + 25%
+
+    const d20 = getRetryDelay(20);
+    expect(d20).toBeGreaterThanOrEqual(32_000);
+    expect(d20).toBeLessThanOrEqual(40_000);
   });
 
-  it('respects retry-after header', () => {
+  it('respects retry-after header (no jitter)', () => {
     expect(getRetryDelay(1, '5')).toBe(5000);
     expect(getRetryDelay(1, '30')).toBe(30_000);
   });
 
   it('falls back to backoff for invalid retry-after', () => {
-    expect(getRetryDelay(1, 'invalid')).toBe(500);
-    expect(getRetryDelay(1, '')).toBe(500);
+    const d1 = getRetryDelay(1, 'invalid');
+    expect(d1).toBeGreaterThanOrEqual(500);
+    expect(d1).toBeLessThanOrEqual(625);
+
+    const d2 = getRetryDelay(1, '');
+    expect(d2).toBeGreaterThanOrEqual(500);
+    expect(d2).toBeLessThanOrEqual(625);
   });
 });
 

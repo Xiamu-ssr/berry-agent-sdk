@@ -58,11 +58,15 @@ export async function compact(
     if (!enabledLayers.includes(layer)) continue;
     if (currentTokens <= threshold) break;
 
+    const beforeLen = current.length;
     const before = currentTokens;
     current = await applyLayer(layer, current, config, provider);
     currentTokens = estimateTokens(current);
 
-    if (currentTokens < before) {
+    // Detect change: token count decreased OR message count changed.
+    // The summarize layer may produce more tokens than short source messages
+    // (the structured summary wrapper is verbose), but message count always drops.
+    if (currentTokens < before || current.length !== beforeLen) {
       layersApplied.push(layer);
     }
   }
@@ -220,6 +224,107 @@ function mergeConsecutiveMessages(messages: Message[]): Message[] {
 }
 
 // ===== Layer 5: Summarize Old Messages (LLM call) =====
+// Structured prompt adapted from CC source (compact/prompt.ts).
+// Key: strip images/docs before summarizing, use structured 9-section output.
+
+const COMPACT_SYSTEM_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
+
+const COMPACT_PROMPT = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
+
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+
+1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
+   - The user's explicit requests and intents
+   - Your approach to addressing the user's requests
+   - Key decisions, technical concepts and code patterns
+   - Specific details like file names, code snippets, function signatures, file edits
+   - Errors that you ran into and how you fixed them
+   - Pay special attention to specific user feedback
+2. Double-check for technical accuracy and completeness.
+
+Your summary should include the following sections:
+
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable.
+4. Errors and fixes: List all errors encountered and how they were fixed.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All user messages: List ALL user messages that are not tool results.
+7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
+8. Current Work: Describe precisely what was being worked on immediately before this summary request.
+9. Optional Next Step: List the next step related to the most recent work. Include direct quotes from the most recent conversation.
+
+REMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> block followed by a <summary> block. Tool calls will be rejected and you will fail the task.`;
+
+/**
+ * Format compact summary: strip <analysis> scratchpad, extract <summary> content.
+ * Same as CC's formatCompactSummary().
+ */
+function formatCompactSummary(summary: string): string {
+  let formatted = summary;
+  // Strip analysis section (drafting scratchpad, no informational value)
+  formatted = formatted.replace(/<analysis>[\s\S]*?<\/analysis>/, '');
+  // Extract and format summary section
+  const summaryMatch = formatted.match(/<summary>([\s\S]*?)<\/summary>/);
+  if (summaryMatch) {
+    const content = summaryMatch[1] || '';
+    formatted = formatted.replace(
+      /<summary>[\s\S]*?<\/summary>/,
+      `Summary:\n${content.trim()}`,
+    );
+  }
+  formatted = formatted.replace(/\n\n+/g, '\n\n');
+  return formatted.trim();
+}
+
+/**
+ * Strip image/document blocks from messages before summarization.
+ * Same as CC's stripImagesFromMessages() — avoids compact call hitting context limit.
+ */
+function stripImagesFromMessages(messages: Message[]): Message[] {
+  return messages.map(msg => {
+    if (!Array.isArray(msg.content)) return msg;
+    let hasMedia = false;
+    const newContent = msg.content.map(block => {
+      if (block.type === 'thinking') return block;
+      // Strip image blocks (base64 or URL-based)
+      if ('source' in block || ('type' in block && (block as any).type === 'image')) {
+        hasMedia = true;
+        return { type: 'text' as const, text: '[image]' };
+      }
+      // Strip document blocks (PDFs, etc.)
+      if ('type' in block && (block as any).type === 'document') {
+        hasMedia = true;
+        return { type: 'text' as const, text: '[document]' };
+      }
+      // Strip images/documents nested inside tool_result content arrays
+      if (block.type === 'tool_result' && Array.isArray((block as any).content)) {
+        const tr = block as any;
+        let toolHasMedia = false;
+        const newToolContent = tr.content.map((item: any) => {
+          if (item.type === 'image') {
+            toolHasMedia = true;
+            return { type: 'text' as const, text: '[image]' };
+          }
+          if (item.type === 'document') {
+            toolHasMedia = true;
+            return { type: 'text' as const, text: '[document]' };
+          }
+          return item;
+        });
+        if (toolHasMedia) {
+          hasMedia = true;
+          return { ...tr, content: newToolContent };
+        }
+      }
+      return block;
+    });
+    return hasMedia ? { ...msg, content: newContent } : msg;
+  });
+}
 
 async function summarizeOldMessages(messages: Message[], provider: Provider): Promise<Message[]> {
   if (messages.length <= SUMMARIZE_MIN_MESSAGES) return messages;
@@ -228,33 +333,40 @@ async function summarizeOldMessages(messages: Message[], provider: Provider): Pr
   const oldMessages = messages.slice(0, -recentCount);
   const recentMessages = messages.slice(-recentCount);
 
-  const summaryText = oldMessages
-    .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : '[complex content]'}`)
-    .join('\n');
+  // Build structured conversation for the summarizer (keep original message format)
+  const strippedMessages = stripImagesFromMessages(oldMessages);
+  const conversationMessages: Message[] = [
+    ...strippedMessages,
+    { role: 'user' as const, content: COMPACT_PROMPT },
+  ];
 
   try {
     const summaryResponse = await provider.chat({
-      systemPrompt: ['Summarize the conversation concisely. Preserve key decisions, file paths, code changes, and action items.'],
-      messages: [{
-        role: 'user',
-        content: `Summarize this conversation:\n\n${summaryText}`,
-      }],
+      systemPrompt: [COMPACT_SYSTEM_PROMPT],
+      messages: conversationMessages,
     });
 
     const textBlock = summaryResponse.content.find(b => b.type === 'text');
-    const summary = textBlock ? (textBlock as { type: 'text'; text: string }).text : '[summary failed]';
+    const rawSummary = textBlock ? (textBlock as { type: 'text'; text: string }).text : '';
+    if (!rawSummary) return messages; // If summary failed, fall through
+
+    const formattedSummary = formatCompactSummary(rawSummary);
+
+    // Post-compact user message (same structure as CC's getCompactUserSummaryMessage)
+    const summaryUserMessage = `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+${formattedSummary}
+
+Recent messages are preserved verbatim.
+
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.`;
 
     return [
       {
         role: 'user' as const,
-        content: `[Conversation summary]\n${summary}`,
+        content: summaryUserMessage,
         compacted: true,
         createdAt: oldMessages[0]?.createdAt,
-      },
-      {
-        role: 'assistant' as const,
-        content: 'Understood. I have the context from the summary above.',
-        compacted: true,
       },
       ...recentMessages,
     ];

@@ -149,8 +149,13 @@ export class Agent {
       session.metadata.totalCacheReadTokens += response.usage.cacheReadTokens ?? 0;
       session.metadata.totalCacheWriteTokens += response.usage.cacheWriteTokens ?? 0;
 
-      // Track last known input tokens for compaction decisions
-      session.metadata.lastInputTokens = response.usage.inputTokens;
+      // Track last known TOTAL input tokens for compaction decisions.
+      // Total context = input_tokens + cache_read + cache_creation
+      // (same as CC's calculateContextPercentages).
+      session.metadata.lastInputTokens =
+        response.usage.inputTokens +
+        (response.usage.cacheReadTokens ?? 0) +
+        (response.usage.cacheWriteTokens ?? 0);
 
       // 5d. Add assistant message to session
       session.messages.push({
@@ -360,7 +365,9 @@ export class Agent {
     const contextWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     const threshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
 
-    // Prefer real usage from last API response
+    // Prefer real usage from last API response.
+    // Total context = input_tokens + cache_read + cache_creation
+    // (same as CC's calculateContextPercentages)
     const lastInput = session.metadata.lastInputTokens;
     if (lastInput !== undefined && lastInput > 0) {
       return lastInput > threshold;

@@ -197,31 +197,31 @@ describe('compact', () => {
       createdAt: i + 1,
     }));
 
+    // Fake provider returns a summary wrapped in <analysis>/<summary> tags (like CC)
     const result = await compact(
       messages,
       { ...FORCE_COMPACT, enabledLayers: ['summarize'] },
       new FakeProvider({
-        content: [{ type: 'text', text: 'short summary' }],
+        content: [{ type: 'text', text: '<analysis>thinking...</analysis>\n<summary>short summary</summary>' }],
         stopReason: 'end_turn',
         usage: { inputTokens: 1, outputTokens: 1 },
       }),
     );
 
     expect(result.layersApplied).toEqual(['summarize']);
+    // First message is the compacted summary (user role)
     expect(result.messages[0]).toEqual(
       expect.objectContaining({
         role: 'user',
         compacted: true,
       }),
     );
-    expect((result.messages[0].content as string)).toContain('short summary');
-    expect(result.messages[1]).toEqual(
-      expect.objectContaining({
-        role: 'assistant',
-        content: 'Understood. I have the context from the summary above.',
-        compacted: true,
-      }),
-    );
+    // Analysis block should be stripped, summary content kept
+    const summaryContent = result.messages[0].content as string;
+    expect(summaryContent).toContain('short summary');
+    expect(summaryContent).not.toContain('<analysis>');
+    expect(summaryContent).toContain('continued from a previous conversation');
+    // No fake assistant ack message — recent messages come right after
     // Recent messages preserved
     expect(result.messages.slice(-3).map(m => m.content)).toEqual([
       'message 10',

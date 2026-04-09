@@ -20,7 +20,10 @@ export function isRetryableError(error: any): boolean {
   return false;
 }
 
-/** Compute delay (ms) for exponential backoff, respecting retry-after header. */
+/**
+ * Compute delay (ms) for exponential backoff, respecting retry-after header.
+ * Adds 25% jitter to prevent thundering herd (same as CC).
+ */
 export function getRetryDelay(attempt: number, retryAfterHeader?: string | null): number {
   if (retryAfterHeader) {
     const seconds = parseInt(retryAfterHeader, 10);
@@ -28,7 +31,9 @@ export function getRetryDelay(attempt: number, retryAfterHeader?: string | null)
       return seconds * 1000;
     }
   }
-  return Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), MAX_BACKOFF_MS);
+  const baseDelay = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), MAX_BACKOFF_MS);
+  const jitter = Math.random() * 0.25 * baseDelay;
+  return baseDelay + jitter;
 }
 
 /**
