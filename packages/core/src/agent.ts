@@ -27,6 +27,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
   DEFAULT_MAX_TURNS,
+  MAX_PTL_RETRIES,
 } from './constants.js';
 
 export class Agent {
@@ -120,26 +121,61 @@ export class Agent {
         });
       }
 
-      // 5b. Call provider
+      // 5b. Call provider (with PTL recovery)
       emit({
         type: 'api_call',
         messages: session.messages.length,
         tools: allowedTools.length,
       });
 
-      const providerRequest: ProviderRequest = {
-        systemPrompt: fullSystemPrompt,
-        messages: session.messages,
-        tools: allowedTools.map(t => t.definition),
-        signal: options?.abortSignal,
-      };
+      let response: import('./types.js').ProviderResponse;
+      let ptlRetries = 0;
 
-      const response = await this.callProvider(providerRequest, options?.stream === true, emit);
+      while (true) {
+        const providerRequest: ProviderRequest = {
+          systemPrompt: fullSystemPrompt,
+          messages: session.messages,
+          tools: allowedTools.map(t => t.definition),
+          signal: options?.abortSignal,
+        };
+
+        try {
+          response = await this.callProvider(providerRequest, options?.stream === true, emit);
+          break; // Success
+        } catch (err) {
+          if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
+            ptlRetries++;
+            // Force compaction to shrink context, then retry
+            const ptlResult = await compact(
+              session.messages,
+              {
+                contextWindow: this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+                threshold: this.compactionConfig?.threshold,
+                enabledLayers: this.compactionConfig?.enabledLayers,
+              },
+              this.provider,
+            );
+            session.messages = ptlResult.messages;
+            session.metadata.compactionCount++;
+            compacted = true;
+
+            emit({
+              type: 'compaction',
+              layersApplied: ptlResult.layersApplied,
+              tokensFreed: ptlResult.tokensFreed,
+            });
+            // Retry with compacted messages
+            continue;
+          }
+          throw err; // Non-PTL error or retries exhausted
+        }
+      }
 
       emit({
         type: 'api_response',
         usage: response.usage,
         stopReason: response.stopReason,
+        model: this.providerConfig.model,
       });
 
       // 5c. Accumulate usage
@@ -150,12 +186,22 @@ export class Agent {
       session.metadata.totalCacheWriteTokens += response.usage.cacheWriteTokens ?? 0;
 
       // Track last known TOTAL input tokens for compaction decisions.
-      // Total context = input_tokens + cache_read + cache_creation
-      // (same as CC's calculateContextPercentages).
-      session.metadata.lastInputTokens =
-        response.usage.inputTokens +
-        (response.usage.cacheReadTokens ?? 0) +
-        (response.usage.cacheWriteTokens ?? 0);
+      //
+      // Anthropic: input_tokens = only uncached portion.
+      //   Total context = input_tokens + cache_read + cache_creation.
+      // OpenAI: prompt_tokens already includes cached tokens.
+      //   cached_tokens is a SUBSET, not additive.
+      //
+      // Provider type determines the correct formula.
+      if (this.provider.type === 'anthropic') {
+        session.metadata.lastInputTokens =
+          response.usage.inputTokens +
+          (response.usage.cacheReadTokens ?? 0) +
+          (response.usage.cacheWriteTokens ?? 0);
+      } else {
+        // OpenAI and compatible: inputTokens is already the total
+        session.metadata.lastInputTokens = response.usage.inputTokens;
+      }
 
       // 5d. Add assistant message to session
       session.messages.push({
@@ -468,4 +514,33 @@ function createInMemoryStore(): SessionStore {
     list: async () => [...sessions.keys()],
     delete: async (id) => { sessions.delete(id); },
   };
+}
+
+/**
+ * Detect "prompt too long" errors from various providers.
+ *
+ * Anthropic: status 400, error.type = 'invalid_request_error',
+ *   message contains 'prompt is too long' or 'too many tokens'
+ * OpenAI: status 400, code = 'context_length_exceeded'
+ */
+function isPromptTooLongError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as Record<string, any>;
+
+  // Anthropic SDK: BadRequestError with message about prompt length
+  const msg = (e.message ?? '').toLowerCase();
+  if (
+    msg.includes('prompt is too long') ||
+    msg.includes('too many tokens') ||
+    msg.includes('context_length_exceeded') ||
+    msg.includes('maximum context length')
+  ) {
+    return true;
+  }
+
+  // OpenAI SDK: error.code === 'context_length_exceeded'
+  if (e.code === 'context_length_exceeded') return true;
+  if (e.error?.code === 'context_length_exceeded') return true;
+
+  return false;
 }

@@ -60,3 +60,6 @@ export const SUMMARIZE_MIN_MESSAGES = 10;
 
 /** Fraction of recent messages preserved by summarize layer (Layer 5). */
 export const SUMMARIZE_RECENT_RATIO = 0.3;
+
+/** Max retries when API returns prompt-too-long (PTL) error. */
+export const MAX_PTL_RETRIES = 3;

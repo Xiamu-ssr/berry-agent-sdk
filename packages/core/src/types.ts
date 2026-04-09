@@ -229,7 +229,7 @@ export type AgentEvent =
   | { type: 'api_call'; messages: number; tools: number }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; thinking: string }
-  | { type: 'api_response'; usage: TokenUsage; stopReason: string }
+  | { type: 'api_response'; usage: TokenUsage; stopReason: string; model: string }
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; isError: boolean }
   | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number }

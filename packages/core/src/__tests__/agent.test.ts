@@ -293,6 +293,102 @@ describe('Agent', () => {
     expect(updated?.metadata.lastInputTokens).toBe(2000);
   });
 
+  it('recovers from prompt-too-long errors via forced compaction', async () => {
+    let callCount = 0;
+    const ptlProvider: Provider = {
+      type: 'anthropic' as const,
+      async chat(request: ProviderRequest): Promise<ProviderResponse> {
+        callCount++;
+        if (callCount === 1) {
+          // Simulate prompt-too-long error
+          const err = new Error('prompt is too long: 250000 tokens > 200000 maximum');
+          (err as any).status = 400;
+          throw err;
+        }
+        // After compaction, succeed
+        return {
+          content: [{ type: 'text', text: 'recovered after compaction' }],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 50, outputTokens: 10 },
+        };
+      },
+    };
+
+    // Build enough messages to give compaction something to work with
+    const longMessages = Array.from({ length: 20 }, (_, i) => ([
+      `User message ${i} with some content to make it longer. `.repeat(5),
+      `Assistant reply ${i} with detailed explanation. `.repeat(5),
+    ])).flat();
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: ptlProvider,
+      systemPrompt: 'base',
+      compaction: {
+        contextWindow: 200_000,
+        threshold: 100_000,
+      },
+    });
+
+    // First query to seed messages (we need to manually set up session)
+    // Use a fresh agent with a sequence that first succeeds to build session
+    const setupProvider = new SequenceProvider(
+      Array.from({ length: 10 }, () => ({
+        content: [{ type: 'text' as const, text: 'ok' }],
+        stopReason: 'end_turn' as const,
+        usage: { inputTokens: 100_000, outputTokens: 50 },
+      })),
+    );
+
+    const setupAgent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: setupProvider,
+      systemPrompt: 'base',
+    });
+
+    // Build up a session with many messages
+    let sessionId = '';
+    for (let i = 0; i < 10; i++) {
+      const r = await setupAgent.query(`Message ${i} ${'x'.repeat(500)}`, i === 0 ? undefined : { resume: sessionId });
+      sessionId = r.sessionId;
+    }
+
+    // Now use the PTL provider on a new agent that shares the session store
+    // ...actually, easier to just test that isPromptTooLongError works and the agent retries
+    const events: AgentEvent[] = [];
+    const retryAgent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: ptlProvider,
+      systemPrompt: 'base',
+      compaction: {
+        contextWindow: 1000,
+        threshold: 500,
+      },
+      onEvent: (e) => events.push(e),
+    });
+
+    const result = await retryAgent.query('trigger ptl');
+    // Should have recovered
+    expect(result.text).toBe('recovered after compaction');
+    expect(result.compacted).toBe(true);
+    // Should have emitted compaction event
+    expect(events.some(e => e.type === 'compaction')).toBe(true);
+    // Provider was called twice (first PTL error, then success)
+    expect(callCount).toBe(2);
+  });
+
   it('stops after maxTurns when the provider keeps asking for tools', async () => {
     const provider = new SequenceProvider([
       {
