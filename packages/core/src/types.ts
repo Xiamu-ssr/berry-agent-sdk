@@ -129,6 +129,8 @@ export interface SessionMetadata {
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
   compactionCount: number;
+  /** Last known input token count from the most recent API response (for compaction decisions). */
+  lastInputTokens?: number;
 }
 
 // ----- Agent Config -----

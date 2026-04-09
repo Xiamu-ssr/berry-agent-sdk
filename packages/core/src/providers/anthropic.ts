@@ -30,9 +30,8 @@ import type {
   ToolResultContent,
   ThinkingContent,
 } from '../types.js';
-
-const MAX_RETRIES = 10;
-const BASE_DELAY_MS = 500;
+import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
+import { withRetry } from '../utils/retry.js';
 
 export class AnthropicProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -45,12 +44,16 @@ export class AnthropicProvider implements Provider {
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
       maxRetries: 0, // We handle retries ourselves
-      timeout: 120_000,
+      timeout: REQUEST_TIMEOUT_MS,
     });
   }
 
   async chat(request: ProviderRequest): Promise<ProviderResponse> {
-    const response = await this.callWithRetry(this.buildParams(request), request.signal);
+    const params = this.buildParams(request);
+    const response = await withRetry(
+      () => this.client.messages.create(params as unknown as MessageCreateParamsNonStreaming, { signal: request.signal }),
+      request.signal,
+    );
 
     return {
       content: this.parseResponseContent(response.content),
@@ -60,7 +63,11 @@ export class AnthropicProvider implements Provider {
   }
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    const stream = await this.callStreamWithRetry(this.buildStreamParams(request), request.signal);
+    const params = this.buildStreamParams(request);
+    const stream = await withRetry(
+      () => this.client.messages.create(params as unknown as MessageCreateParamsStreaming, { signal: request.signal }),
+      request.signal,
+    ) as AsyncIterable<RawMessageStreamEvent>;
 
     const content: Array<ContentBlock | undefined> = [];
     const toolInputJson = new Map<number, string>();
@@ -157,9 +164,11 @@ export class AnthropicProvider implements Provider {
     const messages = this.buildMessages(request.messages);
     const tools = request.tools ? this.buildTools(request.tools) : undefined;
 
+    const maxTokens = this.config.maxTokens ?? DEFAULT_MAX_TOKENS;
+
     const params: Record<string, unknown> = {
       model: this.config.model,
-      max_tokens: this.config.maxTokens ?? 16_384,
+      max_tokens: maxTokens,
       system,
       messages,
       ...(tools && tools.length > 0 ? { tools } : {}),
@@ -170,10 +179,7 @@ export class AnthropicProvider implements Provider {
         type: 'enabled',
         budget_tokens: this.config.thinkingBudget,
       };
-      params.max_tokens = Math.max(
-        this.config.maxTokens ?? 16_384,
-        this.config.thinkingBudget + 1,
-      );
+      params.max_tokens = Math.max(maxTokens, this.config.thinkingBudget + 1);
     }
 
     return params;
@@ -190,7 +196,7 @@ export class AnthropicProvider implements Provider {
   // Split into blocks, each with cache_control: ephemeral.
   // This maximizes cache hits — stable prefix stays cached.
 
-  private buildSystemBlocks(systemPrompt: string[]): TextBlockParam[] {
+  buildSystemBlocks(systemPrompt: string[]): TextBlockParam[] {
     return systemPrompt.filter(Boolean).map(text => ({
       type: 'text' as const,
       text,
@@ -203,7 +209,7 @@ export class AnthropicProvider implements Provider {
   // Place cache_control on the last 2 user/assistant turn boundaries
   // (same strategy as CC source: `index > messages.length - 3`).
 
-  private buildMessages(messages: Message[]): MessageParam[] {
+  buildMessages(messages: Message[]): MessageParam[] {
     const result: MessageParam[] = [];
 
     for (let i = 0; i < messages.length; i++) {
@@ -302,7 +308,7 @@ export class AnthropicProvider implements Provider {
 
   // ===== Response Parsing =====
 
-  private parseResponseContent(content: Anthropic.ContentBlock[]): ContentBlock[] {
+  parseResponseContent(content: Anthropic.ContentBlock[]): ContentBlock[] {
     return content.map(block => {
       if (block.type === 'text') {
         return { type: 'text', text: block.text } as TextContent;
@@ -359,79 +365,5 @@ export class AnthropicProvider implements Provider {
       cacheWriteTokens: usage?.cache_creation_input_tokens ?? 0,
       cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
     };
-  }
-
-  // ===== Retry Logic =====
-  // Ported from CC source: exponential backoff with retry-after header support.
-
-  private async callWithRetry(
-    params: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<Anthropic.Message> {
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-      try {
-        return await this.client.messages.create(
-          params as unknown as MessageCreateParamsNonStreaming,
-          { signal },
-        );
-      } catch (error: any) {
-        lastError = error;
-
-        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
-          throw error;
-        }
-
-        const retryAfter = error.headers?.['retry-after'];
-        const delayMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
-
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-
-    throw lastError;
-  }
-
-  private async callStreamWithRetry(
-    params: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<AsyncIterable<RawMessageStreamEvent>> {
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-      try {
-        return await this.client.messages.create(
-          params as unknown as MessageCreateParamsStreaming,
-          { signal },
-        );
-      } catch (error: any) {
-        lastError = error;
-
-        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
-          throw error;
-        }
-
-        const retryAfter = error.headers?.['retry-after'];
-        const delayMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
-
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-
-    throw lastError;
-  }
-
-  private shouldRetry(error: any): boolean {
-    if (error?.status === 429) return true;
-    if (error?.status === 408) return true;
-    if (error?.status === 409) return true;
-    if (error?.status >= 500) return true;
-    if (error?.code === 'ECONNRESET' || error?.code === 'ETIMEDOUT') return true;
-    return false;
   }
 }

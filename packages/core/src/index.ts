@@ -15,6 +15,12 @@ export { compact, estimateTokens } from './compaction/compactor.js';
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
 
+// Retry utility (for custom providers)
+export { withRetry, isRetryableError, getRetryDelay } from './utils/retry.js';
+
+// Constants (for custom configs)
+export * from './constants.js';
+
 // Types
 export type {
   // Agent config

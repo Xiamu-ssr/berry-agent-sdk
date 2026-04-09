@@ -22,7 +22,12 @@ import type {
 } from './types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
-import { compact } from './compaction/compactor.js';
+import { compact, estimateTokens } from './compaction/compactor.js';
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_COMPACTION_RATIO,
+  DEFAULT_MAX_TURNS,
+} from './constants.js';
 
 export class Agent {
   private provider: Provider;
@@ -84,7 +89,7 @@ export class Agent {
 
     // 5. Agent loop (tool calling)
     let turns = 0;
-    const maxTurns = options?.maxTurns ?? 25;
+    const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
     let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let compacted = false;
     let toolCalls = 0;
@@ -93,11 +98,12 @@ export class Agent {
       turns++;
 
       // 5a. Check compaction BEFORE API call
+      // Prefer real usage from last API response; fall back to char-based estimate
       if (this.shouldCompact(session)) {
         const result = await compact(
           session.messages,
           {
-            contextWindow: this.compactionConfig?.contextWindow ?? 200_000,
+            contextWindow: this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
             threshold: this.compactionConfig?.threshold,
             enabledLayers: this.compactionConfig?.enabledLayers,
           },
@@ -142,6 +148,9 @@ export class Agent {
       session.metadata.totalOutputTokens += response.usage.outputTokens;
       session.metadata.totalCacheReadTokens += response.usage.cacheReadTokens ?? 0;
       session.metadata.totalCacheWriteTokens += response.usage.cacheWriteTokens ?? 0;
+
+      // Track last known input tokens for compaction decisions
+      session.metadata.lastInputTokens = response.usage.inputTokens;
 
       // 5d. Add assistant message to session
       session.messages.push({
@@ -339,9 +348,25 @@ export class Agent {
     return parts.length > 0 ? parts.join('\n\n') : null;
   }
 
+  /**
+   * Decide whether to compact before the next API call.
+   *
+   * Strategy (same as CC):
+   * - If we have real `inputTokens` from the last API response, use that.
+   *   It tells us exactly how big the context was on the previous call.
+   * - Otherwise (first turn, no prior call), fall back to char-based estimate.
+   */
   private shouldCompact(session: Session): boolean {
-    const contextWindow = this.compactionConfig?.contextWindow ?? 200_000;
-    const threshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * 0.85);
+    const contextWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    const threshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
+
+    // Prefer real usage from last API response
+    const lastInput = session.metadata.lastInputTokens;
+    if (lastInput !== undefined && lastInput > 0) {
+      return lastInput > threshold;
+    }
+
+    // Fallback: rough estimate
     const estimated = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
     return estimated > threshold;
   }
@@ -407,27 +432,9 @@ function extractText(message: Message): string {
   if (!message) return '';
   if (typeof message.content === 'string') return message.content;
   return message.content
-    .filter(b => b.type === 'text')
-    .map(b => (b as any).text)
+    .filter((b): b is import('./types.js').TextContent => b.type === 'text')
+    .map(b => b.text)
     .join('\n');
-}
-
-/** Rough token estimation: ~4 chars per token */
-function estimateTokens(messages: Message[]): number {
-  let total = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      total += Math.ceil(msg.content.length / 4);
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if ('text' in block) total += Math.ceil(String((block as any).text).length / 4);
-        if ('content' in block) total += Math.ceil(String((block as any).content).length / 4);
-        if ('thinking' in block) total += Math.ceil(String((block as any).thinking).length / 4);
-        if ('input' in block) total += Math.ceil(JSON.stringify((block as any).input).length / 4);
-      }
-    }
-  }
-  return total;
 }
 
 function estimateTokens_system(blocks: string[]): number {

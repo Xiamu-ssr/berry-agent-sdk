@@ -33,9 +33,8 @@ import type {
   ToolUseContent,
   ToolResultContent,
 } from '../types.js';
-
-const MAX_RETRIES = 10;
-const BASE_DELAY_MS = 500;
+import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
+import { withRetry } from '../utils/retry.js';
 
 export class OpenAIProvider implements Provider {
   readonly type = 'openai' as const;
@@ -48,17 +47,25 @@ export class OpenAIProvider implements Provider {
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
       maxRetries: 0,
-      timeout: 120_000,
+      timeout: REQUEST_TIMEOUT_MS,
     });
   }
 
   async chat(request: ProviderRequest): Promise<ProviderResponse> {
-    const response = await this.callWithRetry(this.buildParams(request), request.signal);
+    const params = this.buildParams(request);
+    const response = await withRetry(
+      () => this.client.chat.completions.create(params, { signal: request.signal }),
+      request.signal,
+    );
     return this.parseResponse(response);
   }
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    const stream = await this.callStreamWithRetry(this.buildStreamParams(request), request.signal);
+    const params = this.buildStreamParams(request);
+    const stream = await withRetry(
+      () => this.client.chat.completions.create(params, { signal: request.signal }),
+      request.signal,
+    ) as AsyncIterable<ChatCompletionChunk>;
 
     const textParts: string[] = [];
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
@@ -139,7 +146,7 @@ export class OpenAIProvider implements Provider {
     return {
       model: this.config.model,
       messages,
-      max_tokens: this.config.maxTokens ?? 16_384,
+      max_tokens: this.config.maxTokens ?? DEFAULT_MAX_TOKENS,
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
   }
@@ -151,7 +158,7 @@ export class OpenAIProvider implements Provider {
     return {
       model: this.config.model,
       messages,
-      max_tokens: this.config.maxTokens ?? 16_384,
+      max_tokens: this.config.maxTokens ?? DEFAULT_MAX_TOKENS,
       stream: true,
       stream_options: { include_usage: true },
       ...(tools && tools.length > 0 ? { tools } : {}),
@@ -160,7 +167,7 @@ export class OpenAIProvider implements Provider {
 
   // ===== Message Building =====
 
-  private buildMessages(
+  buildMessages(
     systemPrompt: string[],
     messages: Message[],
   ): ChatCompletionMessageParam[] {
@@ -265,7 +272,7 @@ export class OpenAIProvider implements Provider {
 
   // ===== Response Parsing =====
 
-  private parseResponse(response: OpenAI.ChatCompletion): ProviderResponse {
+  parseResponse(response: OpenAI.ChatCompletion): ProviderResponse {
     const choice = response.choices[0];
     if (!choice) {
       return {
@@ -324,71 +331,5 @@ export class OpenAIProvider implements Provider {
       cacheReadTokens: details?.cached_tokens ?? 0,
       cacheWriteTokens: 0,
     };
-  }
-
-  // ===== Retry Logic =====
-
-  private async callWithRetry(
-    params: OpenAI.ChatCompletionCreateParamsNonStreaming,
-    signal?: AbortSignal,
-  ): Promise<OpenAI.ChatCompletion> {
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-      try {
-        return await this.client.chat.completions.create(params, { signal });
-      } catch (error: any) {
-        lastError = error;
-
-        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
-          throw error;
-        }
-
-        const retryAfter = error.headers?.['retry-after'];
-        const delayMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
-
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-
-    throw lastError;
-  }
-
-  private async callStreamWithRetry(
-    params: OpenAI.ChatCompletionCreateParamsStreaming,
-    signal?: AbortSignal,
-  ): Promise<AsyncIterable<ChatCompletionChunk>> {
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-      try {
-        return await this.client.chat.completions.create(params, { signal });
-      } catch (error: any) {
-        lastError = error;
-
-        if (attempt > MAX_RETRIES || !this.shouldRetry(error)) {
-          throw error;
-        }
-
-        const retryAfter = error.headers?.['retry-after'];
-        const delayMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), 32_000);
-
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-
-    throw lastError;
-  }
-
-  private shouldRetry(error: any): boolean {
-    if (error?.status === 429) return true;
-    if (error?.status === 408) return true;
-    if (error?.status >= 500) return true;
-    if (error?.code === 'ECONNRESET' || error?.code === 'ETIMEDOUT') return true;
-    return false;
   }
 }

@@ -256,6 +256,43 @@ describe('Agent', () => {
     expect(perQueryEvents.at(-1)).toEqual(expect.objectContaining({ type: 'query_end' }));
   });
 
+  it('tracks lastInputTokens and uses it for compaction decisions', async () => {
+    // Provider returns high inputTokens to simulate approaching context limit
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'first reply' }],
+        stopReason: 'end_turn',
+        usage: { inputTokens: 1000, outputTokens: 50 },
+      },
+      {
+        content: [{ type: 'text', text: 'second reply' }],
+        stopReason: 'end_turn',
+        usage: { inputTokens: 2000, outputTokens: 50 },
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: provider,
+      systemPrompt: 'base',
+    });
+
+    const first = await agent.query('hello');
+    const session = await agent.getSession(first.sessionId);
+
+    // After first call, lastInputTokens should be tracked
+    expect(session?.metadata.lastInputTokens).toBe(1000);
+
+    // Second call on same session
+    await agent.query('follow up', { resume: first.sessionId });
+    const updated = await agent.getSession(first.sessionId);
+    expect(updated?.metadata.lastInputTokens).toBe(2000);
+  });
+
   it('stops after maxTurns when the provider keeps asking for tools', async () => {
     const provider = new SequenceProvider([
       {

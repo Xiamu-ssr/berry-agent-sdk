@@ -5,6 +5,19 @@
 // KEY: all changes happen at once to preserve cache prefixes.
 
 import type { Message, CompactionConfig, CompactionLayer, ContentBlock, Provider, ToolUseContent, ToolResultContent } from '../types.js';
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_COMPACTION_RATIO,
+  TOOL_RESULT_MAX_LINES,
+  TOOL_PAIRS_KEEP_RECENT,
+  TRIM_ASSISTANT_THRESHOLD,
+  TRIM_ASSISTANT_HEAD,
+  TRIM_ASSISTANT_TAIL,
+  TRUNCATE_OLDEST_MIN_KEEP,
+  TRUNCATE_OLDEST_KEEP_RATIO,
+  SUMMARIZE_MIN_MESSAGES,
+  SUMMARIZE_RECENT_RATIO,
+} from '../constants.js';
 
 export interface CompactionResult {
   messages: Message[];
@@ -32,8 +45,8 @@ export async function compact(
   config: CompactionConfig,
   provider: Provider,
 ): Promise<CompactionResult> {
-  const contextWindow = config.contextWindow ?? 200_000;
-  const threshold = config.threshold ?? Math.floor(contextWindow * 0.85);
+  const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const threshold = config.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
   const enabledLayers = config.enabledLayers ?? [...LAYER_ORDER];
   const layersApplied: CompactionLayer[] = [];
 
@@ -102,7 +115,8 @@ function clearThinkingBlocks(messages: Message[]): Message[] {
 // ===== Layer 2: Truncate Oversized Tool Results =====
 // Keep head + tail lines, replace middle.
 
-function truncateToolResults(messages: Message[], maxLines = 50): Message[] {
+function truncateToolResults(messages: Message[]): Message[] {
+  const maxLines = TOOL_RESULT_MAX_LINES;
   const headLines = Math.floor(maxLines / 2);
   const tailLines = maxLines - headLines;
 
@@ -131,7 +145,7 @@ function truncateToolResults(messages: Message[], maxLines = 50): Message[] {
 // ===== Layer 3: Clear Old Tool Pairs =====
 // Keep N most recent tool_use/tool_result pairs, summarize older ones.
 
-function clearOldToolPairs(messages: Message[], keepRecent = 5): Message[] {
+function clearOldToolPairs(messages: Message[]): Message[] {
   // Find messages with tool_use content
   const toolMsgIndices: number[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -143,9 +157,9 @@ function clearOldToolPairs(messages: Message[], keepRecent = 5): Message[] {
     }
   }
 
-  if (toolMsgIndices.length <= keepRecent) return messages;
+  if (toolMsgIndices.length <= TOOL_PAIRS_KEEP_RECENT) return messages;
 
-  const oldIndices = new Set(toolMsgIndices.slice(0, -keepRecent));
+  const oldIndices = new Set(toolMsgIndices.slice(0, -TOOL_PAIRS_KEEP_RECENT));
   const oldResultIndices = new Set<number>();
 
   // Find matching tool_result messages (usually the next message)
@@ -208,9 +222,9 @@ function mergeConsecutiveMessages(messages: Message[]): Message[] {
 // ===== Layer 5: Summarize Old Messages (LLM call) =====
 
 async function summarizeOldMessages(messages: Message[], provider: Provider): Promise<Message[]> {
-  if (messages.length <= 10) return messages;
+  if (messages.length <= SUMMARIZE_MIN_MESSAGES) return messages;
 
-  const recentCount = Math.min(10, Math.floor(messages.length * 0.3));
+  const recentCount = Math.min(SUMMARIZE_MIN_MESSAGES, Math.floor(messages.length * SUMMARIZE_RECENT_RATIO));
   const oldMessages = messages.slice(0, -recentCount);
   const recentMessages = messages.slice(-recentCount);
 
@@ -228,7 +242,7 @@ async function summarizeOldMessages(messages: Message[], provider: Provider): Pr
     });
 
     const textBlock = summaryResponse.content.find(b => b.type === 'text');
-    const summary = textBlock ? (textBlock as any).text : '[summary failed]';
+    const summary = textBlock ? (textBlock as { type: 'text'; text: string }).text : '[summary failed]';
 
     return [
       {
@@ -255,10 +269,10 @@ async function summarizeOldMessages(messages: Message[], provider: Provider): Pr
 function trimAssistantMessages(messages: Message[]): Message[] {
   return messages.map(msg => {
     if (msg.role !== 'assistant' || typeof msg.content !== 'string') return msg;
-    if (msg.content.length <= 3000) return msg;
+    if (msg.content.length <= TRIM_ASSISTANT_THRESHOLD) return msg;
     return {
       ...msg,
-      content: msg.content.slice(0, 1500) + '\n[...trimmed...]\n' + msg.content.slice(-1000),
+      content: msg.content.slice(0, TRIM_ASSISTANT_HEAD) + '\n[...trimmed...]\n' + msg.content.slice(-TRIM_ASSISTANT_TAIL),
       compacted: true,
     };
   });
@@ -267,7 +281,7 @@ function trimAssistantMessages(messages: Message[]): Message[] {
 // ===== Layer 7: Truncate Oldest Messages =====
 
 function truncateOldest(messages: Message[]): Message[] {
-  const keepCount = Math.max(6, Math.floor(messages.length * 0.3));
+  const keepCount = Math.max(TRUNCATE_OLDEST_MIN_KEEP, Math.floor(messages.length * TRUNCATE_OLDEST_KEEP_RATIO));
   if (messages.length <= keepCount) return messages;
   return [
     {
@@ -290,7 +304,11 @@ function hasThinkingBlock(msg: Message): boolean {
   return Array.isArray(msg.content) && msg.content.some(b => b.type === 'thinking');
 }
 
-/** Rough token estimate: ~4 chars per token */
+/**
+ * Rough token estimate: ~4 chars per token.
+ * Used as a fallback when real API usage data is not available.
+ * The Agent prefers real `usage.inputTokens` from the last API response.
+ */
 export function estimateTokens(messages: Message[]): number {
   let total = 0;
   for (const msg of messages) {
@@ -298,10 +316,18 @@ export function estimateTokens(messages: Message[]): number {
       total += Math.ceil(msg.content.length / 4);
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        if ('text' in block) total += Math.ceil(String((block as any).text).length / 4);
-        if ('content' in block) total += Math.ceil(String((block as any).content).length / 4);
-        if ('thinking' in block) total += Math.ceil(String((block as any).thinking).length / 4);
-        if ('input' in block) total += Math.ceil(JSON.stringify((block as any).input).length / 4);
+        if ('text' in block && typeof (block as any).text === 'string') {
+          total += Math.ceil((block as any).text.length / 4);
+        }
+        if ('content' in block && typeof (block as any).content === 'string') {
+          total += Math.ceil((block as any).content.length / 4);
+        }
+        if ('thinking' in block && typeof (block as any).thinking === 'string') {
+          total += Math.ceil((block as any).thinking.length / 4);
+        }
+        if ('input' in block) {
+          total += Math.ceil(JSON.stringify((block as any).input).length / 4);
+        }
       }
     }
   }
