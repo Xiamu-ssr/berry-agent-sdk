@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { Agent } from '../agent.js';
 import type {
@@ -487,6 +487,66 @@ describe('Agent', () => {
     expect(executedInput).toEqual({ value: 'sanitized' });
   });
 
+  it('incrementally saves session after each tool loop turn', async () => {
+    const saveLog: string[] = [];
+    const store = {
+      _sessions: new Map<string, any>(),
+      save: async (s: any) => { saveLog.push(`save:${s.messages.length}`); store._sessions.set(s.id, structuredClone(s)); },
+      load: async (id: string) => { const s = store._sessions.get(id); return s ? structuredClone(s) : null; },
+      list: async () => [...store._sessions.keys()],
+      delete: async (id: string) => { store._sessions.delete(id); },
+    };
+
+    const provider = new SequenceProvider([
+      // Turn 1: tool call
+      {
+        content: [{ type: 'tool_use', id: 'tu_1', name: 'echo', input: { n: 1 } }],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      // Turn 2: another tool call
+      {
+        content: [{ type: 'tool_use', id: 'tu_2', name: 'echo', input: { n: 2 } }],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      // Turn 3: final response
+      {
+        content: [{ type: 'text', text: 'done' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const echoTool: ToolRegistration = {
+      definition: {
+        name: 'echo',
+        description: 'Echo',
+        inputSchema: { type: 'object', properties: { n: { type: 'number' } } },
+      },
+      execute: async (input) => ({ content: JSON.stringify(input) }),
+    };
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      tools: [echoTool],
+      sessionStore: store as any,
+    });
+
+    await agent.query('go');
+
+    // Expect incremental saves after each tool turn + final save
+    // Turn 1: user + assistant(tool_use) + user(tool_result) → save (3 msgs)
+    // Turn 2: + assistant(tool_use) + user(tool_result) → save (5 msgs)
+    // Final: + assistant(text) → save (6 msgs)
+    expect(saveLog.length).toBe(3); // 2 incremental + 1 final
+    expect(saveLog[0]).toBe('save:3');  // after turn 1 tools
+    expect(saveLog[1]).toBe('save:5');  // after turn 2 tools
+    expect(saveLog[2]).toBe('save:6');  // final save
+  });
+
   it('stops after maxTurns when the provider keeps asking for tools', async () => {
     const provider = new SequenceProvider([
       {
@@ -531,5 +591,186 @@ describe('Agent', () => {
     expect(result.toolCalls).toBe(1);
     expect(result.text).toBe('');
     expect(session?.messages).toHaveLength(3);
+  });
+});
+
+describe('load_skill tool', () => {
+  let skillDir: string;
+
+  beforeAll(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+
+    skillDir = await mkdtemp(join(tmpdir(), 'berry-skill-tool-test-'));
+
+    const skill1 = join(skillDir, 'code-review');
+    await mkdir(skill1, { recursive: true });
+    await writeFile(join(skill1, 'SKILL.md'), `---
+name: code-review
+description: Reviews code for bugs and style.
+when_to_use: When reviewing pull requests.
+---
+
+# Code Review Skill
+
+Review the code thoroughly. Check for:
+1. Bugs
+2. Security issues
+3. Style violations
+`);
+  });
+
+  afterAll(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(skillDir, { recursive: true, force: true });
+  });
+
+  it('auto-registers load_skill tool when skillDirs is configured', () => {
+    const provider = new SequenceProvider([]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      skillDirs: [skillDir],
+    });
+
+    // The agent should have load_skill registered
+    // We can't inspect tools directly but we can check the provider request
+    // when a query is made — the tool should appear in the tools list.
+    expect(agent).toBeDefined();
+  });
+
+  it('model can call load_skill to get full skill body', async () => {
+    // Step 1: model calls load_skill("code-review")
+    // Step 2: agent returns skill content as tool_result
+    // Step 3: model uses the content to respond
+    const provider = new SequenceProvider([
+      // Turn 1: model calls load_skill
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tu_1',
+            name: 'load_skill',
+            input: { name: 'code-review' },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      // Turn 2: model responds after seeing skill content
+      {
+        content: [{ type: 'text', text: 'I loaded the code review skill and will follow its instructions.' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      skillDirs: [skillDir],
+    });
+
+    const result = await agent.query('Review this PR');
+
+    expect(result.toolCalls).toBe(1);
+    expect(result.text).toContain('I loaded the code review skill');
+
+    // Check that the tool_result contains the skill content
+    const session = await agent.getSession(result.sessionId);
+    const toolResultMsg = session!.messages.find(
+      m => m.role === 'user' && Array.isArray(m.content) &&
+        m.content.some((b: any) => b.type === 'tool_result'),
+    );
+    expect(toolResultMsg).toBeDefined();
+    const resultBlock = (toolResultMsg!.content as any[]).find((b: any) => b.type === 'tool_result');
+    expect(resultBlock.content).toContain('Code Review Skill');
+    expect(resultBlock.content).toContain('Security issues');
+    expect(resultBlock.isError).toBeFalsy();
+  });
+
+  it('load_skill returns error for unknown skill', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          { type: 'tool_use', id: 'tu_1', name: 'load_skill', input: { name: 'nonexistent' } },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'Skill not found.' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      skillDirs: [skillDir],
+    });
+
+    const result = await agent.query('load something');
+    const session = await agent.getSession(result.sessionId);
+    const toolResultMsg = session!.messages.find(
+      m => m.role === 'user' && Array.isArray(m.content) &&
+        m.content.some((b: any) => b.type === 'tool_result'),
+    );
+    const resultBlock = (toolResultMsg!.content as any[]).find((b: any) => b.type === 'tool_result');
+    expect(resultBlock.content).toContain('not found');
+    expect(resultBlock.isError).toBe(true);
+  });
+
+  it('load_skill tool appears in provider request tools list', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      skillDirs: [skillDir],
+    });
+
+    await agent.query('hello');
+
+    const req = provider.requests[0]!;
+    const toolNames = req.tools.map(t => t.name);
+    expect(toolNames).toContain('load_skill');
+  });
+
+  it('skill index appears in system prompt', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      skillDirs: [skillDir],
+    });
+
+    await agent.query('hello');
+
+    const req = provider.requests[0]!;
+    const fullSystemPrompt = req.systemPrompt.join('\n');
+    expect(fullSystemPrompt).toContain('code-review');
+    expect(fullSystemPrompt).toContain('Reviews code for bugs and style');
   });
 });

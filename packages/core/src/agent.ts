@@ -81,6 +81,35 @@ export class Agent {
 
     // Create provider
     this.provider = config.providerInstance ?? createProvider(config.provider);
+
+    // Register built-in load_skill tool when skills are configured.
+    // The model calls load_skill(name) via standard tool_use to get full skill body.
+    if (this.skillDirs.length > 0 && !this.tools.has('load_skill')) {
+      this.tools.set('load_skill', {
+        definition: {
+          name: 'load_skill',
+          description: 'Load the full content of a skill by name. Only use when a task matches a skill from the available skills index in the system prompt.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: 'The exact name of the skill to load (from the skills index).',
+              },
+            },
+            required: ['name'],
+          },
+        },
+        execute: async (input) => {
+          const skillName = input.name as string;
+          const skill = await this.getSkill(skillName);
+          if (!skill) {
+            return { content: `Skill "${skillName}" not found. Check the available skills in the system prompt.`, isError: true };
+          }
+          return { content: skill.content };
+        },
+      });
+    }
   }
 
   /**
@@ -361,6 +390,13 @@ export class Agent {
         content: toolResultBlocks,
         createdAt: Date.now(),
       });
+
+      // Incremental save after each tool loop turn.
+      // This ensures that if the process crashes mid-loop, we lose at most
+      // one turn of work (the next assistant response). The tool results
+      // and prior messages are already persisted.
+      session.lastAccessedAt = Date.now();
+      await this.sessionStore.save(session);
 
       // Loop continues → next API call with tool results
     }
