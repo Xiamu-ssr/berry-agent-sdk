@@ -233,9 +233,15 @@ Current layers:
 
 See:
 
+- `examples/README.md`
 - `examples/basic.ts`
 - `examples/smoke-anthropic.ts`
 - `examples/smoke-openai.ts`
+
+## Roadmap
+
+- `docs/roadmap-v0.1.md`
+- `docs/smoke-test-results.md`
 
 ## Development
 

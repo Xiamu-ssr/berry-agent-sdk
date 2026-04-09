@@ -1,3 +1,4 @@
+import './load-env.ts';
 import { Agent, FileSessionStore } from '@berry-agent/core';
 
 async function main() {

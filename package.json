@@ -7,6 +7,9 @@
   "scripts": {
     "build": "npm run build --workspace=packages/core",
     "dev": "npm run dev --workspace=packages/core",
-    "test": "npm run test --workspace=packages/core"
+    "test": "npm run test --workspace=packages/core",
+    "smoke:basic": "node examples/basic.ts",
+    "smoke:anthropic": "node examples/smoke-anthropic.ts",
+    "smoke:openai": "node examples/smoke-openai.ts"
   }
 }

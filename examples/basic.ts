@@ -3,6 +3,7 @@
 // ============================================================
 // Shows: create agent → stream events → tool loop → resume session
 
+import './load-env.ts';
 import { Agent } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
 
