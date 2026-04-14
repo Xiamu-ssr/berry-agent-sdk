@@ -724,6 +724,11 @@ export class Agent {
       this.onEvent?.(event);
       config?.onEvent?.(event);
     };
+
+    // Stable sessionId for entire delegate lifecycle (fixes FK + observe consistency)
+    const delegateSessionId = `delegate_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    // Emit query_start so observe collector creates the session row before any llm_calls
+    emit({ type: 'query_start', sessionId: delegateSessionId, prompt: message });
     emit({ type: 'delegate_start', message });
 
     // Build system prompt for the delegate
@@ -790,9 +795,9 @@ export class Agent {
         signal: config?.abortSignal,
       };
 
-      // Middleware: onBeforeApiCall
+      // Middleware: onBeforeApiCall (reuse stable delegateSessionId across all turns)
       const mwCtx: MiddlewareContext = {
-        sessionId: `delegate_${Date.now()}`,
+        sessionId: delegateSessionId,
         model: config?.model ?? this.providerConfig.model,
         provider: this.providerConfig.type,
         cwd: this.cwd,
@@ -921,6 +926,7 @@ export class Agent {
       toolGuard: config.toolGuard ?? this.toolGuard,
       middleware: this.middleware,
       onEvent: this.onEvent,
+      sessionStore: config.sessionStore ?? this.sessionStore,
       _isSubAgent: true,
     } as any);
 

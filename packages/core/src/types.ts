@@ -375,6 +375,8 @@ export interface SpawnConfig {
   maxTurns?: number;
   /** Override cwd */
   cwd?: string;
+  /** Override session store — if not set, inherits parent's */
+  sessionStore?: SessionStore;
 }
 
 // ----- Middleware -----

@@ -56,6 +56,8 @@ export function createMiddleware(config: CollectorConfig): Middleware {
   const storeFull = config.storeFullContent !== false;
   const pendingApiCalls = new Map<string, PendingApiCall>();
   const pendingToolCalls = new Map<string, PendingToolCall>();
+  // WeakMap to associate tool input objects with pending keys without mutating input
+  const toolInputKeyMap = new WeakMap<Record<string, unknown>, string>();
   let lastLlmCallId: string | undefined;
 
   return {
@@ -144,8 +146,8 @@ export function createMiddleware(config: CollectorConfig): Middleware {
     ): Record<string, unknown> {
       const key = `${context.sessionId}:${toolName}:${Date.now()}`;
       pendingToolCalls.set(key, { startTime: Date.now(), name: toolName });
-      // Stash the key for retrieval in onAfterToolExec
-      (input as any).__observeKey = key;
+      // Track key externally via WeakMap — never mutate input
+      toolInputKeyMap.set(input, key);
       return input;
     },
 
@@ -155,13 +157,13 @@ export function createMiddleware(config: CollectorConfig): Middleware {
       result: ToolResult,
       context: MiddlewareContext,
     ): void {
-      const key = (input as any).__observeKey as string | undefined;
+      const key = toolInputKeyMap.get(input);
+      toolInputKeyMap.delete(input);
       let durationMs = 0;
       if (key) {
         const pending = pendingToolCalls.get(key);
         pendingToolCalls.delete(key);
         durationMs = pending ? Date.now() - pending.startTime : 0;
-        delete (input as any).__observeKey;
       }
 
       const output = result.content.length > MAX_OUTPUT_LENGTH
