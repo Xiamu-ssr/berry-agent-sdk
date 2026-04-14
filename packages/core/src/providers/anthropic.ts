@@ -60,6 +60,9 @@ export class AnthropicProvider implements Provider {
       content: this.parseResponseContent(response.content),
       stopReason: this.mapStopReason(response.stop_reason),
       usage: this.extractUsage(response.usage),
+      rawUsage: response.usage as unknown as Record<string, unknown>,
+      rawRequest: params as Record<string, unknown>,
+      rawResponse: response as unknown as Record<string, unknown>,
     };
   }
 
@@ -154,6 +157,7 @@ export class AnthropicProvider implements Provider {
         content: finalContent.length > 0 ? finalContent : [{ type: 'text', text: '' }],
         stopReason,
         usage,
+        rawUsage: usage as unknown as Record<string, unknown>,
       },
     };
   }

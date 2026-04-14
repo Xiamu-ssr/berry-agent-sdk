@@ -6,6 +6,7 @@
 
 import type {
   AgentConfig,
+  AgentCreateConfig,
   QueryOptions,
   QueryResult,
   Message,
@@ -25,18 +26,22 @@ import type {
   SpawnConfig,
   Middleware,
   MiddlewareContext,
+  ToolDefinition,
 } from './types.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { compact, estimateTokens, type ForkContext } from './compaction/compactor.js';
 import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
 import type { Skill } from './skills/types.js';
+import { FileSessionStore } from './session/file-store.js';
+import type { ProviderRegistry } from './registry.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
   DEFAULT_MAX_TURNS,
   MAX_PTL_RETRIES,
 } from './constants.js';
+import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
 
 export class Agent {
   private provider: Provider;
@@ -84,10 +89,10 @@ export class Agent {
 
     // Register built-in load_skill tool when skills are configured.
     // The model calls load_skill(name) via standard tool_use to get full skill body.
-    if (this.skillDirs.length > 0 && !this.tools.has('load_skill')) {
-      this.tools.set('load_skill', {
+    if (this.skillDirs.length > 0 && !this.tools.has(TOOL_LOAD_SKILL)) {
+      this.tools.set(TOOL_LOAD_SKILL, {
         definition: {
-          name: 'load_skill',
+          name: TOOL_LOAD_SKILL,
           description: 'Load the full content of a skill by name. Only use when a task matches a skill from the available skills index in the system prompt.',
           inputSchema: {
             type: 'object',
@@ -110,6 +115,152 @@ export class Agent {
         },
       });
     }
+
+    // Register built-in delegate tool (unless disabled or this is a sub-agent).
+    // Allows the LLM to fork a sub-agent for complex sub-tasks.
+    if (!this._isSubAgent && config.enableDelegate !== false && !this.tools.has(TOOL_DELEGATE)) {
+      this.tools.set(TOOL_DELEGATE, {
+        definition: {
+          name: TOOL_DELEGATE,
+          description: 'Fork a temporary sub-agent to handle a complex sub-task. ' +
+            'The sub-agent inherits your context and tools, executes independently, and returns the result. ' +
+            'Use when a task is self-contained and can be done in isolation without further interaction.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              task: {
+                type: 'string',
+                description: 'Clear description of the sub-task to delegate.',
+              },
+              allowedTools: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional: restrict which tools the sub-agent can use (names). If omitted, inherits all.',
+              },
+            },
+            required: ['task'],
+          },
+        },
+        execute: async (input) => {
+          try {
+            const result = await this.delegate(input.task as string, {
+              allowedTools: input.allowedTools as string[] | undefined,
+            });
+            return {
+              content: result.text,
+              forUser: `[Delegated: ${(input.task as string).slice(0, 80)}... → ${result.turns} turns, ${result.toolCalls} tool calls]`,
+            };
+          } catch (err) {
+            return { content: `Delegate failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          }
+        },
+      });
+    }
+
+    // Register built-in spawn_agent tool (unless disabled or this is a sub-agent).
+    // Allows the LLM to create persistent sub-agents for ongoing work.
+    if (!this._isSubAgent && config.enableSpawn !== false && !this.tools.has(TOOL_SPAWN)) {
+      this.tools.set(TOOL_SPAWN, {
+        definition: {
+          name: TOOL_SPAWN,
+          description: 'Create a persistent sub-agent with its own system prompt and conversation history. ' +
+            'Unlike delegate (one-shot), a spawned agent persists and can be queried multiple times. ' +
+            'Use for long-running specialist roles (e.g., a code reviewer, a researcher).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Unique ID for this sub-agent (e.g., "reviewer", "researcher").',
+              },
+              systemPrompt: {
+                type: 'string',
+                description: 'System prompt defining the sub-agent\'s role and behavior.',
+              },
+              task: {
+                type: 'string',
+                description: 'Initial task/message to send to the sub-agent.',
+              },
+              inheritTools: {
+                type: 'boolean',
+                description: 'Whether to inherit parent tools (default: true).',
+              },
+            },
+            required: ['id', 'systemPrompt', 'task'],
+          },
+        },
+        execute: async (input) => {
+          try {
+            const childId = input.id as string;
+            // Check if already exists
+            let child = this._children.get(childId);
+            if (!child) {
+              child = this.spawn({
+                id: childId,
+                systemPrompt: input.systemPrompt as string,
+                inheritTools: input.inheritTools !== false,
+              });
+            }
+            const result = await child.query(input.task as string);
+            return {
+              content: result.text,
+              forUser: `[Sub-agent "${childId}": ${result.toolCalls} tool calls, ${result.usage.inputTokens + result.usage.outputTokens} tokens]`,
+            };
+          } catch (err) {
+            return { content: `Spawn failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          }
+        },
+      });
+    }
+  }
+
+  // ===== Static Factory =====
+
+  /**
+   * Simplified agent creation. Sensible defaults:
+   * - FileSessionStore at `{cwd}/.berry-sessions/`
+   * - Default compaction config
+   * - No tools (add via `agent.addTool()` or pass `tools`)
+   *
+   * For full control, use `new Agent(config)` directly.
+   */
+  static create(config: AgentCreateConfig): Agent {
+    const cwd = config.cwd ?? process.cwd();
+
+    // Resolve provider config
+    let providerConfig: ProviderConfig;
+    if (config.registry) {
+      providerConfig = config.registry.toProviderConfig(config.model);
+    } else if (config.provider) {
+      providerConfig = config.provider;
+    } else {
+      // Minimal shorthand: type + apiKey + model
+      providerConfig = {
+        type: config.providerType ?? 'anthropic',
+        apiKey: config.apiKey!,
+        baseUrl: config.baseUrl,
+        model: config.model!,
+        maxTokens: config.maxTokens,
+        thinkingBudget: config.thinkingBudget,
+      };
+    }
+
+    // Session store: file-based by default
+    const sessionsDir = config.sessionsDir ?? `${cwd}/.berry-sessions`;
+    const sessionStore = config.sessionStore ?? new FileSessionStore(sessionsDir);
+
+    return new Agent({
+      provider: providerConfig,
+      systemPrompt: config.systemPrompt ?? 'You are a helpful AI assistant.',
+      tools: config.tools,
+      skillDirs: config.skillDirs,
+      cwd,
+      sessionStore,
+      compaction: config.compaction,
+      toolGuard: config.toolGuard,
+      middleware: config.middleware,
+      onEvent: config.onEvent,
+    });
   }
 
   /**
@@ -149,22 +300,27 @@ export class Agent {
       // 5a. Check compaction BEFORE API call
       // Prefer real usage from last API response; fall back to char-based estimate
       if (this.shouldCompact(session)) {
-        // Build fork context for cache-sharing: use the same system prompt + tools
-        // so the provider's prompt cache prefix is reused during summarization.
+        const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+        const contextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
+        const thresholdPct = contextBefore / ctxWindow;
+        // Build fork context for cache-sharing
         const forkCtx: ForkContext = {
           systemPrompt: fullSystemPrompt,
           tools: allowedTools.map(t => t.definition),
         };
+        const compactStart = Date.now();
         const result = await compact(
           session.messages,
           {
-            contextWindow: this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+            contextWindow: ctxWindow,
             threshold: this.compactionConfig?.threshold,
             enabledLayers: this.compactionConfig?.enabledLayers,
           },
           this.provider,
           forkCtx,
         );
+        const compactDuration = Date.now() - compactStart;
+        const contextAfter = estimateTokens(result.messages);
         session.messages = result.messages;
         session.metadata.compactionCount++;
         compacted = true;
@@ -173,6 +329,12 @@ export class Agent {
           type: 'compaction',
           layersApplied: result.layersApplied,
           tokensFreed: result.tokensFreed,
+          triggerReason: 'threshold',
+          contextBefore,
+          contextAfter,
+          thresholdPct,
+          contextWindow: ctxWindow,
+          durationMs: compactDuration,
         });
       }
 
@@ -217,21 +379,27 @@ export class Agent {
         } catch (err) {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
+            const ptlCtxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+            const ptlContextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
+            const ptlThresholdPct = ptlContextBefore / ptlCtxWindow;
             // Force compaction to shrink context, then retry
             const ptlForkCtx: ForkContext = {
               systemPrompt: fullSystemPrompt,
               tools: allowedTools.map(t => t.definition),
             };
+            const ptlStart = Date.now();
             const ptlResult = await compact(
               session.messages,
               {
-                contextWindow: this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+                contextWindow: ptlCtxWindow,
                 threshold: this.compactionConfig?.threshold,
                 enabledLayers: this.compactionConfig?.enabledLayers,
               },
               this.provider,
               ptlForkCtx,
             );
+            const ptlDuration = Date.now() - ptlStart;
+            const ptlContextAfter = estimateTokens(ptlResult.messages);
             session.messages = ptlResult.messages;
             session.metadata.compactionCount++;
             compacted = true;
@@ -240,6 +408,12 @@ export class Agent {
               type: 'compaction',
               layersApplied: ptlResult.layersApplied,
               tokensFreed: ptlResult.tokensFreed,
+              triggerReason: 'overflow_retry',
+              contextBefore: ptlContextBefore,
+              contextAfter: ptlContextAfter,
+              thresholdPct: ptlThresholdPct,
+              contextWindow: ptlCtxWindow,
+              durationMs: ptlDuration,
             });
             // Retry with compacted messages
             continue;
@@ -299,90 +473,106 @@ export class Agent {
 
       // Collect all tool results into a single user message
       // (Anthropic expects tool_result blocks in the same user message)
-      const toolResultBlocks: ContentBlock[] = [];
+      // Execute all tool calls in PARALLEL (independent tools have no deps)
 
+      // Emit all tool_call events first
       for (const toolUse of toolUses) {
         toolCalls++;
         emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
+      }
 
-        const tool = this.tools.get(toolUse.name);
-        if (!tool) {
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: `Error: unknown tool "${toolUse.name}"`,
-            isError: true,
-          });
-          emit({ type: 'tool_result', name: toolUse.name, isError: true });
-          continue;
-        }
+      const mwCtx = this.getMiddlewareContext(session);
 
-        // Tool guard check
-        let guardedInput = toolUse.input;
-        if (this.toolGuard) {
-          const decision = await this.toolGuard({
-            toolName: toolUse.name,
-            input: toolUse.input,
-            session: {
-              id: session.id,
-              cwd: session.metadata.cwd,
-              model: session.metadata.model,
-            },
-            callIndex: toolCalls,
-          });
-          if (decision.action === 'deny') {
-            toolResultBlocks.push({
+      const toolResultBlocks: ContentBlock[] = await Promise.all(
+        toolUses.map(async (toolUse): Promise<ContentBlock> => {
+          const tool = this.tools.get(toolUse.name);
+          if (!tool) {
+            emit({ type: 'tool_result', name: toolUse.name, isError: true });
+            return {
               type: 'tool_result',
               toolUseId: toolUse.id,
-              content: `Permission denied: ${decision.reason}`,
+              content: `Error: unknown tool "${toolUse.name}"`,
               isError: true,
+            };
+          }
+
+          // Tool guard check
+          let guardedInput = toolUse.input;
+          if (this.toolGuard) {
+            const guardStart = Date.now();
+            const decision = await this.toolGuard({
+              toolName: toolUse.name,
+              input: toolUse.input,
+              session: {
+                id: session.id,
+                cwd: session.metadata.cwd,
+                model: session.metadata.model,
+              },
+              callIndex: toolCalls,
             });
+            const guardDuration = Date.now() - guardStart;
+
+            emit({
+              type: 'guard_decision',
+              toolName: toolUse.name,
+              input: toolUse.input,
+              decision,
+              callIndex: toolCalls,
+              durationMs: guardDuration,
+            });
+
+            if (decision.action === 'deny') {
+              emit({ type: 'tool_result', name: toolUse.name, isError: true });
+              return {
+                type: 'tool_result',
+                toolUseId: toolUse.id,
+                content: `Permission denied: ${decision.reason}`,
+                isError: true,
+              };
+            }
+            if (decision.action === 'modify') {
+              guardedInput = decision.input;
+            }
+          }
+
+          try {
+            // Middleware: onBeforeToolExec
+            for (const mw of this.middleware) {
+              if (mw.onBeforeToolExec) {
+                guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
+              }
+            }
+
+            const result = await tool.execute(guardedInput, {
+              cwd: this.cwd,
+              abortSignal: options?.abortSignal,
+            });
+
+            // Middleware: onAfterToolExec
+            for (const mw of this.middleware) {
+              if (mw.onAfterToolExec) {
+                await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
+              }
+            }
+
+            emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
+            return {
+              type: 'tool_result',
+              toolUseId: toolUse.id,
+              content: result.forLLM ?? result.content,
+              isError: result.isError,
+            };
+          } catch (err) {
             emit({ type: 'tool_result', name: toolUse.name, isError: true });
-            continue;
+            return {
+              type: 'tool_result',
+              toolUseId: toolUse.id,
+              content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+              isError: true,
+            };
           }
-          if (decision.action === 'modify') {
-            guardedInput = decision.input;
-          }
-        }
-
-        try {
-          // Middleware: onBeforeToolExec
-          const mwCtx = this.getMiddlewareContext(session);
-          for (const mw of this.middleware) {
-            if (mw.onBeforeToolExec) {
-              guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
-            }
-          }
-
-          const result = await tool.execute(guardedInput, {
-            cwd: this.cwd,
-            abortSignal: options?.abortSignal,
-          });
-
-          // Middleware: onAfterToolExec
-          for (const mw of this.middleware) {
-            if (mw.onAfterToolExec) {
-              await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
-            }
-          }
-
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: result.forLLM ?? result.content,
-            isError: result.isError,
-          });
-          emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
-        } catch (err) {
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-            isError: true,
-          });
-          emit({ type: 'tool_result', name: toolUse.name, isError: true });
-        }
-      }
+        }),
+      );
 
       // Add all tool results as one user message
       session.messages.push({
@@ -442,6 +632,75 @@ export class Agent {
   /** Register an additional tool at runtime */
   addTool(tool: ToolRegistration): void {
     this.tools.set(tool.definition.name, tool);
+  }
+
+  /**
+   * Switch provider and/or model at runtime. Sessions are preserved.
+   * Accepts a full ProviderConfig or a partial override (model-only switch).
+   */
+  switchProvider(config: ProviderConfig | { model: string }): void {
+    if ('type' in config) {
+      // Full provider switch
+      this.providerConfig = config;
+      this.provider = createProvider(config);
+    } else {
+      // Model-only switch (same provider type/key/baseUrl)
+      this.providerConfig = { ...this.providerConfig, model: config.model };
+      this.provider = createProvider(this.providerConfig);
+    }
+  }
+
+  /** Get current provider config (read-only) */
+  get currentProvider(): Readonly<ProviderConfig> {
+    return { ...this.providerConfig };
+  }
+
+  // ===== Introspection =====
+
+  /** Get current system prompt blocks */
+  getSystemPrompt(): readonly string[] {
+    return [...this.systemPrompt];
+  }
+
+  /** Get all registered tool definitions */
+  getTools(): ToolDefinition[] {
+    return [...this.tools.values()].map(t => t.definition);
+  }
+
+  /** Get loaded skill metadata (empty if skills not yet loaded) */
+  getSkillMetas(): Array<{ name: string; description: string; dir: string }> {
+    if (!this.loadedSkills) return [];
+    return this.loadedSkills.map(s => ({
+      name: s.meta.name,
+      description: s.meta.description,
+      dir: s.dir,
+    }));
+  }
+
+  /** Get current working directory */
+  getCwd(): string {
+    return this.cwd;
+  }
+
+  /** Full introspection snapshot */
+  inspect(): {
+    provider: Readonly<ProviderConfig>;
+    systemPrompt: string[];
+    tools: ToolDefinition[];
+    skills: Array<{ name: string; description: string; dir: string }>;
+    cwd: string;
+    middleware: number;
+    hasToolGuard: boolean;
+  } {
+    return {
+      provider: this.currentProvider,
+      systemPrompt: [...this.systemPrompt],
+      tools: this.getTools(),
+      skills: this.getSkillMetas(),
+      cwd: this.cwd,
+      middleware: this.middleware.length,
+      hasToolGuard: !!this.toolGuard,
+    };
   }
 
   /** Remove a tool at runtime */
@@ -535,6 +794,7 @@ export class Agent {
       const mwCtx: MiddlewareContext = {
         sessionId: `delegate_${Date.now()}`,
         model: config?.model ?? this.providerConfig.model,
+        provider: this.providerConfig.type,
         cwd: this.cwd,
       };
       for (const mw of this.middleware) {
@@ -692,6 +952,7 @@ export class Agent {
     return {
       sessionId: session.id,
       model: session.metadata.model,
+      provider: this.providerConfig.type,
       cwd: session.metadata.cwd,
     };
   }

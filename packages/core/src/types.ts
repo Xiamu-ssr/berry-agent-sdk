@@ -111,6 +111,11 @@ export interface ProviderResponse {
   content: ContentBlock[];
   stopReason: 'end_turn' | 'tool_use' | 'max_tokens';
   usage: TokenUsage;
+  rawUsage?: Record<string, unknown>;
+  /** Provider-side wire format request (for observe/debugging) */
+  rawRequest?: Record<string, unknown>;
+  /** Provider-side wire format response (for observe/debugging) */
+  rawResponse?: Record<string, unknown>;
 }
 
 export interface TokenUsage {
@@ -179,6 +184,63 @@ export interface AgentConfig {
    * - Directory scoping
    */
   toolGuard?: ToolGuard;
+  /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
+  enableDelegate?: boolean;
+  /** Enable built-in spawn_agent tool (default: true for top-level agents, always false for sub-agents) */
+  enableSpawn?: boolean;
+}
+
+// ----- Agent.create() Config -----
+
+import type { ProviderRegistry } from './registry.js';
+
+/**
+ * Simplified config for `Agent.create()`. Three ways to specify provider:
+ *
+ * 1. **Registry** (recommended for multi-provider): `{ registry, model }`
+ * 2. **Full config**: `{ provider: { type, apiKey, model, ... } }`
+ * 3. **Shorthand**: `{ providerType, apiKey, model }`
+ */
+export interface AgentCreateConfig {
+  // --- Provider (pick one approach) ---
+  /** Use a ProviderRegistry for multi-provider support. */
+  registry?: ProviderRegistry;
+  /** Full provider config (alternative to registry/shorthand). */
+  provider?: ProviderConfig;
+  /** Shorthand: provider type (default: 'anthropic'). */
+  providerType?: ProviderType;
+  /** Shorthand: API key. */
+  apiKey?: string;
+  /** Shorthand: base URL. */
+  baseUrl?: string;
+  /** Model name (used with registry or shorthand). */
+  model?: string;
+  /** Max tokens override. */
+  maxTokens?: number;
+  /** Thinking budget (Anthropic). */
+  thinkingBudget?: number;
+
+  // --- Agent config ---
+  /** System prompt (default: generic helpful assistant). */
+  systemPrompt?: string | string[];
+  /** Tools to register. */
+  tools?: ToolRegistration[];
+  /** Skill directories. */
+  skillDirs?: string[];
+  /** Working directory (default: process.cwd()). */
+  cwd?: string;
+  /** Session store (default: FileSessionStore at `{cwd}/.berry-sessions/`). */
+  sessionStore?: SessionStore;
+  /** Custom sessions directory (ignored if sessionStore is set). */
+  sessionsDir?: string;
+  /** Compaction config (defaults applied automatically). */
+  compaction?: CompactionConfig;
+  /** Tool guard. */
+  toolGuard?: ToolGuard;
+  /** Middleware pipeline. */
+  middleware?: Middleware[];
+  /** Event handler. */
+  onEvent?: (event: AgentEvent) => void;
 }
 
 // ----- Tool Guard -----
@@ -320,6 +382,7 @@ export interface SpawnConfig {
 export interface MiddlewareContext {
   sessionId: string;
   model: string;
+  provider: string;
   cwd: string;
 }
 
@@ -386,6 +449,26 @@ export type ProviderStreamEvent =
 
 // ----- Events -----
 
+/**
+ * All possible agent event types. Single source of truth.
+ * Observe collector, analyzer, and any event consumer should reference these.
+ */
+export const AGENT_EVENT_TYPES = [
+  'query_start', 'api_call', 'text_delta', 'thinking_delta', 'api_response',
+  'tool_call', 'tool_result', 'guard_decision', 'compaction',
+  'query_end', 'delegate_start', 'delegate_end',
+  'child_spawned', 'child_destroyed',
+] as const;
+
+export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+/**
+ * Guard decision event kinds stored in observe DB.
+ * Single source of truth for observe collector/analyzer.
+ */
+export const GUARD_EVENT_KINDS = ['guard_allow', 'guard_deny', 'guard_modify'] as const;
+export type GuardEventKind = (typeof GUARD_EVENT_KINDS)[number];
+
 export type AgentEvent =
   | { type: 'query_start'; prompt: string; sessionId: string }
   | { type: 'api_call'; messages: number; tools: number }
@@ -394,7 +477,12 @@ export type AgentEvent =
   | { type: 'api_response'; usage: TokenUsage; stopReason: string; model: string }
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; isError: boolean }
-  | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number }
+  | { type: 'guard_decision'; toolName: string; input: Record<string, unknown>; decision: ToolGuardDecision; callIndex: number; durationMs: number }
+  | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number;
+      triggerReason: 'threshold' | 'overflow_retry';
+      contextBefore: number; contextAfter: number;
+      thresholdPct: number; contextWindow: number;
+      durationMs: number }
   | { type: 'query_end'; result: QueryResult }
   | { type: 'delegate_start'; message: string }
   | { type: 'delegate_end'; result: DelegateResult }

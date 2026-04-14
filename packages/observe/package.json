@@ -1,0 +1,46 @@
+{
+  "name": "@berry-agent/observe",
+  "version": "0.1.0-alpha.0",
+  "description": "Observability & cost tracking for Berry Agent SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.6",
+    "better-sqlite3": "^11.0.0",
+    "drizzle-orm": "^0.44.0",
+    "express": "^5.2.1",
+    "nanoid": "^5.1.0"
+  },
+  "devDependencies": {
+    "@berry-agent/core": "*",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^25.5.2",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "@berry-agent/core": ">=0.1.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "MIT"
+}

@@ -213,6 +213,11 @@ describe('OpenAIProvider adapters', () => {
         cacheReadTokens: 8,
         cacheWriteTokens: 0,
       },
+      rawUsage: {
+        prompt_tokens: 12,
+        completion_tokens: 7,
+        prompt_tokens_details: { cached_tokens: 8 },
+      },
     });
   });
 });

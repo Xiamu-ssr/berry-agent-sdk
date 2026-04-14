@@ -113,6 +113,12 @@ describe('provider streaming', () => {
             cacheWriteTokens: 2,
             cacheReadTokens: 9,
           },
+          rawUsage: {
+            inputTokens: 11,
+            outputTokens: 7,
+            cacheWriteTokens: 2,
+            cacheReadTokens: 9,
+          },
         },
       },
     ]);
@@ -206,6 +212,12 @@ describe('provider streaming', () => {
           ],
           stopReason: 'tool_use',
           usage: {
+            inputTokens: 20,
+            outputTokens: 9,
+            cacheReadTokens: 4,
+            cacheWriteTokens: 0,
+          },
+          rawUsage: {
             inputTokens: 20,
             outputTokens: 9,
             cacheReadTokens: 4,

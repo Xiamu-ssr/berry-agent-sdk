@@ -58,7 +58,10 @@ export class OpenAIProvider implements Provider {
       () => this.client.chat.completions.create(params, { signal: request.signal }),
       request.signal,
     );
-    return this.parseResponse(response);
+    const result = this.parseResponse(response);
+    result.rawRequest = params as unknown as Record<string, unknown>;
+    result.rawResponse = response as unknown as Record<string, unknown>;
+    return result;
   }
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
@@ -134,6 +137,7 @@ export class OpenAIProvider implements Provider {
         content: content.length > 0 ? content : [{ type: 'text', text: '' }],
         stopReason,
         usage,
+        rawUsage: usage as unknown as Record<string, unknown>,
       },
     };
   }
@@ -350,6 +354,8 @@ export class OpenAIProvider implements Provider {
       content: content.length > 0 ? content : [{ type: 'text', text: '' }],
       stopReason: this.mapStopReason(choice.finish_reason),
       usage: this.extractUsage(response.usage),
+      rawUsage: response.usage as unknown as Record<string, unknown>,
+      // rawRequest/rawResponse set by chat() caller
     };
   }
 

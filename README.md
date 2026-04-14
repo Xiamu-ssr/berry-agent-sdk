@@ -1,272 +1,149 @@
 # Berry Agent SDK 🍓
 
-A pure-library Agent SDK for TypeScript with:
+TypeScript Agent Harness SDK — the infrastructure layer for building autonomous AI agents.
 
-- **agent loop**
-- **session resume / fork**
-- **batch compaction**
-- **cache-aware provider adapters**
-- **tool calling**
-- **streaming + events**
-- **Anthropic + OpenAI-compatible providers**
-
-Berry is aimed at the gap between thin model SDKs and black-box agent CLIs.
-
-## Why
-
-Most agent SDKs give you one or two of these:
-
-- tool calling
-- session state
-- multi-model support
-- compaction
-- cache optimization
-
-Berry tries to make those core pieces work **together** in one small library.
-
-## Current status
-
-This repo is currently **alpha**.
-
-What exists today:
-
-- Anthropic provider
-  - system prompt block splitting
-  - `cache_control` breakpoints
-  - extended thinking support
-  - streaming
-- OpenAI-compatible provider
-  - OpenAI / DeepSeek / Qwen / Groq / Together / Ollama style endpoints
-  - automatic cache-friendly prefix handling
-  - streaming
-- Agent loop
-  - tool execution loop
-  - `resume` / `fork`
-  - per-query tool restriction
-- Compaction
-  - 7-layer batch compaction pipeline
-- Session store
-  - in-memory store
-  - file-backed JSON store
-- Events
-  - query lifecycle
-  - streaming deltas
-  - tool execution events
-- Tests
-  - agent loop
-  - compaction
-  - session store
-  - provider adapters
+```
+@berry-agent/core          Agent loop, providers, compaction, skills, delegate/spawn
+@berry-agent/tools-common  10 pre-built tools (file, shell, search, web, browser)
+@berry-agent/observe       Full-stack observability (SQLite + analyzers + REST + dashboard UI)
+@berry-agent/safe          Guards, LLM classifier, PI probe, audit
+@berry-agent/mcp           MCP client → Berry tool adapter
+```
 
 ## Install
 
 ```bash
-npm install @berry-agent/core
+npm install @berry-agent/core @berry-agent/tools-common
+# Optional:
+npm install @berry-agent/observe @berry-agent/safe @berry-agent/mcp
 ```
 
-## Quick start
+## Quick Start
 
 ```ts
-import { Agent } from '@berry-agent/core'
+import { Agent } from '@berry-agent/core';
+import { createAllTools } from '@berry-agent/tools-common';
+
+const agent = Agent.create({
+  providerType: 'anthropic',
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+  model: 'claude-sonnet-4-20250514',
+  systemPrompt: 'You are a helpful coding assistant.',
+  tools: createAllTools('./workspace'),
+});
+
+const result = await agent.query('Read src/index.ts and explain it');
+console.log(result.text);
+```
+
+## Core Features
+
+### Agent Loop
+- Tool calling with **parallel execution** (Promise.all)
+- Session resume / fork with FileSessionStore
+- 7-layer batch compaction (context window management)
+- Streaming + 14 event types
+- Structured output (JSON schema)
+
+### Built-in Agent Tools
+- **delegate** — LLM self-decides to fork a one-shot sub-agent for complex sub-tasks
+- **spawn_agent** — LLM creates persistent sub-agents (e.g., a dedicated reviewer)
+- **load_skill** — On-demand skill loading from SKILL.md directories
+
+### Multi-Provider
+```ts
+import { ProviderRegistry, Agent } from '@berry-agent/core';
+
+const registry = new ProviderRegistry();
+registry.register('anthropic', {
+  type: 'anthropic', apiKey: '...', models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'],
+});
+registry.register('openai', {
+  type: 'openai', apiKey: '...', models: ['gpt-4o', 'gpt-4o-mini'],
+});
+registry.setDefault('claude-sonnet-4-20250514');
+
+const agent = Agent.create({ registry, systemPrompt: '...' });
+agent.switchProvider(registry.toProviderConfig('gpt-4o')); // runtime switch
+```
+
+### 10 Pre-built Tools (@berry-agent/tools-common)
+| Tool | Description |
+|------|-------------|
+| read_file / write_file / list_files | File ops scoped to base dir |
+| edit_file | Exact text replacement |
+| shell | Command execution with blocked commands |
+| grep / find_files | Code search |
+| web_fetch | HTTP → markdown (free, no API key) |
+| web_search | Tavily / Brave / SerpAPI (adapter pattern) |
+| browser | Playwright: navigate, snapshot, screenshot, click, type, evaluate |
+
+### Observability (@berry-agent/observe)
+```ts
+import { createObserver, startObserveServer } from '@berry-agent/observe';
+
+const observer = createObserver({ dbPath: './observe.db' });
+
+// Use as middleware in your agent:
+const agent = new Agent({
+  // ...
+  middleware: [observer.middleware],
+  onEvent: observer.onEvent,
+});
+
+// Option A: Embed in your Express app
+app.use('/api/observe', createObserveRouter(observer));
+
+// Option B: Standalone server with built-in dashboard
+startObserveServer(observer, { port: 4200 });
+```
+
+9 analyzers: cost breakdown, cost by model, cost trend, cache efficiency, tool stats, guard stats, inference detail, session summary, agent stats.
+
+### Safety (@berry-agent/safe)
+```ts
+import { compositeGuard, directoryScope, denyList } from '@berry-agent/safe';
 
 const agent = new Agent({
-  provider: {
-    type: 'anthropic',
-    apiKey: process.env.ANTHROPIC_API_KEY!,
-    model: 'claude-sonnet-4-20250514',
-  },
-  systemPrompt: [
-    'You are a helpful assistant.',
-    'Prefer concise answers.',
-  ],
-})
-
-const result = await agent.query('Say hello')
-console.log(result.text)
+  // ...
+  toolGuard: compositeGuard(
+    directoryScope('./workspace'),
+    denyList(['rm -rf /', 'DROP TABLE']),
+  ),
+});
 ```
 
-## Tool loop
+## Architecture
 
-```ts
-import { Agent, type ToolRegistration } from '@berry-agent/core'
-
-const readFileTool: ToolRegistration = {
-  definition: {
-    name: 'read_file',
-    description: 'Read a file',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string' },
-      },
-      required: ['path'],
-    },
-  },
-  execute: async (input) => {
-    return {
-      content: `fake contents of ${String(input.path)}`,
-    }
-  },
-}
-
-const agent = new Agent({
-  provider: {
-    type: 'openai',
-    apiKey: process.env.OPENAI_API_KEY!,
-    model: 'gpt-5.4',
-  },
-  systemPrompt: 'Use tools when needed.',
-  tools: [readFileTool],
-})
-
-const result = await agent.query('Read src/index.ts')
-console.log(result.text)
+```
+Your App (e.g., berry-claw)
+    ↓
+@berry-agent/core          ← Agent loop, providers, session, compaction
+    ↓
+@berry-agent/tools-common  ← Pre-built tools (peer dep on core)
+@berry-agent/observe       ← Observability (peer dep on core + express)
+@berry-agent/safe          ← Security guards (peer dep on core)
+@berry-agent/mcp           ← MCP integration (peer dep on core)
 ```
 
-## Sessions
+## Numbers
 
-Berry keeps canonical conversation state as:
-
-- `systemPrompt: string[]`
-- `messages: Message[]`
-- `metadata`
-
-Resume an existing session:
-
-```ts
-const first = await agent.query('Plan the work')
-const second = await agent.query('Continue', {
-  resume: first.sessionId,
-})
-```
-
-Fork a session:
-
-```ts
-const forked = await agent.query('Take another approach', {
-  fork: first.sessionId,
-})
-```
-
-## File session store
-
-```ts
-import { Agent, FileSessionStore } from '@berry-agent/core'
-
-const agent = new Agent({
-  provider: {
-    type: 'anthropic',
-    apiKey: process.env.ANTHROPIC_API_KEY!,
-    model: 'claude-sonnet-4-20250514',
-  },
-  systemPrompt: 'You are helpful.',
-  sessionStore: new FileSessionStore('.berry/sessions'),
-})
-```
-
-This stores one session per JSON file.
-
-## Streaming + events
-
-```ts
-const result = await agent.query('Explain compaction briefly', {
-  stream: true,
-  onEvent(event) {
-    if (event.type === 'text_delta') {
-      process.stdout.write(event.text)
-    }
-
-    if (event.type === 'tool_call') {
-      console.log(`\n[tool] ${event.name}`)
-    }
-
-    if (event.type === 'api_response') {
-      console.log('\nusage:', event.usage)
-    }
-  },
-})
-
-console.log('\nfinal:', result.text)
-```
-
-Supported event kinds:
-
-- `query_start`
-- `api_call`
-- `text_delta`
-- `thinking_delta`
-- `api_response`
-- `tool_call`
-- `tool_result`
-- `compaction`
-- `query_end`
-
-## Provider notes
-
-### Anthropic
-
-Berry uses explicit cache breakpoints for stable prefixes:
-
-- system prompt blocks
-- recent turn boundaries
-
-### OpenAI-compatible
-
-Berry relies on provider-side automatic prefix caching when available.
-No explicit cache breakpoint API is required.
-
-## Compaction
-
-Berry currently uses a **batch compaction** strategy rather than progressive per-request mutation.
-
-Current layers:
-
-1. clear thinking
-2. truncate oversized tool results
-3. clear old tool pairs
-4. merge consecutive messages
-5. summarize old messages
-6. trim long assistant messages
-7. truncate oldest messages
-
-## Examples
-
-See:
-
-- `examples/README.md`
-- `examples/basic.ts`
-- `examples/smoke-anthropic.ts`
-- `examples/smoke-openai.ts`
-
-## Roadmap
-
-- `docs/roadmap-v0.1.md`
-- `docs/smoke-test-results.md`
+- **Source**: 7,825 lines across 5 packages + UI
+- **Tests**: 183 (16 test files), all passing
+- **Status**: Alpha
 
 ## Development
 
 ```bash
 npm install
-npm run build
-npm test
+npm run build          # Build all packages
+npm test               # Run all unit tests (183)
+npm run test:integration  # Run integration tests (requires API keys)
 ```
 
-Package-only test run:
+## Roadmap
 
-```bash
-npm test --workspace=packages/core -- --run
-```
-
-## Not in scope yet
-
-Not implemented yet:
-
-- MCP
-- sandbox / permissions
-- memory system
-- multi-language bindings
-- benchmark harness
-- npm-stable release hardening
+See [ROADMAP.md](./ROADMAP.md)
 
 ## License
 

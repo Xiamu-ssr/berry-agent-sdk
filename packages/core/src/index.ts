@@ -5,6 +5,10 @@
 // Core
 export { Agent } from './agent.js';
 
+// Provider Registry
+export { ProviderRegistry } from './registry.js';
+export type { ProviderEntry, ResolvedModel } from './registry.js';
+
 // Providers
 export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
@@ -26,6 +30,9 @@ export type { ErrorKind } from './utils/retry.js';
 
 // Constants (for custom configs)
 export * from './constants.js';
+
+// Tool name constants (single source of truth)
+export * from './tool-names.js';
 
 // Types
 export type {
@@ -87,4 +94,13 @@ export type {
 
   // Multi-modal
   ImageContent,
+
+  // Agent.create() shorthand
+  AgentCreateConfig,
+
+  // Event types
+  AgentEventType,
+  GuardEventKind,
+  AGENT_EVENT_TYPES,
+  GUARD_EVENT_KINDS,
 } from './types.js';
