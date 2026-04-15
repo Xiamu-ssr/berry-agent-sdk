@@ -66,6 +66,7 @@ export class OpenAIProvider implements Provider {
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
     const params = this.buildStreamParams(request);
+    const rawRequest = this.buildParams(request) as unknown as Record<string, unknown>;
     const stream = await withRetry(
       () => this.client.chat.completions.create(params, { signal: request.signal }),
       request.signal,
@@ -75,10 +76,16 @@ export class OpenAIProvider implements Provider {
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
     let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let stopReason: ProviderResponse['stopReason'] = 'end_turn';
+    let lastChunkId: string | undefined;
+    let lastChunkModel: string | undefined;
+    let rawUsageRaw: Record<string, unknown> = {};
 
     for await (const chunk of stream) {
+      lastChunkId = chunk.id;
+      lastChunkModel = chunk.model;
       if (chunk.usage) {
         usage = this.extractUsage(chunk.usage);
+        rawUsageRaw = chunk.usage as unknown as Record<string, unknown>;
       }
 
       const choice = chunk.choices[0];
@@ -122,6 +129,7 @@ export class OpenAIProvider implements Provider {
       content.push({ type: 'text', text });
     }
 
+    const builtToolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
     for (const [, toolCall] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
       content.push({
         type: 'tool_use',
@@ -129,7 +137,27 @@ export class OpenAIProvider implements Provider {
         name: toolCall.name,
         input: this.parseToolArguments(toolCall.arguments),
       });
+      builtToolCalls.push({
+        id: toolCall.id,
+        type: 'function',
+        function: { name: toolCall.name, arguments: toolCall.arguments },
+      });
     }
+
+    const rawResponse: Record<string, unknown> = {
+      id: lastChunkId,
+      model: lastChunkModel,
+      object: 'chat.completion',
+      usage: rawUsageRaw,
+      choices: [{
+        finish_reason: stopReason === 'tool_use' ? 'tool_calls' : stopReason === 'max_tokens' ? 'length' : 'stop',
+        message: {
+          role: 'assistant',
+          content: text || null,
+          ...(builtToolCalls.length > 0 ? { tool_calls: builtToolCalls } : {}),
+        },
+      }],
+    };
 
     yield {
       type: 'response',
@@ -137,7 +165,9 @@ export class OpenAIProvider implements Provider {
         content: content.length > 0 ? content : [{ type: 'text', text: '' }],
         stopReason,
         usage,
-        rawUsage: usage as unknown as Record<string, unknown>,
+        rawUsage: rawUsageRaw,
+        rawRequest,
+        rawResponse,
       },
     };
   }

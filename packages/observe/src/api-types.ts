@@ -15,6 +15,7 @@ export const OBSERVE_API_PATHS = {
   TOOLS: '/tools',
   GUARD: '/guard',
   GUARD_DECISIONS: '/guard/decisions',
+  GUARD_BY_TOOL: '/guard/by-tool',
   COMPACTION: '/compaction',
   COMPACTION_LIST: '/compaction/list',
   INFERENCES: '/inferences',
@@ -22,6 +23,11 @@ export const OBSERVE_API_PATHS = {
   SESSIONS: '/sessions',
   SESSION_DETAIL: '/sessions/:id',
   AGENTS: '/agents',
+  AGENT_DETAIL: '/agents/:id',
+  AGENT_SESSIONS: '/agents/:id/sessions',
+  TURNS: '/turns',
+  TURN_DETAIL: '/turns/:id',
+  TURN_INFERENCES: '/turns/:id/inferences',
   CLEANUP: '/cleanup',
 } as const;
 
@@ -76,6 +82,7 @@ export interface GuardDecisionRecord {
   id: string;
   sessionId: string;
   llmCallId: string | null;
+  turnId: string | null;
   toolName: string;
   input: string;
   decision: string;
@@ -84,6 +91,15 @@ export interface GuardDecisionRecord {
   callIndex: number;
   durationMs: number;
   timestamp: number;
+}
+
+export interface GuardByToolStat {
+  toolName: string;
+  allowCount: number;
+  denyCount: number;
+  modifyCount: number;
+  totalCount: number;
+  denyRate: number;
 }
 
 export interface CompactionRecord {
@@ -114,6 +130,7 @@ export interface InferenceRecord {
   id: string;
   sessionId: string;
   agentId: string | null;
+  turnId: string | null;
   provider: string;
   model: string;
   inputTokens: number;
@@ -139,6 +156,23 @@ export interface InferenceRecord {
   guardDecisions: GuardDecisionRecord[];
 }
 
+export interface TurnSummary {
+  id: string;
+  sessionId: string;
+  agentId: string | null;
+  prompt: string | null;
+  startTime: number;
+  endTime: number | null;
+  llmCallCount: number;
+  toolCallCount: number;
+  totalCost: number;
+  status: string;
+  // aggregated sub-objects
+  cost: CostBreakdown;
+  cache: CacheEfficiency;
+  guard: GuardStat;
+}
+
 export interface SessionSummary {
   id: string;
   agentId: string | null;
@@ -162,6 +196,27 @@ export interface AgentStats {
   avgCostPerSession: number;
 }
 
+export interface AgentDetail {
+  agentId: string;
+  sessionCount: number;
+  totalCost: number;
+  llmCallCount: number;
+  toolCallCount: number;
+  avgCostPerSession: number;
+  cost: CostBreakdown;
+  cache: CacheEfficiency;
+  guard: GuardStat;
+  recentSessions: SessionSummary[];
+}
+
 export interface CleanupResult {
   removed: number;
+}
+
+// ----- Dimension Filter -----
+
+export interface DimensionFilter {
+  sessionId?: string;
+  agentId?: string;
+  turnId?: string;
 }

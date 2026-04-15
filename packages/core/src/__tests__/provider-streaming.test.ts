@@ -98,9 +98,9 @@ describe('provider streaming', () => {
       { type: 'text_delta', text: 'Hel' },
       { type: 'text_delta', text: 'lo' },
       { type: 'thinking_delta', thinking: 'hmm' },
-      {
+      expect.objectContaining({
         type: 'response',
-        response: {
+        response: expect.objectContaining({
           content: [
             { type: 'text', text: 'Hello' },
             { type: 'thinking', thinking: 'hmm' },
@@ -113,14 +113,11 @@ describe('provider streaming', () => {
             cacheWriteTokens: 2,
             cacheReadTokens: 9,
           },
-          rawUsage: {
-            inputTokens: 11,
-            outputTokens: 7,
-            cacheWriteTokens: 2,
-            cacheReadTokens: 9,
-          },
-        },
-      },
+          // rawRequest and rawResponse are now populated (tested separately)
+          rawRequest: expect.objectContaining({ model: 'claude-sonnet-4-20250514' }),
+          rawResponse: expect.objectContaining({ stop_reason: 'tool_use' }),
+        }),
+      }),
     ]);
   });
 
@@ -203,9 +200,9 @@ describe('provider streaming', () => {
     expect(events).toEqual([
       { type: 'text_delta', text: 'Hel' },
       { type: 'text_delta', text: 'lo' },
-      {
+      expect.objectContaining({
         type: 'response',
-        response: {
+        response: expect.objectContaining({
           content: [
             { type: 'text', text: 'Hello' },
             { type: 'tool_use', id: 'call_1', name: 'read_file', input: { path: 'a.ts' } },
@@ -217,14 +214,11 @@ describe('provider streaming', () => {
             cacheReadTokens: 4,
             cacheWriteTokens: 0,
           },
-          rawUsage: {
-            inputTokens: 20,
-            outputTokens: 9,
-            cacheReadTokens: 4,
-            cacheWriteTokens: 0,
-          },
-        },
-      },
+          // rawRequest and rawResponse are now populated (tested separately)
+          rawRequest: expect.objectContaining({ model: 'gpt-5.4' }),
+          rawResponse: expect.objectContaining({ choices: expect.any(Array) }),
+        }),
+      }),
     ]);
   });
 });

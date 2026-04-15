@@ -68,6 +68,7 @@ export class AnthropicProvider implements Provider {
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
     const params = this.buildStreamParams(request);
+    const rawRequest = this.buildParams(request) as Record<string, unknown>;
     const stream = await withRetry(
       () => this.client.messages.create(params as unknown as MessageCreateParamsStreaming, { signal: request.signal }),
       request.signal,
@@ -77,11 +78,20 @@ export class AnthropicProvider implements Provider {
     const toolInputJson = new Map<number, string>();
     let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let stopReason: ProviderResponse['stopReason'] = 'end_turn';
+    // Accumulate raw message for rawResponse
+    let rawMessageId: string | undefined;
+    let rawMessageModel: string | undefined;
+    let rawMessageType: string | undefined;
+    let rawUsageRaw: Record<string, unknown> = {};
 
     for await (const event of stream) {
       switch (event.type) {
         case 'message_start': {
           usage = this.extractUsage(event.message.usage);
+          rawUsageRaw = event.message.usage as unknown as Record<string, unknown>;
+          rawMessageId = event.message.id;
+          rawMessageModel = event.message.model;
+          rawMessageType = event.message.type;
           break;
         }
         case 'content_block_start': {
@@ -139,6 +149,7 @@ export class AnthropicProvider implements Provider {
         }
         case 'message_delta': {
           usage = this.extractUsage(event.usage);
+          rawUsageRaw = event.usage as unknown as Record<string, unknown>;
           stopReason = this.mapStopReason(event.delta.stop_reason);
           break;
         }
@@ -151,13 +162,24 @@ export class AnthropicProvider implements Provider {
 
     const finalContent = content.filter((block): block is ContentBlock => block !== undefined);
 
+    const rawResponse: Record<string, unknown> = {
+      id: rawMessageId,
+      type: rawMessageType,
+      model: rawMessageModel,
+      stop_reason: stopReason === 'tool_use' ? 'tool_use' : stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn',
+      usage: rawUsageRaw,
+      content: finalContent,
+    };
+
     yield {
       type: 'response',
       response: {
         content: finalContent.length > 0 ? finalContent : [{ type: 'text', text: '' }],
         stopReason,
         usage,
-        rawUsage: usage as unknown as Record<string, unknown>,
+        rawUsage: rawUsageRaw,
+        rawRequest,
+        rawResponse,
       },
     };
   }

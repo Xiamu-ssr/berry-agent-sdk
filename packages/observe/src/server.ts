@@ -17,8 +17,8 @@ export function createObserveRouter(observer: Observer): Router {
 
   // ===== Cost =====
   router.get('/cost', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    res.json(analyzer.costBreakdown(sessionId));
+    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.costBreakdown({ sessionId, agentId, turnId }));
   });
 
   router.get('/cost/by-model', (_req, res) => {
@@ -32,53 +32,76 @@ export function createObserveRouter(observer: Observer): Router {
 
   // ===== Cache =====
   router.get('/cache', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    res.json(analyzer.cacheEfficiency(sessionId));
+    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.cacheEfficiency({ sessionId, agentId, turnId }));
   });
 
   // ===== Tools =====
   router.get('/tools', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    res.json(analyzer.toolStats(sessionId));
+    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.toolStats({ sessionId, agentId, turnId }));
   });
 
   // ===== Guard =====
   router.get('/guard', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    res.json(analyzer.guardStats(sessionId));
+    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.guardStats({ sessionId, agentId, turnId }));
   });
 
   router.get('/guard/decisions', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    const llmCallId = req.query.llmCallId as string | undefined;
+    const { sessionId, agentId, turnId, llmCallId, toolName } = req.query as Record<string, string | undefined>;
     const limit = parseInt(req.query.limit as string) || 100;
-    res.json(analyzer.guardDecisionList({ sessionId, llmCallId, limit }));
+    res.json(analyzer.guardDecisionList({ sessionId, agentId, turnId, llmCallId, toolName, limit }));
+  });
+
+  router.get('/guard/by-tool', (req, res) => {
+    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.guardStatsByTool({ sessionId, agentId, turnId }));
   });
 
   // ===== Compaction =====
   router.get('/compaction', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    res.json(analyzer.compactionStats(sessionId));
+    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
+    res.json(analyzer.compactionStats({ sessionId, agentId }));
   });
 
   router.get('/compaction/list', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
+    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
     const limit = parseInt(req.query.limit as string) || 100;
-    res.json(analyzer.compactionList({ sessionId, limit }));
+    res.json(analyzer.compactionList({ sessionId, agentId, limit }));
   });
 
   // ===== Inferences =====
   router.get('/inferences', (req, res) => {
-    const sessionId = req.query.sessionId as string | undefined;
-    const agentId = req.query.agentId as string | undefined;
+    const { sessionId, agentId, turnId, model } = req.query as Record<string, string | undefined>;
     const limit = parseInt(req.query.limit as string) || 50;
-    res.json(analyzer.inferenceList({ sessionId, agentId, limit }));
+    const since = req.query.since ? parseInt(req.query.since as string) : undefined;
+    const until = req.query.until ? parseInt(req.query.until as string) : undefined;
+    res.json(analyzer.inferenceList({ sessionId, agentId, turnId, model, since, until, limit }));
   });
 
   router.get('/inferences/:id', (req, res) => {
     const detail = analyzer.inferenceDetail(req.params.id);
     if (!detail) return res.status(404).json({ error: 'Not found' });
     res.json(detail);
+  });
+
+  // ===== Turns (NEW) =====
+  router.get('/turns', (req, res) => {
+    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
+    const limit = parseInt(req.query.limit as string) || 50;
+    res.json(analyzer.turnList({ sessionId, agentId, limit }));
+  });
+
+  router.get('/turns/:id', (req, res) => {
+    const summary = analyzer.turnSummary(req.params.id);
+    if (!summary) return res.status(404).json({ error: 'Not found' });
+    res.json(summary);
+  });
+
+  router.get('/turns/:id/inferences', (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    res.json(analyzer.inferenceList({ turnId: req.params.id, limit }));
   });
 
   // ===== Sessions =====
@@ -96,6 +119,17 @@ export function createObserveRouter(observer: Observer): Router {
   // ===== Agents =====
   router.get('/agents', (_req, res) => {
     res.json(analyzer.agentStats());
+  });
+
+  router.get('/agents/:id', (req, res) => {
+    const detail = analyzer.agentDetail(req.params.id);
+    if (!detail) return res.status(404).json({ error: 'Not found' });
+    res.json(detail);
+  });
+
+  router.get('/agents/:id/sessions', (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+    res.json(analyzer.recentSessions(limit, req.params.id));
   });
 
   // ===== Cleanup =====

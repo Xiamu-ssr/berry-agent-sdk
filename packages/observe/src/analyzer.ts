@@ -4,22 +4,59 @@
 
 import { eq, sql, desc, gte, and } from 'drizzle-orm';
 import type { ObserveDB } from './db.js';
-import { sessions, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
+import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
 
 // Re-export all API types from shared definition (single source of truth).
 export type {
   CostBreakdown, CostByModel, CostTrendPoint, CacheEfficiency,
-  ToolStat, GuardStat, GuardDecisionRecord,
+  ToolStat, GuardStat, GuardDecisionRecord, GuardByToolStat,
   CompactionRecord, CompactionStats,
-  InferenceRecord, SessionSummary, AgentStats,
+  InferenceRecord, TurnSummary, SessionSummary, AgentStats, AgentDetail,
+  DimensionFilter,
 } from './api-types.js';
 
 import type {
   CostBreakdown, CostByModel, CostTrendPoint, CacheEfficiency,
-  ToolStat, GuardStat, GuardDecisionRecord,
+  ToolStat, GuardStat, GuardDecisionRecord, GuardByToolStat,
   CompactionRecord, CompactionStats,
-  InferenceRecord, SessionSummary, AgentStats,
+  InferenceRecord, TurnSummary, SessionSummary, AgentStats, AgentDetail,
+  DimensionFilter,
 } from './api-types.js';
+
+// ===== Helpers =====
+
+function buildLlmWhere(filter: DimensionFilter) {
+  const conditions = [];
+  if (filter.sessionId) conditions.push(eq(llmCalls.sessionId, filter.sessionId));
+  if (filter.agentId) conditions.push(eq(llmCalls.agentId, filter.agentId));
+  if (filter.turnId) conditions.push(eq(llmCalls.turnId, filter.turnId));
+  return conditions.length > 1 ? and(...conditions) : conditions[0];
+}
+
+function buildGuardWhere(filter: DimensionFilter) {
+  const conditions = [];
+  if (filter.sessionId) conditions.push(eq(guardDecisions.sessionId, filter.sessionId));
+  if (filter.agentId) {
+    // guard_decisions doesn't have agentId directly — join via session
+    // Use sub-select approach via SQL for simplicity
+    conditions.push(sql`${guardDecisions.sessionId} IN (
+      SELECT id FROM sessions WHERE agent_id = ${filter.agentId}
+    )`);
+  }
+  if (filter.turnId) conditions.push(eq(guardDecisions.turnId, filter.turnId));
+  return conditions.length > 1 ? and(...conditions) : conditions[0];
+}
+
+function buildCompactionWhere(filter: Pick<DimensionFilter, 'sessionId' | 'agentId'>) {
+  const conditions = [];
+  if (filter.sessionId) conditions.push(eq(compactionEvents.sessionId, filter.sessionId));
+  if (filter.agentId) {
+    conditions.push(sql`${compactionEvents.sessionId} IN (
+      SELECT id FROM sessions WHERE agent_id = ${filter.agentId}
+    )`);
+  }
+  return conditions.length > 1 ? and(...conditions) : conditions[0];
+}
 
 // ===== Analyzer =====
 
@@ -28,8 +65,10 @@ export class Analyzer {
 
   // ===== Cost Analysis =====
 
-  costBreakdown(sessionId?: string): CostBreakdown {
-    const where = sessionId ? eq(llmCalls.sessionId, sessionId) : undefined;
+  costBreakdown(filter?: string | DimensionFilter): CostBreakdown {
+    // Accept either a bare sessionId string (backward compat) or DimensionFilter
+    const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
+    const where = buildLlmWhere(f);
     const base = this.db.db.select({
       inputCost: sql<number>`coalesce(sum(${llmCalls.inputCost}), 0)`,
       outputCost: sql<number>`coalesce(sum(${llmCalls.outputCost}), 0)`,
@@ -37,7 +76,7 @@ export class Analyzer {
       totalCost: sql<number>`coalesce(sum(${llmCalls.totalCost}), 0)`,
       callCount: sql<number>`count(*)`,
     }).from(llmCalls);
-    const row = where ? base.where(where).get() : base.get();
+    const row = where ? (base as any).where(where).get() : base.get();
     return {
       inputCost: row?.inputCost ?? 0,
       outputCost: row?.outputCost ?? 0,
@@ -75,15 +114,16 @@ export class Analyzer {
 
   // ===== Cache Analysis =====
 
-  cacheEfficiency(sessionId?: string): CacheEfficiency {
-    const where = sessionId ? eq(llmCalls.sessionId, sessionId) : undefined;
+  cacheEfficiency(filter?: string | DimensionFilter): CacheEfficiency {
+    const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
+    const where = buildLlmWhere(f);
     const base = this.db.db.select({
       totalCacheReadTokens: sql<number>`coalesce(sum(${llmCalls.cacheReadTokens}), 0)`,
       totalCacheWriteTokens: sql<number>`coalesce(sum(${llmCalls.cacheWriteTokens}), 0)`,
       totalInputTokens: sql<number>`coalesce(sum(${llmCalls.inputTokens}), 0)`,
       totalSavings: sql<number>`coalesce(sum(${llmCalls.cacheSavings}), 0)`,
     }).from(llmCalls);
-    const row = where ? base.where(where).get() : base.get();
+    const row = where ? (base as any).where(where).get() : base.get();
     const totalInput = row?.totalInputTokens ?? 0;
     const cacheRead = row?.totalCacheReadTokens ?? 0;
     const denominator = totalInput + cacheRead;
@@ -98,8 +138,17 @@ export class Analyzer {
 
   // ===== Tool Analysis =====
 
-  toolStats(sessionId?: string): ToolStat[] {
-    const where = sessionId ? eq(toolCalls.sessionId, sessionId) : undefined;
+  toolStats(filter?: string | DimensionFilter): ToolStat[] {
+    const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
+    const conditions = [];
+    if (f.sessionId) conditions.push(eq(toolCalls.sessionId, f.sessionId));
+    if (f.turnId) conditions.push(eq(toolCalls.turnId, f.turnId));
+    if (f.agentId) {
+      conditions.push(sql`${toolCalls.sessionId} IN (
+        SELECT id FROM sessions WHERE agent_id = ${f.agentId}
+      )`);
+    }
+    const where = conditions.length > 1 ? and(...conditions) : conditions[0];
     const base = this.db.db.select({
       name: toolCalls.name,
       callCount: sql<number>`count(*)`,
@@ -107,23 +156,24 @@ export class Analyzer {
       avgDurationMs: sql<number>`avg(${toolCalls.durationMs})`,
       totalDurationMs: sql<number>`sum(${toolCalls.durationMs})`,
     }).from(toolCalls);
-    return (where ? base.where(where) : base)
+    return ((where ? (base as any).where(where) : base) as any)
       .groupBy(toolCalls.name)
       .orderBy(desc(sql`count(*)`))
       .all();
   }
 
-  // ===== Guard Analysis (NEW) =====
+  // ===== Guard Analysis =====
 
-  guardStats(sessionId?: string): GuardStat {
-    const where = sessionId ? eq(guardDecisions.sessionId, sessionId) : undefined;
+  guardStats(filter?: string | DimensionFilter): GuardStat {
+    const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
+    const where = buildGuardWhere(f);
     const base = this.db.db.select({
       allowCount: sql<number>`sum(case when ${guardDecisions.decision} = 'allow' then 1 else 0 end)`,
       denyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'deny' then 1 else 0 end)`,
       modifyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'modify' then 1 else 0 end)`,
       avgDurationMs: sql<number>`coalesce(avg(${guardDecisions.durationMs}), 0)`,
     }).from(guardDecisions);
-    const row = where ? base.where(where).get() : base.get();
+    const row = where ? (base as any).where(where).get() : base.get();
     return {
       allowCount: row?.allowCount ?? 0,
       denyCount: row?.denyCount ?? 0,
@@ -132,26 +182,54 @@ export class Analyzer {
     };
   }
 
-  /** List guard decisions, optionally filtered by session or llmCall */
-  guardDecisionList(opts?: { sessionId?: string; llmCallId?: string; limit?: number }): GuardDecisionRecord[] {
-    let query = this.db.db.select().from(guardDecisions);
-    if (opts?.sessionId && opts?.llmCallId) {
-      query = query.where(and(
-        eq(guardDecisions.sessionId, opts.sessionId),
-        eq(guardDecisions.llmCallId, opts.llmCallId),
-      )) as any;
-    } else if (opts?.sessionId) {
-      query = query.where(eq(guardDecisions.sessionId, opts.sessionId)) as any;
-    } else if (opts?.llmCallId) {
-      query = query.where(eq(guardDecisions.llmCallId, opts.llmCallId)) as any;
+  /** List guard decisions, optionally filtered by session, agent, turn or llmCall */
+  guardDecisionList(opts?: { sessionId?: string; agentId?: string; turnId?: string; llmCallId?: string; toolName?: string; limit?: number }): GuardDecisionRecord[] {
+    const conditions = [];
+    if (opts?.sessionId) conditions.push(eq(guardDecisions.sessionId, opts.sessionId));
+    if (opts?.llmCallId) conditions.push(eq(guardDecisions.llmCallId, opts.llmCallId));
+    if (opts?.turnId) conditions.push(eq(guardDecisions.turnId, opts.turnId));
+    if (opts?.toolName) conditions.push(eq(guardDecisions.toolName, opts.toolName));
+    if (opts?.agentId) {
+      conditions.push(sql`${guardDecisions.sessionId} IN (
+        SELECT id FROM sessions WHERE agent_id = ${opts.agentId}
+      )`);
     }
+    const where = conditions.length > 1 ? and(...conditions) : conditions[0];
+    let query = this.db.db.select().from(guardDecisions);
+    if (where) query = (query as any).where(where);
     return (query as any).orderBy(desc(guardDecisions.timestamp)).limit(opts?.limit ?? 100).all();
   }
 
-  // ===== Compaction Analysis (NEW) =====
+  /** Guard decisions grouped by tool name */
+  guardStatsByTool(filter?: DimensionFilter): GuardByToolStat[] {
+    const f = filter ?? {};
+    const where = buildGuardWhere(f);
+    const base = this.db.db.select({
+      toolName: guardDecisions.toolName,
+      allowCount: sql<number>`sum(case when ${guardDecisions.decision} = 'allow' then 1 else 0 end)`,
+      denyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'deny' then 1 else 0 end)`,
+      modifyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'modify' then 1 else 0 end)`,
+      totalCount: sql<number>`count(*)`,
+    }).from(guardDecisions);
+    const rows = ((where ? (base as any).where(where) : base) as any)
+      .groupBy(guardDecisions.toolName)
+      .orderBy(desc(sql`count(*)`))
+      .all();
+    return rows.map((r: any) => ({
+      toolName: r.toolName,
+      allowCount: r.allowCount ?? 0,
+      denyCount: r.denyCount ?? 0,
+      modifyCount: r.modifyCount ?? 0,
+      totalCount: r.totalCount ?? 0,
+      denyRate: r.totalCount > 0 ? (r.denyCount ?? 0) / r.totalCount : 0,
+    }));
+  }
 
-  compactionStats(sessionId?: string): CompactionStats {
-    const where = sessionId ? eq(compactionEvents.sessionId, sessionId) : undefined;
+  // ===== Compaction Analysis =====
+
+  compactionStats(filter?: string | DimensionFilter): CompactionStats {
+    const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
+    const where = buildCompactionWhere(f);
     const base = this.db.db.select({
       totalCount: sql<number>`count(*)`,
       avgTokensFreed: sql<number>`coalesce(avg(${compactionEvents.tokensFreed}), 0)`,
@@ -164,18 +242,18 @@ export class Analyzer {
         end
       ), 0)`,
     }).from(compactionEvents);
-    const row = where ? base.where(where).get() : base.get();
+    const row = where ? (base as any).where(where).get() : base.get();
 
     // By trigger reason
     const byTriggerBase = this.db.db.select({
       reason: compactionEvents.triggerReason,
       count: sql<number>`count(*)`,
     }).from(compactionEvents);
-    const byTrigger = (where ? byTriggerBase.where(where) : byTriggerBase)
+    const byTrigger = ((where ? (byTriggerBase as any).where(where) : byTriggerBase) as any)
       .groupBy(compactionEvents.triggerReason).all();
 
     // By layer frequency — parse JSON arrays
-    const allRecords = this.compactionList({ sessionId, limit: 10000 });
+    const allRecords = this.compactionList({ sessionId: f.sessionId, agentId: f.agentId, limit: 10000 });
     const layerCounts = new Map<string, number>();
     for (const rec of allRecords) {
       try {
@@ -198,15 +276,56 @@ export class Analyzer {
     };
   }
 
-  compactionList(opts?: { sessionId?: string; limit?: number }): CompactionRecord[] {
+  compactionList(opts?: { sessionId?: string; agentId?: string; limit?: number }): CompactionRecord[] {
+    const where = buildCompactionWhere({ sessionId: opts?.sessionId, agentId: opts?.agentId });
     let query = this.db.db.select().from(compactionEvents);
-    if (opts?.sessionId) {
-      query = query.where(eq(compactionEvents.sessionId, opts.sessionId)) as any;
-    }
+    if (where) query = (query as any).where(where);
     return (query as any).orderBy(desc(compactionEvents.timestamp)).limit(opts?.limit ?? 100).all();
   }
 
-  // ===== Inference Records (NEW) =====
+  // ===== Turn Analysis (NEW) =====
+
+  turnList(filter?: { sessionId?: string; agentId?: string; limit?: number }): Array<{
+    id: string; sessionId: string; agentId: string | null; prompt: string | null;
+    startTime: number; endTime: number | null; llmCallCount: number; toolCallCount: number;
+    totalCost: number; status: string;
+  }> {
+    const conditions = [];
+    if (filter?.sessionId) conditions.push(eq(turns.sessionId, filter.sessionId));
+    if (filter?.agentId) conditions.push(eq(turns.agentId, filter.agentId));
+    const where = conditions.length > 1 ? and(...conditions) : conditions[0];
+    let query = this.db.db.select().from(turns);
+    if (where) query = (query as any).where(where);
+    return (query as any).orderBy(desc(turns.startTime)).limit(filter?.limit ?? 50).all();
+  }
+
+  turnSummary(turnId: string): TurnSummary | null {
+    const turn = this.db.db.select().from(turns)
+      .where(eq(turns.id, turnId)).get();
+    if (!turn) return null;
+
+    const cost = this.costBreakdown({ turnId });
+    const cache = this.cacheEfficiency({ turnId });
+    const guard = this.guardStats({ turnId });
+
+    return {
+      id: turn.id,
+      sessionId: turn.sessionId,
+      agentId: turn.agentId,
+      prompt: turn.prompt,
+      startTime: turn.startTime,
+      endTime: turn.endTime,
+      llmCallCount: turn.llmCallCount,
+      toolCallCount: turn.toolCallCount,
+      totalCost: turn.totalCost,
+      status: turn.status,
+      cost,
+      cache,
+      guard,
+    };
+  }
+
+  // ===== Inference Records =====
 
   /** Get a single inference record with associated tools and guard decisions */
   inferenceDetail(llmCallId: string): InferenceRecord | null {
@@ -237,12 +356,30 @@ export class Analyzer {
     };
   }
 
-  /** List inference records for a session */
-  inferenceList(opts?: { sessionId?: string; agentId?: string; limit?: number }): Array<Omit<InferenceRecord, 'toolCalls' | 'guardDecisions' | 'requestMessages' | 'requestSystem' | 'requestTools' | 'responseContent' | 'providerRequest' | 'providerResponse'>> {
+  /** List inference records filtered by multiple dimensions */
+  inferenceList(opts?: {
+    sessionId?: string;
+    agentId?: string;
+    turnId?: string;
+    model?: string;
+    since?: number;
+    until?: number;
+    limit?: number;
+  }): Array<Omit<InferenceRecord, 'toolCalls' | 'guardDecisions' | 'requestMessages' | 'requestSystem' | 'requestTools' | 'responseContent' | 'providerRequest' | 'providerResponse'>> {
+    const conditions = [];
+    if (opts?.sessionId) conditions.push(eq(llmCalls.sessionId, opts.sessionId));
+    if (opts?.agentId) conditions.push(eq(llmCalls.agentId, opts.agentId));
+    if (opts?.turnId) conditions.push(eq(llmCalls.turnId, opts.turnId));
+    if (opts?.model) conditions.push(eq(llmCalls.model, opts.model));
+    if (opts?.since) conditions.push(gte(llmCalls.timestamp, opts.since));
+    if (opts?.until) conditions.push(sql`${llmCalls.timestamp} <= ${opts.until}`);
+    const where = conditions.length > 1 ? and(...conditions) : conditions[0];
+
     let query = this.db.db.select({
       id: llmCalls.id,
       sessionId: llmCalls.sessionId,
       agentId: llmCalls.agentId,
+      turnId: llmCalls.turnId,
       provider: llmCalls.provider,
       model: llmCalls.model,
       inputTokens: llmCalls.inputTokens,
@@ -260,17 +397,7 @@ export class Analyzer {
       timestamp: llmCalls.timestamp,
     }).from(llmCalls);
 
-    if (opts?.sessionId && opts?.agentId) {
-      query = query.where(and(
-        eq(llmCalls.sessionId, opts.sessionId),
-        eq(llmCalls.agentId, opts.agentId),
-      )) as any;
-    } else if (opts?.sessionId) {
-      query = query.where(eq(llmCalls.sessionId, opts.sessionId)) as any;
-    } else if (opts?.agentId) {
-      query = query.where(eq(llmCalls.agentId, opts.agentId)) as any;
-    }
-
+    if (where) query = (query as any).where(where);
     return (query as any).orderBy(desc(llmCalls.timestamp)).limit(opts?.limit ?? 50).all();
   }
 
@@ -307,13 +434,12 @@ export class Analyzer {
     };
   }
 
-  recentSessions(limit: number = 20): SessionSummary[] {
-    const rows = this.db.db.select().from(sessions)
-      .orderBy(desc(sessions.startTime))
-      .limit(limit)
-      .all();
+  recentSessions(limit: number = 20, agentId?: string): SessionSummary[] {
+    let query = this.db.db.select().from(sessions);
+    if (agentId) query = (query as any).where(eq(sessions.agentId, agentId));
+    const rows = (query as any).orderBy(desc(sessions.startTime)).limit(limit).all();
 
-    return rows.map(s => {
+    return rows.map((s: any) => {
       const llmCount = this.db.db.select({ count: sql<number>`count(*)` })
         .from(llmCalls).where(eq(llmCalls.sessionId, s.id)).get();
       const toolCount = this.db.db.select({ count: sql<number>`count(*)` })
@@ -341,7 +467,7 @@ export class Analyzer {
     });
   }
 
-  // ===== Agent Dimension (NEW) =====
+  // ===== Agent Dimension =====
 
   agentStats(): AgentStats[] {
     const rows = this.db.db.select({
@@ -375,5 +501,52 @@ export class Analyzer {
         avgCostPerSession: r.sessionCount > 0 ? r.totalCost / r.sessionCount : 0,
       };
     });
+  }
+
+  /** Get detailed agent info including aggregated stats and recent sessions */
+  agentDetail(agentId: string): AgentDetail | null {
+    // Get basic stats
+    const sessionRows = this.db.db.select({
+      sessionCount: sql<number>`count(*)`,
+      totalCost: sql<number>`coalesce(sum(${sessions.totalCost}), 0)`,
+    }).from(sessions)
+      .where(eq(sessions.agentId, agentId))
+      .get();
+
+    if (!sessionRows || sessionRows.sessionCount === 0) return null;
+
+    const llmCount = this.db.db.select({ count: sql<number>`count(*)` })
+      .from(llmCalls)
+      .where(eq(llmCalls.agentId, agentId))
+      .get();
+    const toolCount = this.db.db.select({ count: sql<number>`count(*)` })
+      .from(toolCalls)
+      .where(sql`${toolCalls.sessionId} IN (
+        SELECT id FROM sessions WHERE agent_id = ${agentId}
+      )`)
+      .get();
+
+    const llmCallCount = llmCount?.count ?? 0;
+    const toolCallCount = toolCount?.count ?? 0;
+    const sessionCount = sessionRows.sessionCount;
+    const totalCost = sessionRows.totalCost;
+
+    const cost = this.costBreakdown({ agentId });
+    const cache = this.cacheEfficiency({ agentId });
+    const guard = this.guardStats({ agentId });
+    const recentSessions = this.recentSessions(10, agentId);
+
+    return {
+      agentId,
+      sessionCount,
+      totalCost,
+      llmCallCount,
+      toolCallCount,
+      avgCostPerSession: sessionCount > 0 ? totalCost / sessionCount : 0,
+      cost,
+      cache,
+      guard,
+      recentSessions,
+    };
   }
 }

@@ -15,12 +15,28 @@ export const sessions = sqliteTable('sessions', {
   status: text('status', { enum: ['active', 'completed', 'error'] }).notNull(),
 });
 
+// ----- turns ----- NEW: one user message → full agent loop → final response
+
+export const turns = sqliteTable('turns', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id),
+  agentId: text('agent_id'),
+  prompt: text('prompt'),          // user message (truncated to 500 chars)
+  startTime: integer('start_time').notNull(),
+  endTime: integer('end_time'),
+  llmCallCount: integer('llm_call_count').notNull().default(0),
+  toolCallCount: integer('tool_call_count').notNull().default(0),
+  totalCost: real('total_cost').notNull().default(0),
+  status: text('status', { enum: ['active', 'completed', 'error'] }).notNull(),
+});
+
 // ----- llm_calls -----
 
 export const llmCalls = sqliteTable('llm_calls', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => sessions.id),
   agentId: text('agent_id'),  // NEW: denormalized for fast agent-level queries
+  turnId: text('turn_id'),    // NEW: links to turns table (query_start → query_end)
   provider: text('provider').notNull(),
   model: text('model').notNull(),
   inputTokens: integer('input_tokens').notNull(),
@@ -40,7 +56,7 @@ export const llmCalls = sqliteTable('llm_calls', {
   hasImages: integer('has_images', { mode: 'boolean' }).notNull(),
   skillsLoaded: text('skills_loaded'),
   providerDetail: text('provider_detail'),
-  // NEW: full request/response content for inference replay
+  // full request/response content for inference replay
   requestSystem: text('request_system'),      // JSON: system prompt blocks
   requestMessages: text('request_messages'),  // JSON: Berry-format messages
   requestTools: text('request_tools'),        // JSON: tool definitions
@@ -56,6 +72,7 @@ export const toolCalls = sqliteTable('tool_calls', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => sessions.id),
   llmCallId: text('llm_call_id').references(() => llmCalls.id),
+  turnId: text('turn_id'),  // NEW: links to turns table
   name: text('name').notNull(),
   input: text('input').notNull(),
   output: text('output').notNull(),
@@ -64,12 +81,13 @@ export const toolCalls = sqliteTable('tool_calls', {
   timestamp: integer('timestamp').notNull(),
 });
 
-// ----- guard_decisions ----- NEW
+// ----- guard_decisions -----
 
 export const guardDecisions = sqliteTable('guard_decisions', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull().references(() => sessions.id),
   llmCallId: text('llm_call_id').references(() => llmCalls.id),
+  turnId: text('turn_id'),  // NEW: links to turns table
   toolName: text('tool_name').notNull(),
   input: text('input').notNull(),            // JSON: original tool input
   decision: text('decision').notNull(),      // 'allow' | 'deny' | 'modify'
@@ -80,7 +98,7 @@ export const guardDecisions = sqliteTable('guard_decisions', {
   timestamp: integer('timestamp').notNull(),
 });
 
-// ----- compaction_events ----- NEW
+// ----- compaction_events -----
 
 export const compactionEvents = sqliteTable('compaction_events', {
   id: text('id').primaryKey(),

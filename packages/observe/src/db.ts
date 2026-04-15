@@ -6,6 +6,7 @@ import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { sql } from 'drizzle-orm';
 import * as schema from './schema.js';
+// schema now includes 'turns' table
 
 export interface ObserveDB {
   db: BetterSQLite3Database<typeof schema>;
@@ -29,10 +30,24 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     status TEXT NOT NULL
   )`);
 
+  db.run(sql`CREATE TABLE IF NOT EXISTS turns (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    agent_id TEXT,
+    prompt TEXT,
+    start_time INTEGER NOT NULL,
+    end_time INTEGER,
+    llm_call_count INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL
+  )`);
+
   db.run(sql`CREATE TABLE IF NOT EXISTS llm_calls (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     agent_id TEXT,
+    turn_id TEXT,
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     input_tokens INTEGER NOT NULL,
@@ -65,6 +80,7 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     llm_call_id TEXT REFERENCES llm_calls(id),
+    turn_id TEXT,
     name TEXT NOT NULL,
     input TEXT NOT NULL,
     output TEXT NOT NULL,
@@ -77,6 +93,7 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     llm_call_id TEXT REFERENCES llm_calls(id),
+    turn_id TEXT,
     tool_name TEXT NOT NULL,
     input TEXT NOT NULL,
     decision TEXT NOT NULL,
@@ -113,12 +130,15 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
   const migrations = [
     'ALTER TABLE sessions ADD COLUMN agent_id TEXT',
     'ALTER TABLE llm_calls ADD COLUMN agent_id TEXT',
+    'ALTER TABLE llm_calls ADD COLUMN turn_id TEXT',
     'ALTER TABLE llm_calls ADD COLUMN request_system TEXT',
     'ALTER TABLE llm_calls ADD COLUMN request_messages TEXT',
     'ALTER TABLE llm_calls ADD COLUMN request_tools TEXT',
     'ALTER TABLE llm_calls ADD COLUMN response_content TEXT',
     'ALTER TABLE llm_calls ADD COLUMN provider_request TEXT',
     'ALTER TABLE llm_calls ADD COLUMN provider_response TEXT',
+    'ALTER TABLE tool_calls ADD COLUMN turn_id TEXT',
+    'ALTER TABLE guard_decisions ADD COLUMN turn_id TEXT',
   ];
   for (const stmt of migrations) {
     try { db.run(sql.raw(stmt)); } catch { /* column already exists */ }

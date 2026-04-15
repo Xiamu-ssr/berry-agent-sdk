@@ -13,7 +13,7 @@ import type {
   AgentEvent,
 } from '@berry-agent/core';
 import type { ObserveDB } from './db.js';
-import { sessions, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
+import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
 import { calculateCost, type ModelPricing } from './pricing.js';
 
 const MAX_OUTPUT_LENGTH = 4096;
@@ -49,18 +49,30 @@ export interface CollectorConfig {
 }
 
 /**
- * Create a middleware that collects LLM call and tool call data.
+ * Create a unified collector that returns both middleware and event listener
+ * sharing internal state (turnId, sessionId, lastLlmCallId).
+ *
+ * This is the preferred factory over createMiddleware + createEventListener separately.
  */
-export function createMiddleware(config: CollectorConfig): Middleware {
+export function createCollector(config: CollectorConfig): {
+  middleware: Middleware;
+  eventListener: (event: AgentEvent) => void;
+} {
   const { db } = config;
   const storeFull = config.storeFullContent !== false;
-  const pendingApiCalls = new Map<string, PendingApiCall>();
-  const pendingToolCalls = new Map<string, PendingToolCall>();
-  // WeakMap to associate tool input objects with pending keys without mutating input
-  const toolInputKeyMap = new WeakMap<Record<string, unknown>, string>();
+
+  // ===== Shared mutable state =====
+  let currentSessionId: string | undefined;
+  let currentTurnId: string | undefined;
   let lastLlmCallId: string | undefined;
 
-  return {
+  // ===== Middleware-internal state =====
+  const pendingApiCalls = new Map<string, PendingApiCall>();
+  const pendingToolCalls = new Map<string, PendingToolCall>();
+  const toolInputKeyMap = new WeakMap<Record<string, unknown>, string>();
+
+  // ===== Middleware =====
+  const middleware: Middleware = {
     onBeforeApiCall(request: ProviderRequest, context: MiddlewareContext): ProviderRequest {
       pendingApiCalls.set(context.sessionId, {
         startTime: Date.now(),
@@ -103,6 +115,7 @@ export function createMiddleware(config: CollectorConfig): Middleware {
         id,
         sessionId: context.sessionId,
         agentId: config.agentId ?? null,
+        turnId: currentTurnId ?? null,
         provider: context.provider,
         model: context.model,
         inputTokens,
@@ -137,6 +150,17 @@ export function createMiddleware(config: CollectorConfig): Middleware {
         .set({ totalCost: sql`${sessions.totalCost} + ${cost.totalCost}` })
         .where(eq(sessions.id, context.sessionId))
         .run();
+
+      // Update turn totals if we have a current turn
+      if (currentTurnId) {
+        db.db.update(turns)
+          .set({
+            llmCallCount: sql`${turns.llmCallCount} + 1`,
+            totalCost: sql`${turns.totalCost} + ${cost.totalCost}`,
+          })
+          .where(eq(turns.id, currentTurnId))
+          .run();
+      }
     },
 
     onBeforeToolExec(
@@ -146,7 +170,6 @@ export function createMiddleware(config: CollectorConfig): Middleware {
     ): Record<string, unknown> {
       const key = `${context.sessionId}:${toolName}:${Date.now()}`;
       pendingToolCalls.set(key, { startTime: Date.now(), name: toolName });
-      // Track key externally via WeakMap — never mutate input
       toolInputKeyMap.set(input, key);
       return input;
     },
@@ -174,6 +197,7 @@ export function createMiddleware(config: CollectorConfig): Middleware {
         id: nanoid(),
         sessionId: context.sessionId,
         llmCallId: lastLlmCallId ?? null,
+        turnId: currentTurnId ?? null,
         name: toolName,
         input: JSON.stringify(input),
         output,
@@ -181,23 +205,23 @@ export function createMiddleware(config: CollectorConfig): Middleware {
         durationMs,
         timestamp: Date.now(),
       }).run();
+
+      // Update turn tool call count
+      if (currentTurnId) {
+        db.db.update(turns)
+          .set({ toolCallCount: sql`${turns.toolCallCount} + 1` })
+          .where(eq(turns.id, currentTurnId))
+          .run();
+      }
     },
   };
-}
 
-/**
- * Create an event listener that records agent events, guard decisions,
- * compaction events, and manages session lifecycle.
- */
-export function createEventListener(config: CollectorConfig): (event: AgentEvent) => void {
-  const { db } = config;
-  let currentSessionId: string | undefined;
-  let lastLlmCallId: string | undefined;
-
-  return (event: AgentEvent) => {
+  // ===== Event Listener =====
+  const eventListener = (event: AgentEvent): void => {
     switch (event.type) {
       case 'query_start': {
         currentSessionId = event.sessionId;
+
         // Ensure session exists
         const existing = db.db.select().from(sessions)
           .where(eq(sessions.id, event.sessionId)).get();
@@ -212,11 +236,27 @@ export function createEventListener(config: CollectorConfig): (event: AgentEvent
           }).run();
         }
 
+        // Create a new turn for this query
+        const turnId = nanoid();
+        currentTurnId = turnId;
+        db.db.insert(turns).values({
+          id: turnId,
+          sessionId: event.sessionId,
+          agentId: config.agentId ?? null,
+          prompt: event.prompt ? event.prompt.slice(0, 500) : null,
+          startTime: Date.now(),
+          endTime: null,
+          llmCallCount: 0,
+          toolCallCount: 0,
+          totalCost: 0,
+          status: 'active',
+        }).run();
+
         db.db.insert(agentEvents).values({
           id: nanoid(),
           sessionId: event.sessionId,
           kind: 'query_start',
-          detail: JSON.stringify({ prompt: event.prompt.slice(0, 500) }),
+          detail: JSON.stringify({ prompt: event.prompt ? event.prompt.slice(0, 500) : null, turnId }),
           timestamp: Date.now(),
         }).run();
         break;
@@ -224,7 +264,6 @@ export function createEventListener(config: CollectorConfig): (event: AgentEvent
 
       case 'api_response': {
         // Track last LLM call ID for guard/tool correlation
-        // Retrieve the most recent llm_call for this session
         if (currentSessionId) {
           const latest = db.db.select({ id: llmCalls.id })
             .from(llmCalls)
@@ -243,6 +282,7 @@ export function createEventListener(config: CollectorConfig): (event: AgentEvent
           id: nanoid(),
           sessionId: currentSessionId,
           llmCallId: lastLlmCallId ?? null,
+          turnId: currentTurnId ?? null,
           toolName: event.toolName,
           input: JSON.stringify(event.input),
           decision: event.decision.action,
@@ -290,24 +330,36 @@ export function createEventListener(config: CollectorConfig): (event: AgentEvent
       }
 
       case 'query_end': {
+        const sessionId = event.result.sessionId;
+
         db.db.insert(agentEvents).values({
           id: nanoid(),
-          sessionId: event.result.sessionId,
+          sessionId,
           kind: 'query_end',
           detail: JSON.stringify({
             toolCalls: event.result.toolCalls,
             compacted: event.result.compacted,
+            turnId: currentTurnId,
           }),
           timestamp: Date.now(),
         }).run();
 
+        // Finalize the current turn
+        if (currentTurnId) {
+          db.db.update(turns)
+            .set({ status: 'completed', endTime: Date.now() })
+            .where(eq(turns.id, currentTurnId))
+            .run();
+          currentTurnId = undefined;
+        }
+
         // Update session status
         db.db.update(sessions)
           .set({ status: 'completed', endTime: Date.now() })
-          .where(eq(sessions.id, event.result.sessionId))
+          .where(eq(sessions.id, sessionId))
           .run();
 
-        currentSessionId = event.result.sessionId; // keep for reference
+        currentSessionId = sessionId; // keep for reference
         break;
       }
 
@@ -322,4 +374,23 @@ export function createEventListener(config: CollectorConfig): (event: AgentEvent
         break;
     }
   };
+
+  return { middleware, eventListener };
+}
+
+/**
+ * Create a middleware that collects LLM call and tool call data.
+ * @deprecated Prefer createCollector() which shares state with the event listener.
+ */
+export function createMiddleware(config: CollectorConfig): Middleware {
+  return createCollector(config).middleware;
+}
+
+/**
+ * Create an event listener that records agent events, guard decisions,
+ * compaction events, and manages session lifecycle.
+ * @deprecated Prefer createCollector() which shares state with the middleware.
+ */
+export function createEventListener(config: CollectorConfig): (event: AgentEvent) => void {
+  return createCollector(config).eventListener;
 }

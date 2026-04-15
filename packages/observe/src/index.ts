@@ -14,14 +14,14 @@ export { createDatabase } from './db.js';
 export type { ObserveDB } from './db.js';
 
 // Schema
-export { sessions, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
+export { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
 
 // Pricing
 export { calculateCost, getPricing, MODEL_PRICING } from './pricing.js';
 export type { ModelPricing, CostResult } from './pricing.js';
 
-// Collector
-export { createMiddleware, createEventListener } from './collector.js';
+// Collectors
+export { createCollector, createMiddleware, createEventListener } from './collector.js';
 export type { CollectorConfig } from './collector.js';
 
 // Retention
@@ -39,7 +39,8 @@ export type { StandaloneOptions } from './standalone.js';
 export { OBSERVE_API_PATHS } from './api-types.js';
 export type {
   CostBreakdown, CostByModel, CostTrendPoint, CacheEfficiency,
-  ToolStat, GuardStat, GuardDecisionRecord,
+  ToolStat, GuardStat, GuardDecisionRecord, GuardByToolStat,
   CompactionRecord, CompactionStats,
-  InferenceRecord, SessionSummary, AgentStats, CleanupResult,
+  InferenceRecord, TurnSummary, SessionSummary, AgentStats, AgentDetail,
+  DimensionFilter, CleanupResult,
 } from './api-types.js';
