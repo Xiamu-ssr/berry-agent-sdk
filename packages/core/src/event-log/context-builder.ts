@@ -11,11 +11,15 @@
 import type { Message, ContentBlock, ToolResultContent } from '../types.js';
 import type { ContextStrategy, SessionEvent } from './types.js';
 
-/** Event types that map directly to conversation messages. */
+/**
+ * Event types that map directly to conversation messages.
+ * NOTE: 'tool_use' is excluded because tool_use blocks are already embedded
+ * inside assistant_message.content (as ContentBlock[]). Including separate
+ * tool_use events would duplicate tool_use ids, causing provider errors.
+ */
 const CONVERSATION_EVENT_TYPES = new Set([
   'user_message',
   'assistant_message',
-  'tool_use',
   'tool_result',
 ]);
 
@@ -60,27 +64,6 @@ export class DefaultContextStrategy implements ContextStrategy {
             createdAt: event.timestamp,
           });
           break;
-
-        case 'tool_use': {
-          // tool_use is part of the assistant's response, append to last assistant message
-          const block: ContentBlock = {
-            type: 'tool_use',
-            id: event.toolUseId,
-            name: event.name,
-            input: event.input,
-          };
-          const lastMsg = rawMessages[rawMessages.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant' && Array.isArray(lastMsg.content)) {
-            lastMsg.content.push(block);
-          } else {
-            rawMessages.push({
-              role: 'assistant',
-              content: [block],
-              createdAt: event.timestamp,
-            });
-          }
-          break;
-        }
 
         case 'tool_result': {
           // tool_result is a user message containing tool_result blocks

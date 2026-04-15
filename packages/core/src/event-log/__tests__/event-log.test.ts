@@ -247,23 +247,29 @@ describe('DefaultContextStrategy', () => {
   });
 
   it('handles tool_use and tool_result events correctly', () => {
+    // In real usage, assistant_message.content already contains tool_use blocks.
+    // Separate tool_use events are logged for observability but SKIPPED by the
+    // context builder to avoid duplicate tool_use ids.
     const events: SessionEvent[] = [
       { id: 'e1', timestamp: 1, sessionId: 's', type: 'user_message', content: 'use echo' },
-      { id: 'e2', timestamp: 2, sessionId: 's', type: 'assistant_message', content: [{ type: 'text', text: 'calling echo' }] },
+      { id: 'e2', timestamp: 2, sessionId: 's', type: 'assistant_message', content: [
+        { type: 'text', text: 'calling echo' },
+        { type: 'tool_use', id: 'tu_1', name: 'echo', input: { value: 'test' } },
+      ]},
       { id: 'e3', timestamp: 3, sessionId: 's', type: 'tool_use', name: 'echo', toolUseId: 'tu_1', input: { value: 'test' } },
       { id: 'e4', timestamp: 4, sessionId: 's', type: 'tool_result', toolUseId: 'tu_1', content: 'echoed: test', isError: false },
       { id: 'e5', timestamp: 5, sessionId: 's', type: 'assistant_message', content: [{ type: 'text', text: 'done' }] },
     ];
 
     const messages = strategy.buildMessages(events);
-    // user_message, assistant (text + tool_use merged), user (tool_result), assistant (done)
+    // user_message, assistant (text + tool_use already in content), user (tool_result), assistant (done)
     expect(messages).toHaveLength(4);
 
     // First message: user
     expect(messages[0].role).toBe('user');
     expect(messages[0].content).toBe('use echo');
 
-    // Second message: assistant (text + tool_use merged)
+    // Second message: assistant (text + tool_use from original content)
     expect(messages[1].role).toBe('assistant');
     const assistantContent = messages[1].content as Array<{ type: string }>;
     expect(assistantContent).toHaveLength(2);
@@ -338,6 +344,7 @@ describe('DefaultContextStrategy', () => {
   });
 
   it('groups multiple tool_result events into one user message', () => {
+    // assistant_message already contains tool_use blocks; separate tool_use events are skipped
     const events: SessionEvent[] = [
       { id: 'e1', timestamp: 1, sessionId: 's', type: 'user_message', content: 'run tools' },
       { id: 'e2', timestamp: 2, sessionId: 's', type: 'assistant_message', content: [
@@ -351,8 +358,16 @@ describe('DefaultContextStrategy', () => {
     ];
 
     const messages = strategy.buildMessages(events);
-    // user, assistant (with tool_use blocks merged), user (tool_results grouped)
+    // user, assistant (tool_use blocks from content), user (tool_results grouped)
     expect(messages).toHaveLength(3);
+
+    // Assistant has tool_use blocks from original content
+    const assistantContent = messages[1].content as Array<{ type: string }>;
+    expect(assistantContent).toHaveLength(2);
+    expect(assistantContent[0].type).toBe('tool_use');
+    expect(assistantContent[1].type).toBe('tool_use');
+
+    // tool_results grouped
     const toolResultMsg = messages[2];
     expect(toolResultMsg.role).toBe('user');
     const blocks = toolResultMsg.content as Array<{ type: string; toolUseId: string }>;
