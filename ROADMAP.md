@@ -96,22 +96,23 @@
 
 > 详细设计见 PLAN-V0.3.md
 
-### Phase 1: Session Event Log (core)
-- [ ] SessionEvent 类型定义（Berry 格式，含 tool_use/tool_result 全文）
-- [ ] EventLogStore 接口 + FileEventLogStore（JSONL 实现）
-- [ ] Context Window Builder（从 Event Log 派生 messages[]）
-- [ ] Agent.query() 改造：每个 action → append event
-- [ ] Compaction 改造：只影响 context window，event log 不动
-- [ ] 向后兼容：旧 SessionStore → EventLogStore 迁移
+### Phase 1: Session Event Log (core) ✅
+- [x] SessionEvent 类型定义（Berry 格式，含 tool_use/tool_result 全文）
+- [x] EventLogStore 接口 + FileEventLogStore（JSONL 实现）
+- [x] Context Window Builder（从 Event Log 派生 messages[]）
+- [x] Agent.query() 改造：每个 action → append event
+- [x] Compaction 改造：只影响 context window，event log 不动
+- [x] 向后兼容：无 eventLogStore 时行为完全不变
+- [x] context builder tool_use 去重修复（1146d06）
 
-### Phase 2: Agent Identity & Workspace (core)
-- [ ] Agent Workspace 目录规范（agent.json + AGENT.md + MEMORY.md + .berry/）
-- [ ] AgentMemory 接口 + FileAgentMemory
-- [ ] ProjectContext 接口（可选绑定）
-- [ ] Agent 创建时自动初始化 workspace
+### Phase 2: Agent Identity & Workspace (core) ✅
+- [x] Agent Workspace 目录规范（agent.json + AGENT.md + MEMORY.md + .berry/）
+- [x] AgentMemory 接口 + FileAgentMemory
+- [x] ProjectContext 接口（可选绑定）
+- [x] Agent 创建时自动初始化 workspace
 
-### Phase 3: Observe 分层 (observe)
-- [ ] collector/ 和 analyzer/ 目录分离
+### Phase 3: Observe 分层 (observe) ✅
+- [x] collector/ 和 analyzer/ 目录分离
 - [ ] metrics.ts — 派生指标（tool 成功率、重试率、cost efficiency）
 - [ ] Dark mode 主题支持（CSS 变量）
 - [ ] npm publish
