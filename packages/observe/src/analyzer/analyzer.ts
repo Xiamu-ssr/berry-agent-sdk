@@ -3,8 +3,8 @@
 // ============================================================
 
 import { eq, sql, desc, gte, and } from 'drizzle-orm';
-import type { ObserveDB } from './db.js';
-import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
+import type { ObserveDB } from '../collector/db.js';
+import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from '../collector/schema.js';
 
 // Re-export all API types from shared definition (single source of truth).
 export type {

@@ -191,6 +191,13 @@ export interface AgentConfig {
    * When not set, behavior is identical to the original messages[] approach.
    */
   eventLogStore?: import('./event-log/types.js').EventLogStore;
+  /**
+   * Agent workspace directory. When set, enables event log, memory, and workspace features.
+   * Auto-initializes workspace structure on first use (unless autoInit is false).
+   */
+  workspace?: string;
+  /** Project root directory (optional binding for shared project context). */
+  project?: string;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
   enableDelegate?: boolean;
   /** Enable built-in spawn_agent tool (default: true for top-level agents, always false for sub-agents) */
@@ -249,6 +256,13 @@ export interface AgentCreateConfig {
    * When not set, behavior is identical to the original messages[] approach.
    */
   eventLogStore?: import('./event-log/types.js').EventLogStore;
+  /**
+   * Agent workspace directory. When set, enables event log, memory, and workspace features.
+   * Auto-initializes workspace structure on first use.
+   */
+  workspace?: string;
+  /** Project root directory (optional binding for shared project context). */
+  project?: string;
   /** Middleware pipeline. */
   middleware?: Middleware[];
   /** Event handler. */

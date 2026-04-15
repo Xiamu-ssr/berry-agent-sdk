@@ -44,6 +44,10 @@ export type {
   ContextStrategy,
 } from './event-log/index.js';
 
+// Workspace
+export { FileAgentMemory, FileProjectContext, initWorkspace } from './workspace/index.js';
+export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata } from './workspace/index.js';
+
 // Skills
 export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
 export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';

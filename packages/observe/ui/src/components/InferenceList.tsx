@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Clock, Cpu, ArrowRight, Filter } from 'lucide-react';
 import { useObserveApi } from '../hooks/useObserve';
-import type { InferenceRecord } from '../../../src/api-types';
+import type { InferenceRecord } from '../../../src/analyzer/api-types';
 
 // Use shared InferenceRecord type (subset used for list display)
 type InferenceRow = Pick<InferenceRecord,

@@ -3,11 +3,11 @@
 // ============================================================
 
 import type { Middleware, AgentEvent } from '@berry-agent/core';
-import { createDatabase, type ObserveDB } from './db.js';
-import { createCollector } from './collector.js';
-import { Analyzer } from './analyzer.js';
-import { cleanup } from './retention.js';
-import type { ModelPricing } from './pricing.js';
+import { createDatabase, type ObserveDB } from './collector/db.js';
+import { createCollector } from './collector/collector.js';
+import { Analyzer } from './analyzer/analyzer.js';
+import { cleanup } from './collector/retention.js';
+import type { ModelPricing } from './collector/pricing.js';
 
 export interface ObserverConfig {
   /** Path to SQLite database file. Defaults to ':memory:'. */

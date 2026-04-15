@@ -30,8 +30,13 @@ import type {
 } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
+import { FileEventLogStore } from './event-log/jsonl-store.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
+import type { AgentMemory, ProjectContext } from './workspace/types.js';
+import { FileAgentMemory } from './workspace/file-memory.js';
+import { FileProjectContext } from './workspace/file-project.js';
+import { initWorkspace } from './workspace/initializer.js';
 import { compact, estimateTokens, type ForkContext } from './compaction/compactor.js';
 import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
 import type { Skill } from './skills/types.js';
@@ -66,6 +71,10 @@ export class Agent {
   private middleware: Middleware[];
   private eventLogStore?: EventLogStore;
   private contextStrategy: ContextStrategy;
+  private _memory?: AgentMemory;
+  private _projectContext?: ProjectContext;
+  private _workspaceRoot?: string;
+  private _workspaceReady?: Promise<void>;
   private _children = new Map<string, Agent>();
   private _isSubAgent = false;
   private _lastSessionId?: string;
@@ -86,9 +95,29 @@ export class Agent {
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
     this.providerConfig = config.provider;
-    this.eventLogStore = config.eventLogStore;
     this.contextStrategy = new DefaultContextStrategy();
     this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
+
+    // Workspace: auto-wire event log, memory, and system prompt from AGENT.md
+    if (config.workspace) {
+      this._workspaceRoot = config.workspace;
+      // Auto-create EventLogStore if user didn't provide one
+      if (!config.eventLogStore) {
+        this.eventLogStore = new FileEventLogStore(config.workspace);
+      } else {
+        this.eventLogStore = config.eventLogStore;
+      }
+      this._memory = new FileAgentMemory(config.workspace);
+      // Kick off workspace init in background (idempotent); query() awaits before first use
+      this._workspaceReady = initWorkspace(config.workspace).then(() => {});
+    } else {
+      this.eventLogStore = config.eventLogStore;
+    }
+
+    // Project context
+    if (config.project) {
+      this._projectContext = new FileProjectContext(config.project);
+    }
 
     // Register tools
     for (const tool of config.tools ?? []) {
@@ -270,6 +299,8 @@ export class Agent {
       compaction: config.compaction,
       toolGuard: config.toolGuard,
       eventLogStore: config.eventLogStore,
+      workspace: config.workspace,
+      project: config.project,
       middleware: config.middleware,
       onEvent: config.onEvent,
     });
@@ -282,6 +313,9 @@ export class Agent {
    * and rebuilds context from the event log via ContextStrategy.
    */
   async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
+    // Ensure workspace is initialized before first query
+    if (this._workspaceReady) await this._workspaceReady;
+
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
     const emit = (event: AgentEvent) => this.emit(event, options?.onEvent);
@@ -1065,6 +1099,16 @@ export class Agent {
     return this._isSubAgent;
   }
 
+  /** Agent memory (available when workspace is configured). */
+  get memory(): AgentMemory | undefined {
+    return this._memory;
+  }
+
+  /** Project context (available when project is configured). */
+  get projectContext(): ProjectContext | undefined {
+    return this._projectContext;
+  }
+
   // ===== Internal Methods =====
 
   private getMiddlewareContext(session: Session): MiddlewareContext {
@@ -1126,6 +1170,24 @@ export class Agent {
     if (override) return normalizeSystemPrompt(override);
 
     const base = [...basePrompt];
+
+    // Prepend project context if available
+    if (this._projectContext) {
+      const ctx = await this._projectContext.loadContext();
+      if (ctx) base.unshift(ctx);
+    }
+
+    // Append AGENT.md from workspace (if exists)
+    if (this._workspaceRoot) {
+      try {
+        const { readFile } = await import('node:fs/promises');
+        const { join } = await import('node:path');
+        const agentMd = await readFile(join(this._workspaceRoot, 'AGENT.md'), 'utf-8');
+        if (agentMd.trim()) base.push(agentMd);
+      } catch {
+        // AGENT.md doesn't exist or is empty — skip
+      }
+    }
 
     // Legacy skill loading (deprecated: injects full content)
     if (this.legacySkills.length > 0) {

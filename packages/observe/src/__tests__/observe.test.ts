@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createDatabase } from '../db.js';
-import { createMiddleware, createEventListener } from '../collector.js';
-import { Analyzer } from '../analyzer.js';
-import { cleanup } from '../retention.js';
-import { calculateCost, MODEL_PRICING } from '../pricing.js';
+import { createDatabase } from '../collector/db.js';
+import { createMiddleware, createEventListener } from '../collector/collector.js';
+import { Analyzer } from '../analyzer/analyzer.js';
+import { cleanup } from '../collector/retention.js';
+import { calculateCost, MODEL_PRICING } from '../collector/pricing.js';
 import { createObserver } from '../observer.js';
-import { sessions, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from '../schema.js';
-import type { ObserveDB } from '../db.js';
+import { sessions, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from '../collector/schema.js';
+import type { ObserveDB } from '../collector/db.js';
 import type {
   ProviderRequest,
   ProviderResponse,
