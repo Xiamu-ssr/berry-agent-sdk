@@ -66,32 +66,63 @@
 
 ---
 
-## v0.2 (planned)
+## v0.2 ✅
 
 ### @berry-agent/core
-- [ ] Session as event log (append-only, getEvents/emitEvent)
-- [ ] Agent lifecycle hooks (onBeforeQuery, onAfterQuery)
-- [ ] Skill self-creation (agent writes new SKILL.md at runtime → L3+ on evolvability ladder)
-- [ ] Context window management (selective retrieval, context engineering transforms)
-
-### @berry-agent/safe
-- [ ] Credential Isolation middleware (vault + transparent injection)
-- [ ] Sub-agent handoff checks (outbound classifier at delegate, return check at result)
-- [ ] Sandbox policy interface (network/filesystem/process declarations)
+- [x] Stream wire format fix (anthropic.ts + openai.ts include rawRequest/rawResponse)
+- [x] delegate FK crash fix (sessionId generated outside loop)
+- [x] observe middleware input pollution fix (WeakMap instead of __observeKey)
+- [x] spawn sessionStore inheritance
 
 ### @berry-agent/observe
-- [ ] npm publish (@berry-agent/observe + UI build)
-- [ ] OpenTelemetry export (spans)
-- [ ] Session replay viewer
+- [x] **Turn dimension** — turns table, turnId FK on llm_calls/tool_calls/guard_decisions
+- [x] **createCollector()** unified factory (shared turnId state between middleware + eventListener)
+- [x] **Multi-dimension analyzer** — DimensionFilter { sessionId?, agentId?, turnId? }
+- [x] New methods: turnList(), turnSummary(), guardStatsByTool(), agentDetail()
+- [x] inferenceList() gains model/since/until filters
+- [x] **New API endpoints**: /turns, /turns/:id, /turns/:id/inferences, /guard/by-tool, /agents/:id, /agents/:id/sessions
+- [x] **New UI components**: MiniStats, TurnList, TurnDetail, SessionDetail, AgentDetail
+- [x] **Enhanced UI**: ToolGuardAudit "By Tool" tab, InferenceList filter bar, ObserveApp breadcrumb navigation
+- [x] **API types**: TurnSummary, GuardByToolStat, AgentDetail, DimensionFilter
 
-### @berry-agent/tools-common
+### Numbers (v0.2)
+- **Source**: 9,094 lines (+1,384 from v0.1)
+- **Tests**: 33 observe + 183 core/safe/mcp/tools = 216 total, all passing
+- **Commits**: 68acb62 (observe v2), f07cd8a (observer fix), 595e398 (delegate/spawn fixes)
+
+---
+
+## v0.3 (planned) — Session Event Log + Agent Identity
+
+> 详细设计见 PLAN-V0.3.md
+
+### Phase 1: Session Event Log (core)
+- [ ] SessionEvent 类型定义（Berry 格式，含 tool_use/tool_result 全文）
+- [ ] EventLogStore 接口 + FileEventLogStore（JSONL 实现）
+- [ ] Context Window Builder（从 Event Log 派生 messages[]）
+- [ ] Agent.query() 改造：每个 action → append event
+- [ ] Compaction 改造：只影响 context window，event log 不动
+- [ ] 向后兼容：旧 SessionStore → EventLogStore 迁移
+
+### Phase 2: Agent Identity & Workspace (core)
+- [ ] Agent Workspace 目录规范（agent.json + AGENT.md + MEMORY.md + .berry/）
+- [ ] AgentMemory 接口 + FileAgentMemory
+- [ ] ProjectContext 接口（可选绑定）
+- [ ] Agent 创建时自动初始化 workspace
+
+### Phase 3: Observe 分层 (observe)
+- [ ] collector/ 和 analyzer/ 目录分离
+- [ ] metrics.ts — 派生指标（tool 成功率、重试率、cost efficiency）
+- [ ] Dark mode 主题支持（CSS 变量）
 - [ ] npm publish
-- [ ] Tools extension packages (e.g., tools-ext-mac)
 
-### @berry-agent/team (future)
-- [ ] Multi-agent orchestration (task-based delegation)
-- [ ] Inter-agent messaging (mailbox pattern)
-- [ ] Role-based teams (lead + teammates)
+### Future (v0.4+)
+- [ ] Skill self-creation (L3+ on evolvability ladder)
+- [ ] Credential Isolation middleware
+- [ ] OpenTelemetry export
+- [ ] Event Log → diary 自动摘要
+- [ ] Event Log → memory search 集成
+- [ ] Multi-agent orchestration protocol
 
 ---
 
