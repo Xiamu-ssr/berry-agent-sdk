@@ -3,6 +3,8 @@
 // ============================================================
 
 export { Analyzer } from './analyzer.js';
+export { MetricsCalculator } from './metrics.js';
+export type { TurnMetrics, SessionMetrics, AgentMetrics } from './metrics.js';
 
 export { OBSERVE_API_PATHS } from './api-types.js';
 export type {

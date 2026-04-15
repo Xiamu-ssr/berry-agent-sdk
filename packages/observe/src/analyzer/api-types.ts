@@ -29,6 +29,9 @@ export const OBSERVE_API_PATHS = {
   TURN_DETAIL: '/turns/:id',
   TURN_INFERENCES: '/turns/:id/inferences',
   CLEANUP: '/cleanup',
+  METRICS_TURN: '/metrics/turn/:turnId',
+  METRICS_SESSION: '/metrics/session/:sessionId',
+  METRICS_AGENT: '/metrics/agent/:agentId',
 } as const;
 
 // ----- Response Types -----

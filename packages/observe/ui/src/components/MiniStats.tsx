@@ -58,16 +58,16 @@ function MiniCard({ icon, label, value, sub, color }: {
   icon: React.ReactNode; label: string; value: string; sub: string; color?: string;
 }) {
   const borderMap: Record<string, string> = {
-    indigo: 'border-indigo-200 bg-indigo-50',
-    green: 'border-green-200 bg-green-50',
-    red: 'border-red-200 bg-red-50',
-    purple: 'border-purple-200 bg-purple-50',
+    indigo: 'border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/30',
+    green: 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/30',
+    red: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/30',
+    purple: 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/30',
   };
   const textMap: Record<string, string> = {
-    indigo: 'text-indigo-700',
-    green: 'text-green-700',
-    red: 'text-red-700',
-    purple: 'text-purple-700',
+    indigo: 'text-indigo-700 dark:text-indigo-300',
+    green: 'text-green-700 dark:text-green-300',
+    red: 'text-red-700 dark:text-red-300',
+    purple: 'text-purple-700 dark:text-purple-300',
   };
   const cls = borderMap[color ?? 'indigo'] ?? borderMap['indigo'];
   const txt = textMap[color ?? 'indigo'] ?? textMap['indigo'];
@@ -75,9 +75,9 @@ function MiniCard({ icon, label, value, sub, color }: {
     <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${cls} min-w-[120px]`}>
       <span className={txt}>{icon}</span>
       <div>
-        <div className="text-xs text-gray-500">{label}</div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">{label}</div>
         <div className={`text-sm font-bold ${txt}`}>{value}</div>
-        {sub && <div className="text-xs text-gray-400">{sub}</div>}
+        {sub && <div className="text-xs text-gray-400 dark:text-gray-500">{sub}</div>}
       </div>
     </div>
   );

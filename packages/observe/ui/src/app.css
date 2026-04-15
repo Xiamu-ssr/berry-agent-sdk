@@ -1,1 +1,40 @@
 @import "tailwindcss";
+
+/* Dark mode: use data-theme attribute (controlled by parent app or auto-detection) */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ---- Observe Theme Variables ---- */
+
+:root, [data-theme="light"] {
+  --observe-bg: #ffffff;
+  --observe-bg-secondary: #f9fafb;
+  --observe-text: #111827;
+  --observe-text-secondary: #6b7280;
+  --observe-border: #e5e7eb;
+  --observe-accent: #3b82f6;
+  --observe-accent-hover: #2563eb;
+  --observe-success: #10b981;
+  --observe-error: #ef4444;
+  --observe-warning: #f59e0b;
+  --observe-card-bg: #ffffff;
+  --observe-card-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  --observe-code-bg: #f3f4f6;
+  --observe-highlight-bg: #eff6ff;
+}
+
+[data-theme="dark"] {
+  --observe-bg: #111827;
+  --observe-bg-secondary: #1f2937;
+  --observe-text: #f9fafb;
+  --observe-text-secondary: #9ca3af;
+  --observe-border: #374151;
+  --observe-accent: #60a5fa;
+  --observe-accent-hover: #93c5fd;
+  --observe-success: #34d399;
+  --observe-error: #f87171;
+  --observe-warning: #fbbf24;
+  --observe-card-bg: #1f2937;
+  --observe-card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --observe-code-bg: #374151;
+  --observe-highlight-bg: #1e3a5f;
+}

@@ -14,7 +14,7 @@ export function GlobalDashboard({ baseUrl, onNavigate }: Props) {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold text-gray-800">📊 Overview</h2>
+      <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">📊 Overview</h2>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -55,18 +55,22 @@ function StatCard({ icon, label, value, sub, color, onClick }: {
   icon: React.ReactNode; label: string; value: string; sub: string; color?: string;
   onClick?: () => void;
 }) {
-  const borderColor = color === 'red' ? 'border-red-200' : color === 'green' ? 'border-green-200' : 'border-gray-200';
+  const borderColor = color === 'red'
+    ? 'border-red-200 dark:border-red-800'
+    : color === 'green'
+      ? 'border-green-200 dark:border-green-800'
+      : 'border-gray-200 dark:border-gray-700';
   return (
     <div
-      className={`bg-white rounded-xl border ${borderColor} p-4 cursor-pointer hover:shadow-md transition-shadow`}
+      className={`bg-white dark:bg-gray-800 rounded-xl border ${borderColor} p-4 cursor-pointer hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-black/20 transition-shadow`}
       onClick={onClick}
     >
-      <div className="flex items-center gap-2 text-gray-500 mb-2">
+      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 mb-2">
         {icon}
         <span className="text-sm font-medium">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-gray-800">{value}</div>
-      <div className="text-xs text-gray-400 mt-1">{sub}</div>
+      <div className="text-2xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
+      <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{sub}</div>
     </div>
   );
 }

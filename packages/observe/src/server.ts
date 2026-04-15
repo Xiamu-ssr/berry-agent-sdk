@@ -6,6 +6,7 @@
 
 import { Router } from 'express';
 import type { Observer } from './observer.js';
+import { MetricsCalculator } from './analyzer/metrics.js';
 
 /**
  * Create an Express Router that serves observe API endpoints.
@@ -14,6 +15,7 @@ import type { Observer } from './observer.js';
 export function createObserveRouter(observer: Observer): Router {
   const router = Router();
   const { analyzer } = observer;
+  const metrics = new MetricsCalculator(analyzer, observer.db);
 
   // ===== Cost =====
   router.get('/cost', (req, res) => {
@@ -130,6 +132,25 @@ export function createObserveRouter(observer: Observer): Router {
   router.get('/agents/:id/sessions', (req, res) => {
     const limit = parseInt(req.query.limit as string) || 20;
     res.json(analyzer.recentSessions(limit, req.params.id));
+  });
+
+  // ===== Derived Metrics =====
+  router.get('/metrics/turn/:turnId', (req, res) => {
+    const result = metrics.turnMetrics(req.params.turnId);
+    if (!result) return res.status(404).json({ error: 'Not found' });
+    res.json(result);
+  });
+
+  router.get('/metrics/session/:sessionId', (req, res) => {
+    const result = metrics.sessionMetrics(req.params.sessionId);
+    if (!result) return res.status(404).json({ error: 'Not found' });
+    res.json(result);
+  });
+
+  router.get('/metrics/agent/:agentId', (req, res) => {
+    const result = metrics.agentMetrics(req.params.agentId);
+    if (!result) return res.status(404).json({ error: 'Not found' });
+    res.json(result);
   });
 
   // ===== Cleanup =====

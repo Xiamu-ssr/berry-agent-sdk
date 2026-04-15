@@ -8,6 +8,8 @@ export type { Observer, ObserverConfig } from './observer.js';
 
 // Analyzer
 export { Analyzer } from './analyzer/analyzer.js';
+export { MetricsCalculator } from './analyzer/metrics.js';
+export type { TurnMetrics, SessionMetrics, AgentMetrics } from './analyzer/metrics.js';
 
 // Database
 export { createDatabase } from './collector/db.js';

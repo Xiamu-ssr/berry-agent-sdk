@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BarChart3, DollarSign, Zap, Shield, Layers, Cpu, MessageSquare, Bot } from 'lucide-react';
 import { GlobalDashboard } from './GlobalDashboard';
 import { CostTrend } from './CostTrend';
@@ -58,23 +58,32 @@ function getBreadcrumbs(view: View): BreadcrumbItem[] {
 export function ObserveApp({ baseUrl }: Props) {
   const [view, setView] = useState<View>({ page: 'overview' });
 
+  // Auto-detect dark mode from parent or system preference
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!root.getAttribute('data-theme')) {
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    }
+  }, []);
+
   const nav = (v: View) => setView(v);
 
   const breadcrumbs = getBreadcrumbs(view);
 
   return (
-    <div className="flex h-full bg-gray-50">
+    <div className="flex h-full bg-gray-50 dark:bg-gray-900">
       {/* Sidebar */}
-      <div className="w-48 bg-white border-r border-gray-200 flex flex-col py-4">
+      <div className="w-48 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col py-4">
         <div className="px-4 mb-4">
-          <h2 className="text-sm font-bold text-gray-800">🔬 Observe</h2>
+          <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">🔬 Observe</h2>
         </div>
         <NavItem icon={<BarChart3 size={16} />} label="Overview" active={view.page === 'overview'} onClick={() => nav({ page: 'overview' })} />
         <NavItem icon={<Cpu size={16} />} label="Inferences" active={view.page === 'inferences' || view.page === 'inference-detail'} onClick={() => nav({ page: 'inferences' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Sessions" active={view.page === 'sessions' || view.page === 'session-detail'} onClick={() => nav({ page: 'sessions' })} />
         <NavItem icon={<Bot size={16} />} label="Agents" active={view.page === 'agents' || view.page === 'agent-detail'} onClick={() => nav({ page: 'agents' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Turns" active={view.page === 'turn-list' || view.page === 'turn-detail'} onClick={() => nav({ page: 'turn-list' })} />
-        <div className="h-px bg-gray-200 my-2 mx-4" />
+        <div className="h-px bg-gray-200 dark:bg-gray-700 my-2 mx-4" />
         <NavItem icon={<DollarSign size={16} />} label="Cost" active={view.page === 'cost'} onClick={() => nav({ page: 'cost' })} />
         <NavItem icon={<Zap size={16} />} label="Cache" active={view.page === 'cache'} onClick={() => nav({ page: 'cache' })} />
         <NavItem icon={<Shield size={16} />} label="Guard" active={view.page === 'guard'} onClick={() => nav({ page: 'guard' })} />
@@ -85,19 +94,19 @@ export function ObserveApp({ baseUrl }: Props) {
       <div className="flex-1 overflow-y-auto">
         {/* Breadcrumbs */}
         {breadcrumbs.length > 1 && (
-          <div className="flex items-center gap-1 px-6 pt-4 pb-0 text-xs text-gray-500">
+          <div className="flex items-center gap-1 px-6 pt-4 pb-0 text-xs text-gray-500 dark:text-gray-400">
             {breadcrumbs.map((crumb, i) => (
               <span key={i} className="flex items-center gap-1">
-                {i > 0 && <span className="text-gray-300">/</span>}
+                {i > 0 && <span className="text-gray-300 dark:text-gray-600">/</span>}
                 {i < breadcrumbs.length - 1 ? (
                   <button
                     onClick={() => setView(crumb.view)}
-                    className="text-indigo-500 hover:text-indigo-700 hover:underline"
+                    className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 hover:underline"
                   >
                     {crumb.label}
                   </button>
                 ) : (
-                  <span className="text-gray-700 font-medium">{crumb.label}</span>
+                  <span className="text-gray-700 dark:text-gray-200 font-medium">{crumb.label}</span>
                 )}
               </span>
             ))}
@@ -196,7 +205,9 @@ function NavItem({ icon, label, active, onClick }: {
     <button
       onClick={onClick}
       className={`flex items-center gap-2 px-4 py-2 text-sm w-full text-left transition-colors ${
-        active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
+        active
+          ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium'
+          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
       }`}
     >
       {icon} {label}
