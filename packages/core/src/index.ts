@@ -20,6 +20,30 @@ export type { ForkContext } from './compaction/compactor.js';
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
 
+// Event Log
+export { FileEventLogStore, DefaultContextStrategy } from './event-log/index.js';
+export type {
+  BaseEvent,
+  SessionEvent,
+  SessionEventType,
+  UserMessageEvent,
+  AssistantMessageEvent,
+  ToolUseEvent,
+  ToolResultEvent,
+  ThinkingEvent,
+  QueryStartEvent,
+  QueryEndEvent,
+  CompactionMarkerEvent,
+  GuardDecisionEvent,
+  DelegateStartEvent,
+  DelegateEndEvent,
+  ApiCallEvent,
+  MetadataEvent,
+  GetEventsOptions,
+  EventLogStore,
+  ContextStrategy,
+} from './event-log/index.js';
+
 // Skills
 export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
 export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';

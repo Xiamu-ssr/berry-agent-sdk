@@ -184,6 +184,13 @@ export interface AgentConfig {
    * - Directory scoping
    */
   toolGuard?: ToolGuard;
+  /**
+   * Event log store for append-only session event recording.
+   * When set, every action in query() is appended to the event log,
+   * and context windows are rebuilt from the log via ContextStrategy.
+   * When not set, behavior is identical to the original messages[] approach.
+   */
+  eventLogStore?: import('./event-log/types.js').EventLogStore;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
   enableDelegate?: boolean;
   /** Enable built-in spawn_agent tool (default: true for top-level agents, always false for sub-agents) */
@@ -237,6 +244,11 @@ export interface AgentCreateConfig {
   compaction?: CompactionConfig;
   /** Tool guard. */
   toolGuard?: ToolGuard;
+  /**
+   * Event log store. When set, enables append-only event recording.
+   * When not set, behavior is identical to the original messages[] approach.
+   */
+  eventLogStore?: import('./event-log/types.js').EventLogStore;
   /** Middleware pipeline. */
   middleware?: Middleware[];
   /** Event handler. */

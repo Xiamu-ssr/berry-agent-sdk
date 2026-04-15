@@ -28,6 +28,8 @@ import type {
   MiddlewareContext,
   ToolDefinition,
 } from './types.js';
+import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
+import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { compact, estimateTokens, type ForkContext } from './compaction/compactor.js';
@@ -43,6 +45,11 @@ import {
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
 
+/** Internal config extension for sub-agent creation (not part of public API). */
+interface InternalAgentConfig extends AgentConfig {
+  _isSubAgent?: boolean;
+}
+
 export class Agent {
   private provider: Provider;
   private providerConfig: ProviderConfig;
@@ -57,6 +64,8 @@ export class Agent {
   private onEvent?: (event: AgentEvent) => void;
   private toolGuard?: ToolGuard;
   private middleware: Middleware[];
+  private eventLogStore?: EventLogStore;
+  private contextStrategy: ContextStrategy;
   private _children = new Map<string, Agent>();
   private _isSubAgent = false;
   private _lastSessionId?: string;
@@ -77,7 +86,9 @@ export class Agent {
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
     this.providerConfig = config.provider;
-    this._isSubAgent = (config as any)._isSubAgent ?? false;
+    this.eventLogStore = config.eventLogStore;
+    this.contextStrategy = new DefaultContextStrategy();
+    this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
 
     // Register tools
     for (const tool of config.tools ?? []) {
@@ -258,6 +269,7 @@ export class Agent {
       sessionStore,
       compaction: config.compaction,
       toolGuard: config.toolGuard,
+      eventLogStore: config.eventLogStore,
       middleware: config.middleware,
       onEvent: config.onEvent,
     });
@@ -266,12 +278,30 @@ export class Agent {
   /**
    * Send a message to the agent and get a response.
    * Handles: tool loop, compaction, cache, session persistence.
+   * When eventLogStore is configured, appends events for every action
+   * and rebuilds context from the event log via ContextStrategy.
    */
   async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
     const emit = (event: AgentEvent) => this.emit(event, options?.onEvent);
+    const log = this.eventLogStore;
+    const turnId = log ? generateTurnId() : undefined;
 
+    // Helper: build and append a session event (no-op when log is not configured)
+    const makeBase = () => ({
+      id: generateEventId(),
+      timestamp: Date.now(),
+      sessionId: session.id,
+      turnId,
+    });
+    const appendEvent = async (event: SessionEvent): Promise<void> => {
+      if (!log) return;
+      await log.append(session.id, event);
+    };
+
+    // Event log: query_start
+    await appendEvent({ ...makeBase(), type: 'query_start', prompt });
     emit({ type: 'query_start', prompt, sessionId: session.id });
 
     // 2. Add user message
@@ -280,6 +310,7 @@ export class Agent {
       content: prompt,
       createdAt: Date.now(),
     });
+    await appendEvent({ ...makeBase(), type: 'user_message', content: prompt });
 
     // 3. Resolve tools for this query
     const allowedTools = this.resolveAllowedTools(options?.allowedTools);
@@ -325,6 +356,14 @@ export class Agent {
         session.metadata.compactionCount++;
         compacted = true;
 
+        // Event log: compaction_marker
+        await appendEvent({
+          ...makeBase(),
+          type: 'compaction_marker',
+          strategy: 'threshold',
+          tokensFreed: result.tokensFreed,
+        });
+
         emit({
           type: 'compaction',
           layersApplied: result.layersApplied,
@@ -338,10 +377,15 @@ export class Agent {
         });
       }
 
+      // If event log is configured, rebuild messages from the log
+      const messagesForProvider = log
+        ? this.contextStrategy.buildMessages(await log.getEvents(session.id))
+        : session.messages;
+
       // 5b. Call provider (with PTL recovery)
       emit({
         type: 'api_call',
-        messages: session.messages.length,
+        messages: messagesForProvider.length,
         tools: allowedTools.length,
       });
 
@@ -351,7 +395,7 @@ export class Agent {
       while (true) {
         let providerRequest: ProviderRequest = {
           systemPrompt: fullSystemPrompt,
-          messages: session.messages,
+          messages: messagesForProvider,
           tools: allowedTools.map(t => t.definition),
           signal: options?.abortSignal,
           responseFormat: options?.responseFormat,
@@ -404,6 +448,14 @@ export class Agent {
             session.metadata.compactionCount++;
             compacted = true;
 
+            // Event log: compaction_marker (PTL recovery)
+            await appendEvent({
+              ...makeBase(),
+              type: 'compaction_marker',
+              strategy: 'overflow_retry',
+              tokensFreed: ptlResult.tokensFreed,
+            });
+
             emit({
               type: 'compaction',
               layersApplied: ptlResult.layersApplied,
@@ -421,6 +473,15 @@ export class Agent {
           throw err; // Non-PTL error or retries exhausted
         }
       }
+
+      // Event log: api_call metadata
+      await appendEvent({
+        ...makeBase(),
+        type: 'api_call',
+        model: this.providerConfig.model,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+      });
 
       emit({
         type: 'api_response',
@@ -460,6 +521,7 @@ export class Agent {
         content: response.content,
         createdAt: Date.now(),
       });
+      await appendEvent({ ...makeBase(), type: 'assistant_message', content: response.content });
 
       // 5e. If no tool calls → done
       if (response.stopReason !== 'tool_use') {
@@ -496,6 +558,15 @@ export class Agent {
             };
           }
 
+          // Event log: tool_use
+          await appendEvent({
+            ...makeBase(),
+            type: 'tool_use',
+            name: toolUse.name,
+            toolUseId: toolUse.id,
+            input: toolUse.input,
+          });
+
           // Tool guard check
           let guardedInput = toolUse.input;
           if (this.toolGuard) {
@@ -512,6 +583,14 @@ export class Agent {
             });
             const guardDuration = Date.now() - guardStart;
 
+            // Event log: guard_decision
+            await appendEvent({
+              ...makeBase(),
+              type: 'guard_decision',
+              toolName: toolUse.name,
+              decision,
+            });
+
             emit({
               type: 'guard_decision',
               toolName: toolUse.name,
@@ -522,11 +601,20 @@ export class Agent {
             });
 
             if (decision.action === 'deny') {
+              const denyContent = `Permission denied: ${decision.reason}`;
+              // Event log: tool_result (denied)
+              await appendEvent({
+                ...makeBase(),
+                type: 'tool_result',
+                toolUseId: toolUse.id,
+                content: denyContent,
+                isError: true,
+              });
               emit({ type: 'tool_result', name: toolUse.name, isError: true });
               return {
                 type: 'tool_result',
                 toolUseId: toolUse.id,
-                content: `Permission denied: ${decision.reason}`,
+                content: denyContent,
                 isError: true,
               };
             }
@@ -555,19 +643,39 @@ export class Agent {
               }
             }
 
+            const resultContent = result.forLLM ?? result.content;
+            // Event log: tool_result
+            await appendEvent({
+              ...makeBase(),
+              type: 'tool_result',
+              toolUseId: toolUse.id,
+              content: resultContent,
+              isError: result.isError ?? false,
+            });
+
             emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
             return {
               type: 'tool_result',
               toolUseId: toolUse.id,
-              content: result.forLLM ?? result.content,
+              content: resultContent,
               isError: result.isError,
             };
           } catch (err) {
+            const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+            // Event log: tool_result (error)
+            await appendEvent({
+              ...makeBase(),
+              type: 'tool_result',
+              toolUseId: toolUse.id,
+              content: errContent,
+              isError: true,
+            });
+
             emit({ type: 'tool_result', name: toolUse.name, isError: true });
             return {
               type: 'tool_result',
               toolUseId: toolUse.id,
-              content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+              content: errContent,
               isError: true,
             };
           }
@@ -611,6 +719,9 @@ export class Agent {
       toolCalls,
       compacted,
     };
+
+    // Event log: query_end
+    await appendEvent({ ...makeBase(), type: 'query_end', result });
 
     this._lastSessionId = session.id;
     emit({ type: 'query_end', result });
@@ -913,7 +1024,7 @@ export class Agent {
       tools = [...this.tools.values()]; // inherit all
     }
 
-    const child = new Agent({
+    const childConfig: InternalAgentConfig = {
       provider: config.model
         ? { ...this.providerConfig, model: config.model }
         : this.providerConfig,
@@ -927,8 +1038,10 @@ export class Agent {
       middleware: this.middleware,
       onEvent: this.onEvent,
       sessionStore: config.sessionStore ?? this.sessionStore,
+      eventLogStore: this.eventLogStore,
       _isSubAgent: true,
-    } as any);
+    };
+    const child = new Agent(childConfig);
 
     this._children.set(id, child);
     this.emit({ type: 'child_spawned', childId: id });
@@ -1182,6 +1295,14 @@ function accumulateUsage(total: TokenUsage, delta: TokenUsage): TokenUsage {
   };
 }
 
+function generateEventId(): string {
+  return `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateTurnId(): string {
+  return `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function createInMemoryStore(): SessionStore {
   const sessions = new Map<string, Session>();
   return {
@@ -1204,10 +1325,10 @@ function createInMemoryStore(): SessionStore {
  */
 function isPromptTooLongError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const e = err as Record<string, any>;
+  const e = err as Record<string, unknown>;
 
   // Anthropic SDK: BadRequestError with message about prompt length
-  const msg = (e.message ?? '').toLowerCase();
+  const msg = (typeof e.message === 'string' ? e.message : '').toLowerCase();
   if (
     msg.includes('prompt is too long') ||
     msg.includes('too many tokens') ||
@@ -1219,7 +1340,8 @@ function isPromptTooLongError(err: unknown): boolean {
 
   // OpenAI SDK: error.code === 'context_length_exceeded'
   if (e.code === 'context_length_exceeded') return true;
-  if (e.error?.code === 'context_length_exceeded') return true;
+  const nested = e.error;
+  if (nested && typeof nested === 'object' && (nested as Record<string, unknown>).code === 'context_length_exceeded') return true;
 
   return false;
 }
