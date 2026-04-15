@@ -4,7 +4,7 @@
 
 import type { Middleware, AgentEvent } from '@berry-agent/core';
 import { createDatabase, type ObserveDB } from './db.js';
-import { createMiddleware, createEventListener } from './collector.js';
+import { createCollector } from './collector.js';
 import { Analyzer } from './analyzer.js';
 import { cleanup } from './retention.js';
 import type { ModelPricing } from './pricing.js';
@@ -60,8 +60,7 @@ export function createObserver(config: ObserverConfig = {}): Observer {
     storeFullContent: config.storeFullContent,
   };
 
-  const middleware = createMiddleware(collectorConfig);
-  const onEvent = createEventListener(collectorConfig);
+  const { middleware, eventListener: onEvent } = createCollector(collectorConfig);
   const analyzer = new Analyzer(database);
 
   return {
