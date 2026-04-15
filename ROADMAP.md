@@ -90,6 +90,12 @@
 - **Tests**: 33 observe + 183 core/safe/mcp/tools = 216 total, all passing
 - **Commits**: 68acb62 (observe v2), f07cd8a (observer fix), 595e398 (delegate/spawn fixes)
 
+### Numbers (v0.3)
+- **SDK Source**: ~8,663 lines (5 packages)
+- **SDK Tests**: ~5,660 lines, 211 total (137 core + 42 observe + 32 safe)
+- **Observe UI**: 1,764 lines (14 components, dark mode)
+- **Key commits**: 4af94bb (event log), 7511899 (workspace + observe split), 1146d06 (context builder fix), 899c0de (metrics + dark mode)
+
 ---
 
 ## v0.3 (planned) — Session Event Log + Agent Identity
@@ -111,10 +117,10 @@
 - [x] ProjectContext 接口（可选绑定）
 - [x] Agent 创建时自动初始化 workspace
 
-### Phase 3: Observe 分层 (observe) ✅
+### Phase 3: Observe 分层 + P2 (observe) ✅
 - [x] collector/ 和 analyzer/ 目录分离
-- [ ] metrics.ts — 派生指标（tool 成功率、重试率、cost efficiency）
-- [ ] Dark mode 主题支持（CSS 变量）
+- [x] metrics.ts — MetricsCalculator (turn/session/agent 派生指标) + 3 REST endpoints
+- [x] Dark mode 主题支持（CSS 变量 + 14 组件 dark: variants + auto-detect）
 - [ ] npm publish
 
 ### Future (v0.4+)
