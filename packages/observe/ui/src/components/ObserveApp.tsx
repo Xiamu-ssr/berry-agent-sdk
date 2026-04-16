@@ -59,11 +59,19 @@ export function ObserveApp({ baseUrl }: Props) {
   const [view, setView] = useState<View>({ page: 'overview' });
 
   // Auto-detect dark mode from parent or system preference
+  // Set both data-theme (for CSS variables) and .dark class (for Tailwind v3 consumers)
   useEffect(() => {
     const root = document.documentElement;
-    if (!root.getAttribute('data-theme')) {
+    const hasDarkClass = root.classList.contains('dark');
+    const hasThemeAttr = root.getAttribute('data-theme');
+    if (!hasThemeAttr && !hasDarkClass) {
       const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      if (isDark) root.classList.add('dark');
+    } else if (hasDarkClass && !hasThemeAttr) {
+      root.setAttribute('data-theme', 'dark');
+    } else if (hasThemeAttr && !hasDarkClass && hasThemeAttr === 'dark') {
+      root.classList.add('dark');
     }
   }, []);
 
@@ -131,16 +139,16 @@ export function ObserveApp({ baseUrl }: Props) {
           {view.page === 'inferences' && (
             <InferenceList
               baseUrl={baseUrl}
-              sessionId={(view as any).sessionId}
-              agentId={(view as any).agentId}
-              turnId={(view as any).turnId}
+              sessionId={view.sessionId}
+              agentId={view.agentId}
+              turnId={view.turnId}
               onSelect={(id) => nav({ page: 'inference-detail', id })}
             />
           )}
           {view.page === 'inference-detail' && (
             <InferenceDetail
               baseUrl={baseUrl}
-              inferenceId={(view as any).id}
+              inferenceId={view.id}
               onBack={() => nav({ page: 'inferences' })}
             />
           )}
@@ -154,7 +162,7 @@ export function ObserveApp({ baseUrl }: Props) {
           {view.page === 'session-detail' && (
             <SessionDetail
               baseUrl={baseUrl}
-              sessionId={(view as any).sessionId}
+              sessionId={view.sessionId}
               onBack={() => nav({ page: 'sessions' })}
               onSelectTurn={(turnId) => nav({ page: 'turn-detail', turnId })}
               onSelectInference={(id) => nav({ page: 'inference-detail', id })}
@@ -170,7 +178,7 @@ export function ObserveApp({ baseUrl }: Props) {
           {view.page === 'agent-detail' && (
             <AgentDetail
               baseUrl={baseUrl}
-              agentId={(view as any).agentId}
+              agentId={view.agentId}
               onBack={() => nav({ page: 'agents' })}
               onSelectSession={(sessionId) => nav({ page: 'session-detail', sessionId })}
             />
@@ -179,15 +187,15 @@ export function ObserveApp({ baseUrl }: Props) {
           {view.page === 'turn-list' && (
             <TurnList
               baseUrl={baseUrl}
-              sessionId={(view as any).sessionId}
-              agentId={(view as any).agentId}
+              sessionId={view.sessionId}
+              agentId={view.agentId}
               onSelect={(turnId) => nav({ page: 'turn-detail', turnId })}
             />
           )}
           {view.page === 'turn-detail' && (
             <TurnDetail
               baseUrl={baseUrl}
-              turnId={(view as any).turnId}
+              turnId={view.turnId}
               onBack={() => nav({ page: 'turn-list' })}
               onSelectInference={(id) => nav({ page: 'inference-detail', id })}
             />

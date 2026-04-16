@@ -41,7 +41,7 @@ export function calculateCost(
   cacheWriteTokens: number,
   overrides?: Record<string, ModelPricing>,
 ): CostResult {
-  const pricing = overrides?.[model] ?? MODEL_PRICING[model];
+  const pricing = resolvePricing(model, overrides);
 
   if (!pricing) {
     return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0 };
@@ -67,9 +67,37 @@ export function calculateCost(
   return { inputCost, outputCost, cacheSavings, totalCost };
 }
 
+/**
+ * Resolve pricing for a model name.
+ * Tries exact match first, then strips common prefixes (e.g. "anthropic/", "openai/"),
+ * then tries suffix matching (e.g. "claude-sonnet-4.6" → "claude-sonnet-4-20250514").
+ */
+function resolvePricing(model: string, overrides?: Record<string, ModelPricing>): ModelPricing | undefined {
+  // Exact match (overrides first)
+  if (overrides?.[model]) return overrides[model];
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+
+  // Strip provider prefix (e.g. "anthropic/claude-sonnet-4.6" → "claude-sonnet-4.6")
+  const stripped = model.includes('/') ? model.split('/').slice(1).join('/') : null;
+  if (stripped) {
+    if (overrides?.[stripped]) return overrides[stripped];
+    if (MODEL_PRICING[stripped]) return MODEL_PRICING[stripped];
+  }
+
+  // Fuzzy: find first key that starts with the same base name
+  const baseName = (stripped ?? model).replace(/[\d.]+$/, '').replace(/-$/, '');
+  const allPricing = { ...MODEL_PRICING, ...overrides };
+  for (const [key, value] of Object.entries(allPricing)) {
+    const keyBase = key.replace(/[\d.]+$/, '').replace(/-$/, '');
+    if (keyBase === baseName) return value;
+  }
+
+  return undefined;
+}
+
 /** Get pricing for a model (built-in + overrides). */
 export function getPricing(model: string, overrides?: Record<string, ModelPricing>): ModelPricing | undefined {
-  return overrides?.[model] ?? MODEL_PRICING[model];
+  return resolvePricing(model, overrides);
 }
 
 export { MODEL_PRICING };
