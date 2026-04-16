@@ -1,0 +1,36 @@
+{
+  "name": "@berry-agent/memory",
+  "version": "0.1.0-alpha.0",
+  "description": "Memory backend adapters for Berry Agent SDK — file-based, mem0, zep",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@berry-agent/core": ">=0.2.0"
+  },
+  "devDependencies": {
+    "@berry-agent/core": "*",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "license": "MIT"
+}

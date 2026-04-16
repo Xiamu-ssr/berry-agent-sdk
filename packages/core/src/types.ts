@@ -490,7 +490,7 @@ export type ProviderStreamEvent =
  */
 export const AGENT_EVENT_TYPES = [
   'query_start', 'api_call', 'text_delta', 'thinking_delta', 'api_response',
-  'tool_call', 'tool_result', 'guard_decision', 'compaction',
+  'tool_call', 'tool_result', 'guard_decision', 'compaction', 'memory_flush',
   'query_end', 'delegate_start', 'delegate_end',
   'child_spawned', 'child_destroyed',
 ] as const;
@@ -518,6 +518,7 @@ export type AgentEvent =
       contextBefore: number; contextAfter: number;
       thresholdPct: number; contextWindow: number;
       durationMs: number }
+  | { type: 'memory_flush'; reason: 'pre_compact'; charsSaved: number; durationMs: number }
   | { type: 'query_end'; result: QueryResult }
   | { type: 'delegate_start'; message: string }
   | { type: 'delegate_end'; result: DelegateResult }

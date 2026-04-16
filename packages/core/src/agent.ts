@@ -368,6 +368,51 @@ export class Agent {
       // 'soft' (≥60%): cheap layers only (clear_thinking, truncate_tool_results, merge)
       // 'hard' (≥85%): all layers including LLM summarize
       const compactLevel = this.shouldCompact(session);
+
+      // Pre-compact memory flush: save important context to memory before hard compact
+      if (compactLevel === 'hard' && this._memory) {
+        const flushStart = Date.now();
+        let charsSaved = 0;
+        try {
+          const flushResponse = await this.provider.chat({
+            systemPrompt: fullSystemPrompt,
+            messages: [
+              ...session.messages,
+              {
+                role: 'user' as const,
+                content: 'Before context compaction, save important notes, decisions, and context from this conversation to memory. Be concise but capture key information that would be needed in future sessions. Output only the notes to save, nothing else.',
+                createdAt: Date.now(),
+              },
+            ],
+            tools: [],
+          });
+          const notes: string[] = [];
+          for (const block of flushResponse.content) {
+            if (block.type === 'text') notes.push(block.text);
+          }
+          const text = notes.join('\n').trim();
+          if (text) {
+            await this._memory.append(text);
+            charsSaved = text.length;
+          }
+        } catch {
+          // Best-effort: if flush fails, proceed with compaction anyway
+        }
+        const flushDuration = Date.now() - flushStart;
+        await appendEvent({
+          ...makeBase(),
+          type: 'memory_flush',
+          reason: 'pre_compact',
+          charsSaved,
+        });
+        emit({
+          type: 'memory_flush',
+          reason: 'pre_compact',
+          charsSaved,
+          durationMs: flushDuration,
+        });
+      }
+
       if (compactLevel !== 'none') {
         const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
         const contextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);

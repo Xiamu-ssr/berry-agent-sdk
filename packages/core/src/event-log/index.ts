@@ -21,6 +21,7 @@ export type {
   DelegateStartEvent,
   DelegateEndEvent,
   ApiCallEvent,
+  MemoryFlushEvent,
   MetadataEvent,
   GetEventsOptions,
   EventLogStore,

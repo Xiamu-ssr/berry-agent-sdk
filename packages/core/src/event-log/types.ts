@@ -103,6 +103,13 @@ export interface ApiCallEvent extends BaseEvent {
   outputTokens: number;
 }
 
+/** Memory flush event — agent saved context to memory before compaction. */
+export interface MemoryFlushEvent extends BaseEvent {
+  type: 'memory_flush';
+  reason: 'pre_compact';
+  charsSaved: number;
+}
+
 /** Generic metadata extension point. */
 export interface MetadataEvent extends BaseEvent {
   type: 'metadata';
@@ -127,6 +134,7 @@ export type SessionEvent =
   | DelegateStartEvent
   | DelegateEndEvent
   | ApiCallEvent
+  | MemoryFlushEvent
   | MetadataEvent;
 
 /** All session event type discriminators. */
