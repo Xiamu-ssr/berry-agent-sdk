@@ -49,6 +49,7 @@ import {
   DEFAULT_SOFT_LAYERS,
   DEFAULT_MAX_TURNS,
   MAX_PTL_RETRIES,
+  REQUEST_TIMEOUT_MS,
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
 
@@ -348,6 +349,43 @@ export class Agent {
     });
     await appendEvent({ ...makeBase(), type: 'user_message', content: prompt });
 
+    // Wrap main loop in try-catch to guarantee query_end is always emitted.
+    // Without this, errors cause turns to stay "active" forever.
+    try {
+      return await this._queryLoop(session, prompt, options, emit, appendEvent, makeBase, log, turnId);
+    } catch (err) {
+      // Emit error query_end so the turn is marked as failed, not stuck "active"
+      const errorResult: QueryResult = {
+        text: '',
+        sessionId: session.id,
+        usage: { inputTokens: 0, outputTokens: 0 },
+        totalUsage: {
+          inputTokens: session.metadata.totalInputTokens,
+          outputTokens: session.metadata.totalOutputTokens,
+          cacheReadTokens: session.metadata.totalCacheReadTokens,
+          cacheWriteTokens: session.metadata.totalCacheWriteTokens,
+        },
+        toolCalls: 0,
+        compacted: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+      await appendEvent({ ...makeBase(), type: 'query_end', result: errorResult }).catch(() => {});
+      emit({ type: 'query_end', result: errorResult });
+      throw err;
+    }
+  }
+
+  /** Internal: the actual agent loop, extracted for try-catch in query(). */
+  private async _queryLoop(
+    session: Session,
+    prompt: string,
+    options: QueryOptions | undefined,
+    emit: (event: AgentEvent) => void,
+    appendEvent: (event: SessionEvent) => Promise<void>,
+    makeBase: () => { id: string; timestamp: number; sessionId: string; turnId?: string },
+    log: EventLogStore | undefined,
+    turnId: string | undefined,
+  ): Promise<QueryResult> {
     // 3. Resolve tools for this query
     const allowedTools = this.resolveAllowedTools(options?.allowedTools);
 
@@ -1400,14 +1438,36 @@ export class Agent {
     if (stream && this.provider.stream) {
       let finalResponse: import('./types.js').ProviderResponse | null = null;
 
-      for await (const event of this.provider.stream(request)) {
-        if (event.type === 'text_delta') {
-          emit({ type: 'text_delta', text: event.text });
-        } else if (event.type === 'thinking_delta') {
-          emit({ type: 'thinking_delta', thinking: event.thinking });
-        } else if (event.type === 'response') {
-          finalResponse = event.response;
+      // Stream idle timeout: abort if no data received for REQUEST_TIMEOUT_MS.
+      // Prevents indefinite hangs when the provider stream stalls.
+      const idleController = new AbortController();
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => idleController.abort(), REQUEST_TIMEOUT_MS);
+      };
+
+      // Compose with caller's abort signal
+      const composedSignal = request.signal
+        ? AbortSignal.any([request.signal, idleController.signal])
+        : idleController.signal;
+
+      const streamRequest: ProviderRequest = { ...request, signal: composedSignal };
+
+      try {
+        resetIdle();
+        for await (const event of this.provider.stream(streamRequest)) {
+          resetIdle();
+          if (event.type === 'text_delta') {
+            emit({ type: 'text_delta', text: event.text });
+          } else if (event.type === 'thinking_delta') {
+            emit({ type: 'thinking_delta', thinking: event.thinking });
+          } else if (event.type === 'response') {
+            finalResponse = event.response;
+          }
         }
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
       }
 
       if (!finalResponse) {

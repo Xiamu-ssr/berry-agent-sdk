@@ -458,6 +458,8 @@ export interface QueryResult {
   totalUsage: TokenUsage;
   toolCalls: number;
   compacted: boolean;
+  /** Error message when query fails (set by try-catch in query()). */
+  error?: string;
 }
 
 // ----- Session Store -----
