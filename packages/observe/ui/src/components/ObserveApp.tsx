@@ -58,21 +58,15 @@ function getBreadcrumbs(view: View): BreadcrumbItem[] {
 export function ObserveApp({ baseUrl }: Props) {
   const [view, setView] = useState<View>({ page: 'overview' });
 
-  // Auto-detect dark mode from parent or system preference
-  // Set both data-theme (for CSS variables) and .dark class (for Tailwind v3 consumers)
+  // Detect dark mode from parent app (check .dark class or data-theme on root)
+  // Do NOT mutate the root element — just read it and apply to our own container
+  const [isDark, setIsDark] = useState(false);
   useEffect(() => {
     const root = document.documentElement;
-    const hasDarkClass = root.classList.contains('dark');
-    const hasThemeAttr = root.getAttribute('data-theme');
-    if (!hasThemeAttr && !hasDarkClass) {
-      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.setAttribute('data-theme', isDark ? 'dark' : 'light');
-      if (isDark) root.classList.add('dark');
-    } else if (hasDarkClass && !hasThemeAttr) {
-      root.setAttribute('data-theme', 'dark');
-    } else if (hasThemeAttr && !hasDarkClass && hasThemeAttr === 'dark') {
-      root.classList.add('dark');
-    }
+    const dark = root.classList.contains('dark')
+      || root.getAttribute('data-theme') === 'dark'
+      || window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setIsDark(dark);
   }, []);
 
   const nav = (v: View) => setView(v);
@@ -80,18 +74,19 @@ export function ObserveApp({ baseUrl }: Props) {
   const breadcrumbs = getBreadcrumbs(view);
 
   return (
-    <div className="flex h-full bg-gray-50 dark:bg-gray-900">
+    <div className={`flex h-full bg-gray-50 dark:bg-gray-900 ${isDark ? 'dark' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
       {/* Sidebar */}
       <div className="w-48 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col py-4">
         <div className="px-4 mb-4">
           <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">🔬 Observe</h2>
         </div>
         <NavItem icon={<BarChart3 size={16} />} label="Overview" active={view.page === 'overview'} onClick={() => nav({ page: 'overview' })} />
-        <NavItem icon={<Cpu size={16} />} label="Inferences" active={view.page === 'inferences' || view.page === 'inference-detail'} onClick={() => nav({ page: 'inferences' })} />
-        <NavItem icon={<MessageSquare size={16} />} label="Sessions" active={view.page === 'sessions' || view.page === 'session-detail'} onClick={() => nav({ page: 'sessions' })} />
+        <div className="px-4 mt-3 mb-1"><span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Records</span></div>
         <NavItem icon={<Bot size={16} />} label="Agents" active={view.page === 'agents' || view.page === 'agent-detail'} onClick={() => nav({ page: 'agents' })} />
+        <NavItem icon={<MessageSquare size={16} />} label="Sessions" active={view.page === 'sessions' || view.page === 'session-detail'} onClick={() => nav({ page: 'sessions' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Turns" active={view.page === 'turn-list' || view.page === 'turn-detail'} onClick={() => nav({ page: 'turn-list' })} />
-        <div className="h-px bg-gray-200 dark:bg-gray-700 my-2 mx-4" />
+        <NavItem icon={<Cpu size={16} />} label="Inferences" active={view.page === 'inferences' || view.page === 'inference-detail'} onClick={() => nav({ page: 'inferences' })} />
+        <div className="px-4 mt-3 mb-1"><span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Analytics</span></div>
         <NavItem icon={<DollarSign size={16} />} label="Cost" active={view.page === 'cost'} onClick={() => nav({ page: 'cost' })} />
         <NavItem icon={<Zap size={16} />} label="Cache" active={view.page === 'cache'} onClick={() => nav({ page: 'cache' })} />
         <NavItem icon={<Shield size={16} />} label="Guard" active={view.page === 'guard'} onClick={() => nav({ page: 'guard' })} />
