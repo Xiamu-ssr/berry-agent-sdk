@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/tools-common",
-  "version": "0.1.0-alpha.0",
+  "version": "0.3.0-alpha.0",
   "description": "Common tool implementations for Berry Agent SDK (file, shell, search)",
   "type": "module",
   "main": "dist/index.js",
