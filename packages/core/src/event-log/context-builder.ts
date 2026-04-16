@@ -98,7 +98,13 @@ export class DefaultContextStrategy implements ContextStrategy {
       }
     }
 
-    // 4. Merge adjacent same-role messages
+    // 4. Repair orphan tool_use blocks.
+    //    If the last assistant message contains tool_use blocks but there's
+    //    no matching tool_result (e.g. maxTurns reached, abort, crash),
+    //    append synthetic tool_result blocks so the provider doesn't reject.
+    repairOrphanToolUse(rawMessages);
+
+    // 5. Merge adjacent same-role messages
     return mergeAdjacentMessages(rawMessages);
   }
 }
@@ -135,4 +141,56 @@ function mergeContent(
   const blocksA = typeof a === 'string' ? [{ type: 'text' as const, text: a }] : a;
   const blocksB = typeof b === 'string' ? [{ type: 'text' as const, text: b }] : b;
   return [...blocksA, ...blocksB];
+}
+
+import type { ToolUseContent } from '../types.js';
+
+/**
+ * Detect assistant messages that end with tool_use blocks but have no
+ * subsequent tool_result. This happens when:
+ *   - maxTurns is exhausted mid-tool-loop
+ *   - The request is aborted (user closes browser)
+ *   - The process crashes between assistant reply and tool execution
+ *
+ * Without repair, the provider rejects with 400:
+ *   "tool_use ids were found without tool_result blocks immediately after"
+ *
+ * Fix: append a synthetic user message with tool_result(isError=true) for
+ * each orphaned tool_use block. The LLM sees the error and can recover.
+ */
+function repairOrphanToolUse(messages: Message[]): void {
+  if (messages.length === 0) return;
+
+  // Collect all tool_use IDs from assistant messages
+  // and all tool_result IDs from user messages
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === 'tool_use') {
+        toolUseIds.add((block as ToolUseContent).id);
+      } else if (block.type === 'tool_result') {
+        toolResultIds.add((block as ToolResultContent).toolUseId);
+      }
+    }
+  }
+
+  const orphanIds = [...toolUseIds].filter(id => !toolResultIds.has(id));
+  if (orphanIds.length === 0) return;
+
+  // Append synthetic tool_result blocks
+  const syntheticResults: ContentBlock[] = orphanIds.map(id => ({
+    type: 'tool_result' as const,
+    toolUseId: id,
+    content: 'Error: tool execution was interrupted (session ended or aborted). You may retry.',
+    isError: true,
+  }));
+
+  messages.push({
+    role: 'user',
+    content: syntheticResults,
+    createdAt: Date.now(),
+  });
 }
