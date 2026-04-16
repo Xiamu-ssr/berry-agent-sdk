@@ -290,12 +290,19 @@ export type ToolGuardDecision =
   | { action: 'modify'; input: Record<string, unknown> };
 
 export interface CompactionConfig {
-  /** Token threshold to trigger compaction (default: 85% of context window) */
+  /** Hard threshold to trigger full compaction (default: 85% of context window) */
   threshold?: number;
+  /** Soft threshold for lightweight compaction (default: 60% of context window).
+   *  When context exceeds softThreshold but is below threshold, only cheap
+   *  layers run (clear_thinking, truncate_tool_results, merge_messages).
+   *  Set to 0 or same as threshold to disable two-tier behavior. */
+  softThreshold?: number;
   /** Context window size (default: 200000) */
   contextWindow?: number;
-  /** Which compaction layers to enable (default: all) */
+  /** Which compaction layers to enable for full compaction (default: all) */
   enabledLayers?: CompactionLayer[];
+  /** Which layers to run at softThreshold (default: clear_thinking, truncate_tool_results, merge_messages) */
+  softLayers?: CompactionLayer[];
 }
 
 export type CompactionLayer =
@@ -507,7 +514,7 @@ export type AgentEvent =
   | { type: 'tool_result'; name: string; isError: boolean }
   | { type: 'guard_decision'; toolName: string; input: Record<string, unknown>; decision: ToolGuardDecision; callIndex: number; durationMs: number }
   | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number;
-      triggerReason: 'threshold' | 'overflow_retry';
+      triggerReason: 'threshold' | 'soft_threshold' | 'overflow_retry';
       contextBefore: number; contextAfter: number;
       thresholdPct: number; contextWindow: number;
       durationMs: number }

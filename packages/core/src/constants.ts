@@ -33,6 +33,8 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 /** Compaction fires when estimated tokens exceed this fraction of contextWindow. */
 export const DEFAULT_COMPACTION_RATIO = 0.85;
+export const DEFAULT_SOFT_COMPACTION_RATIO = 0.60;
+export const DEFAULT_SOFT_LAYERS: readonly string[] = ['clear_thinking', 'truncate_tool_results', 'merge_messages'];
 
 /** Max lines kept per tool result before head/tail truncation (Layer 2). */
 export const TOOL_RESULT_MAX_LINES = 50;

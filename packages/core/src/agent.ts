@@ -45,6 +45,8 @@ import type { ProviderRegistry } from './registry.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
+  DEFAULT_SOFT_COMPACTION_RATIO,
+  DEFAULT_SOFT_LAYERS,
   DEFAULT_MAX_TURNS,
   MAX_PTL_RETRIES,
 } from './constants.js';
@@ -362,13 +364,18 @@ export class Agent {
     while (turns < maxTurns) {
       turns++;
 
-      // 5a. Check compaction BEFORE API call
-      // Prefer real usage from last API response; fall back to char-based estimate
-      if (this.shouldCompact(session)) {
+      // 5a. Two-tier compaction BEFORE API call
+      // 'soft' (≥60%): cheap layers only (clear_thinking, truncate_tool_results, merge)
+      // 'hard' (≥85%): all layers including LLM summarize
+      const compactLevel = this.shouldCompact(session);
+      if (compactLevel !== 'none') {
         const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
         const contextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
         const thresholdPct = contextBefore / ctxWindow;
-        // Build fork context for cache-sharing
+        const layersForLevel = compactLevel === 'soft'
+          ? (this.compactionConfig?.softLayers ?? DEFAULT_SOFT_LAYERS as unknown as import('./types.js').CompactionLayer[])
+          : (this.compactionConfig?.enabledLayers);
+        // Build fork context for cache-sharing (only needed for hard — summarize uses it)
         const forkCtx: ForkContext = {
           systemPrompt: fullSystemPrompt,
           tools: allowedTools.map(t => t.definition),
@@ -378,8 +385,10 @@ export class Agent {
           session.messages,
           {
             contextWindow: ctxWindow,
-            threshold: this.compactionConfig?.threshold,
-            enabledLayers: this.compactionConfig?.enabledLayers,
+            threshold: compactLevel === 'soft'
+              ? (this.compactionConfig?.softThreshold ?? Math.floor(ctxWindow * DEFAULT_SOFT_COMPACTION_RATIO))
+              : this.compactionConfig?.threshold,
+            enabledLayers: layersForLevel,
           },
           this.provider,
           forkCtx,
@@ -390,11 +399,13 @@ export class Agent {
         session.metadata.compactionCount++;
         compacted = true;
 
+        const triggerReason = compactLevel === 'soft' ? 'soft_threshold' : 'threshold';
+
         // Event log: compaction_marker
         await appendEvent({
           ...makeBase(),
           type: 'compaction_marker',
-          strategy: 'threshold',
+          strategy: triggerReason,
           tokensFreed: result.tokensFreed,
         });
 
@@ -402,7 +413,7 @@ export class Agent {
           type: 'compaction',
           layersApplied: result.layersApplied,
           tokensFreed: result.tokensFreed,
-          triggerReason: 'threshold',
+          triggerReason,
           contextBefore,
           contextAfter,
           thresholdPct,
@@ -1312,21 +1323,28 @@ export class Agent {
    *   It tells us exactly how big the context was on the previous call.
    * - Otherwise (first turn, no prior call), fall back to char-based estimate.
    */
-  private shouldCompact(session: Session): boolean {
+  /**
+   * Two-tier compaction check:
+   * - 'hard' (≥85%): run all enabled layers (including LLM summarize)
+   * - 'soft' (≥60%): run only cheap layers (clear_thinking, truncate_tool_results, merge_messages)
+   * - 'none': no compaction needed
+   */
+  private shouldCompact(session: Session): 'none' | 'soft' | 'hard' {
     const contextWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-    const threshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
+    const hardThreshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
+    const softThreshold = this.compactionConfig?.softThreshold ?? Math.floor(contextWindow * DEFAULT_SOFT_COMPACTION_RATIO);
 
-    // Prefer real usage from last API response.
-    // Total context = input_tokens + cache_read + cache_creation
-    // (same as CC's calculateContextPercentages)
+    let currentTokens: number;
     const lastInput = session.metadata.lastInputTokens;
     if (lastInput !== undefined && lastInput > 0) {
-      return lastInput > threshold;
+      currentTokens = lastInput;
+    } else {
+      currentTokens = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
     }
 
-    // Fallback: rough estimate
-    const estimated = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
-    return estimated > threshold;
+    if (currentTokens > hardThreshold) return 'hard';
+    if (currentTokens > softThreshold) return 'soft';
+    return 'none';
   }
 
   private async callProvider(
