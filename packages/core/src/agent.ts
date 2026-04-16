@@ -724,18 +724,21 @@ export class Agent {
       });
 
       // Incremental save after each tool loop turn.
-      // This ensures that if the process crashes mid-loop, we lose at most
-      // one turn of work (the next assistant response). The tool results
-      // and prior messages are already persisted.
-      session.lastAccessedAt = Date.now();
-      await this.sessionStore.save(session);
+      // When event log is configured, the log itself is the durable store
+      // (append-only, crash-safe). Skip FileSessionStore to avoid dual write.
+      if (!log) {
+        session.lastAccessedAt = Date.now();
+        await this.sessionStore.save(session);
+      }
 
       // Loop continues → next API call with tool results
     }
 
-    // 6. Persist session
-    session.lastAccessedAt = Date.now();
-    await this.sessionStore.save(session);
+    // 6. Persist session (skip when event log is source of truth)
+    if (!log) {
+      session.lastAccessedAt = Date.now();
+      await this.sessionStore.save(session);
+    }
 
     // 7. Extract final text
     const text = extractText(session.messages[session.messages.length - 1]);
@@ -764,13 +767,28 @@ export class Agent {
 
   // ===== Public API =====
 
-  /** Get a session by ID */
+  /** Get a session by ID. When event log is configured, rebuilds from log. */
   async getSession(id: string): Promise<Session | null> {
+    if (this.eventLogStore) {
+      const events = await this.eventLogStore.getEvents(id);
+      if (events.length === 0) return this.sessionStore.load(id); // fallback
+      return {
+        id,
+        messages: this.contextStrategy.buildMessages(events),
+        systemPrompt: this.systemPrompt,
+        createdAt: events[0].timestamp,
+        lastAccessedAt: events[events.length - 1].timestamp,
+        metadata: { cwd: this.cwd, model: this.providerConfig.model, totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheWriteTokens: 0, compactionCount: 0 },
+      };
+    }
     return this.sessionStore.load(id);
   }
 
-  /** List all session IDs */
+  /** List all session IDs. When event log is configured, lists from log. */
   async listSessions(): Promise<string[]> {
+    if (this.eventLogStore) {
+      return this.eventLogStore.listSessions();
+    }
     return this.sessionStore.list();
   }
 
@@ -1122,9 +1140,42 @@ export class Agent {
 
   private async resolveSession(options?: QueryOptions): Promise<Session> {
     if (options?.resume) {
+      // When event log is configured, rebuild session from event log (source of truth)
+      if (this.eventLogStore) {
+        const events = await this.eventLogStore.getEvents(options.resume);
+        if (events.length === 0) {
+          // No events — maybe a legacy session, fall back to session store
+          const session = await this.sessionStore.load(options.resume);
+          if (!session) throw new Error(`Session not found: ${options.resume}`);
+          if (options.systemPrompt) {
+            session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
+          }
+          return session;
+        }
+        // Rebuild messages from event log
+        const messages = this.contextStrategy.buildMessages(events);
+        const session: Session = {
+          id: options.resume,
+          messages,
+          systemPrompt: options.systemPrompt
+            ? normalizeSystemPrompt(options.systemPrompt)
+            : this.systemPrompt,
+          createdAt: events[0].timestamp,
+          lastAccessedAt: events[events.length - 1].timestamp,
+          metadata: {
+            cwd: this.cwd,
+            model: this.providerConfig.model,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalCacheWriteTokens: 0,
+            compactionCount: 0,
+          },
+        };
+        return session;
+      }
       const session = await this.sessionStore.load(options.resume);
       if (!session) throw new Error(`Session not found: ${options.resume}`);
-      // Allow overriding system prompt on resume
       if (options.systemPrompt) {
         session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
       }
