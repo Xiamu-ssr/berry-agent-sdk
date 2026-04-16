@@ -71,14 +71,15 @@ export class MCPClient {
     const result = await this.client.callTool({ name, arguments: input });
 
     // Extract text content from MCP result
-    const content = (result.content as any[])
-      ?.map((block: any) => {
-        if (block.type === 'text') return block.text;
+    const blocks = (result.content ?? []) as Array<{ type: string; text?: string; resource?: { uri?: string } }>;
+    const content = blocks
+      .map((block) => {
+        if (block.type === 'text') return block.text ?? '';
         if (block.type === 'image') return '[image]';
         if (block.type === 'resource') return `[resource: ${block.resource?.uri ?? 'unknown'}]`;
         return JSON.stringify(block);
       })
-      .join('\n') ?? '';
+      .join('\n');
 
     return {
       content,
@@ -107,7 +108,7 @@ export class MCPClient {
           { requestInit: tc.headers ? { headers: tc.headers } : undefined },
         );
       default:
-        throw new Error(`Unknown MCP transport type: ${(tc as any).type}`);
+        throw new Error(`Unknown MCP transport type: ${(tc as { type: string }).type}`);
     }
   }
 

@@ -202,6 +202,12 @@ export interface AgentConfig {
   enableDelegate?: boolean;
   /** Enable built-in spawn_agent tool (default: true for top-level agents, always false for sub-agents) */
   enableSpawn?: boolean;
+  /** Custom compaction strategy (overrides the default 7-layer pipeline). */
+  compactionStrategy?: import('./compaction/types.js').CompactionStrategy;
+  /** Called at the start of each query (after session resolution). */
+  onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
+  /** Called at the end of each query (before return). */
+  onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
 }
 
 // ----- Agent.create() Config -----

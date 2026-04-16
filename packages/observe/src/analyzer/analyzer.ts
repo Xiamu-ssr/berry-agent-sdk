@@ -2,7 +2,7 @@
 // Berry Agent SDK — Observe: Analyzers
 // ============================================================
 
-import { eq, sql, desc, gte, and } from 'drizzle-orm';
+import { eq, sql, desc, gte, and, type SQL } from 'drizzle-orm';
 import type { ObserveDB } from '../collector/db.js';
 import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from '../collector/schema.js';
 
@@ -24,6 +24,15 @@ import type {
 } from './api-types.js';
 
 // ===== Helpers =====
+
+/**
+ * Drizzle conditional .where() helper. Centralizes the one unavoidable type
+ * assertion caused by drizzle's complex query builder generics.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyWhere<Q extends Record<string, any>>(query: Q, where: SQL | undefined): Q {
+  return where ? (query as Q & { where: (w: SQL) => Q }).where(where) : query;
+}
 
 function buildLlmWhere(filter: DimensionFilter) {
   const conditions = [];
@@ -76,7 +85,7 @@ export class Analyzer {
       totalCost: sql<number>`coalesce(sum(${llmCalls.totalCost}), 0)`,
       callCount: sql<number>`count(*)`,
     }).from(llmCalls);
-    const row = where ? (base as any).where(where).get() : base.get();
+    const row = applyWhere(base, where).get();
     return {
       inputCost: row?.inputCost ?? 0,
       outputCost: row?.outputCost ?? 0,
@@ -123,7 +132,7 @@ export class Analyzer {
       totalInputTokens: sql<number>`coalesce(sum(${llmCalls.inputTokens}), 0)`,
       totalSavings: sql<number>`coalesce(sum(${llmCalls.cacheSavings}), 0)`,
     }).from(llmCalls);
-    const row = where ? (base as any).where(where).get() : base.get();
+    const row = applyWhere(base, where).get();
     const totalInput = row?.totalInputTokens ?? 0;
     const cacheRead = row?.totalCacheReadTokens ?? 0;
     const denominator = totalInput + cacheRead;
@@ -156,7 +165,7 @@ export class Analyzer {
       avgDurationMs: sql<number>`avg(${toolCalls.durationMs})`,
       totalDurationMs: sql<number>`sum(${toolCalls.durationMs})`,
     }).from(toolCalls);
-    return ((where ? (base as any).where(where) : base) as any)
+    return applyWhere(base, where)
       .groupBy(toolCalls.name)
       .orderBy(desc(sql`count(*)`))
       .all();
@@ -173,7 +182,7 @@ export class Analyzer {
       modifyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'modify' then 1 else 0 end)`,
       avgDurationMs: sql<number>`coalesce(avg(${guardDecisions.durationMs}), 0)`,
     }).from(guardDecisions);
-    const row = where ? (base as any).where(where).get() : base.get();
+    const row = applyWhere(base, where).get();
     return {
       allowCount: row?.allowCount ?? 0,
       denyCount: row?.denyCount ?? 0,
@@ -196,8 +205,8 @@ export class Analyzer {
     }
     const where = conditions.length > 1 ? and(...conditions) : conditions[0];
     let query = this.db.db.select().from(guardDecisions);
-    if (where) query = (query as any).where(where);
-    return (query as any).orderBy(desc(guardDecisions.timestamp)).limit(opts?.limit ?? 100).all();
+    query = applyWhere(query, where);
+    return query.orderBy(desc(guardDecisions.timestamp)).limit(opts?.limit ?? 100).all();
   }
 
   /** Guard decisions grouped by tool name */
@@ -211,7 +220,7 @@ export class Analyzer {
       modifyCount: sql<number>`sum(case when ${guardDecisions.decision} = 'modify' then 1 else 0 end)`,
       totalCount: sql<number>`count(*)`,
     }).from(guardDecisions);
-    const rows = ((where ? (base as any).where(where) : base) as any)
+    const rows = applyWhere(base, where)
       .groupBy(guardDecisions.toolName)
       .orderBy(desc(sql`count(*)`))
       .all();
@@ -242,14 +251,14 @@ export class Analyzer {
         end
       ), 0)`,
     }).from(compactionEvents);
-    const row = where ? (base as any).where(where).get() : base.get();
+    const row = applyWhere(base, where).get();
 
     // By trigger reason
     const byTriggerBase = this.db.db.select({
       reason: compactionEvents.triggerReason,
       count: sql<number>`count(*)`,
     }).from(compactionEvents);
-    const byTrigger = ((where ? (byTriggerBase as any).where(where) : byTriggerBase) as any)
+    const byTrigger = applyWhere(byTriggerBase, where)
       .groupBy(compactionEvents.triggerReason).all();
 
     // By layer frequency — parse JSON arrays
@@ -279,8 +288,8 @@ export class Analyzer {
   compactionList(opts?: { sessionId?: string; agentId?: string; limit?: number }): CompactionRecord[] {
     const where = buildCompactionWhere({ sessionId: opts?.sessionId, agentId: opts?.agentId });
     let query = this.db.db.select().from(compactionEvents);
-    if (where) query = (query as any).where(where);
-    return (query as any).orderBy(desc(compactionEvents.timestamp)).limit(opts?.limit ?? 100).all();
+    query = applyWhere(query, where);
+    return query.orderBy(desc(compactionEvents.timestamp)).limit(opts?.limit ?? 100).all();
   }
 
   // ===== Turn Analysis (NEW) =====
@@ -295,8 +304,8 @@ export class Analyzer {
     if (filter?.agentId) conditions.push(eq(turns.agentId, filter.agentId));
     const where = conditions.length > 1 ? and(...conditions) : conditions[0];
     let query = this.db.db.select().from(turns);
-    if (where) query = (query as any).where(where);
-    return (query as any).orderBy(desc(turns.startTime)).limit(filter?.limit ?? 50).all();
+    query = applyWhere(query, where);
+    return query.orderBy(desc(turns.startTime)).limit(filter?.limit ?? 50).all();
   }
 
   turnSummary(turnId: string): TurnSummary | null {
@@ -397,8 +406,8 @@ export class Analyzer {
       timestamp: llmCalls.timestamp,
     }).from(llmCalls);
 
-    if (where) query = (query as any).where(where);
-    return (query as any).orderBy(desc(llmCalls.timestamp)).limit(opts?.limit ?? 50).all();
+    query = applyWhere(query, where);
+    return query.orderBy(desc(llmCalls.timestamp)).limit(opts?.limit ?? 50).all();
   }
 
   // ===== Session Analysis =====
@@ -436,8 +445,8 @@ export class Analyzer {
 
   recentSessions(limit: number = 20, agentId?: string): SessionSummary[] {
     let query = this.db.db.select().from(sessions);
-    if (agentId) query = (query as any).where(eq(sessions.agentId, agentId));
-    const rows = (query as any).orderBy(desc(sessions.startTime)).limit(limit).all();
+    if (agentId) query = applyWhere(query, eq(sessions.agentId, agentId));
+    const rows = query.orderBy(desc(sessions.startTime)).limit(limit).all();
 
     return rows.map((s: any) => {
       const llmCount = this.db.db.select({ count: sql<number>`count(*)` })

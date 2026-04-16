@@ -14,8 +14,20 @@ export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
 
 // Compaction
-export { compact, estimateTokens } from './compaction/compactor.js';
+export { compact, estimateTokens, DefaultCompactionStrategy } from './compaction/compactor.js';
 export type { ForkContext } from './compaction/compactor.js';
+export type { CompactionStrategy, CompactionStrategyResult } from './compaction/types.js';
+
+// Tool Executor
+export { executeTools } from './tool-executor.js';
+export type { ExecuteToolsParams, ExecuteToolsResult } from './tool-executor.js';
+
+// Compaction Runner
+export { shouldCompact, runCompaction, preCompactMemoryFlush } from './compaction-runner.js';
+
+// Chat Messages (UI-friendly format)
+export { toChatMessages } from './chat.js';
+export type { ChatMessage } from './chat.js';
 
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
@@ -132,3 +144,6 @@ export type {
   AGENT_EVENT_TYPES,
   GUARD_EVENT_KINDS,
 } from './types.js';
+
+// Re-export MemoryFlushEvent from event log
+export type { MemoryFlushEvent } from './event-log/index.js';

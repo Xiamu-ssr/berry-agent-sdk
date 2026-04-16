@@ -6,7 +6,7 @@
 // - Strip assistant text (prevents agent self-advocacy)
 // - Strip tool results (prevents prompt injection reaching classifier)
 
-import type { Message, ContentBlock } from '@berry-agent/core';
+import type { Message, ContentBlock, TextContent, ToolUseContent } from '@berry-agent/core';
 import type { ClassifierTranscript } from '../types.js';
 
 /**
@@ -36,8 +36,8 @@ export function buildClassifierTranscript(
       } else if (Array.isArray(msg.content)) {
         // User messages may contain text blocks (not tool_result blocks)
         for (const block of msg.content) {
-          if ((block as any).type === 'text') {
-            userMessages.push((block as any).text);
+          if (block.type === 'text') {
+            userMessages.push((block as TextContent).text);
           }
           // Skip tool_result blocks — they contain tool outputs which
           // could carry prompt injection payloads
@@ -48,9 +48,10 @@ export function buildClassifierTranscript(
       if (Array.isArray(msg.content)) {
         for (const block of msg.content as ContentBlock[]) {
           if (block.type === 'tool_use') {
+            const tu = block as ToolUseContent;
             toolCalls.push({
-              name: (block as any).name,
-              input: (block as any).input,
+              name: tu.name,
+              input: tu.input,
             });
           }
           // Skip text blocks — assistant prose is not shown to classifier

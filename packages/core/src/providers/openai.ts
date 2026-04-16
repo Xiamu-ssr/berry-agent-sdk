@@ -195,7 +195,7 @@ export class OpenAIProvider implements Provider {
           schema: request.responseFormat.schema,
           strict: true,
         },
-      } as any;
+      } as unknown as OpenAI.ChatCompletionCreateParams["response_format"];
     }
 
     return params;
@@ -223,7 +223,7 @@ export class OpenAIProvider implements Provider {
           schema: request.responseFormat.schema,
           strict: true,
         },
-      } as any;
+      } as unknown as OpenAI.ChatCompletionCreateParams["response_format"];
     }
 
     return params;
@@ -286,7 +286,7 @@ export class OpenAIProvider implements Provider {
               image_url: { url: `data:${img.mediaType};base64,${img.data}` },
             },
           ],
-        } as any);
+        } as OpenAI.ChatCompletionMessageParam);
       } else if (block.type === 'tool_result') {
         const tr = block as ToolResultContent;
         results.push({
@@ -406,7 +406,7 @@ export class OpenAIProvider implements Provider {
   private extractUsage(usage?: OpenAI.CompletionUsage | null): TokenUsage {
     if (!usage) return { inputTokens: 0, outputTokens: 0 };
 
-    const details = (usage as any).prompt_tokens_details;
+    const details = (usage as unknown as Record<string, unknown>)?.prompt_tokens_details as { cached_tokens?: number } | undefined;
     return {
       inputTokens: usage.prompt_tokens ?? 0,
       outputTokens: usage.completion_tokens ?? 0,

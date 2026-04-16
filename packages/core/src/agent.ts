@@ -37,7 +37,9 @@ import type { AgentMemory, ProjectContext } from './workspace/types.js';
 import { FileAgentMemory } from './workspace/file-memory.js';
 import { FileProjectContext } from './workspace/file-project.js';
 import { initWorkspace } from './workspace/initializer.js';
-import { compact, estimateTokens, type ForkContext } from './compaction/compactor.js';
+import { estimateTokens, type ForkContext } from './compaction/compactor.js';
+import type { CompactionStrategy } from './compaction/types.js';
+import { DefaultCompactionStrategy } from './compaction/compactor.js';
 import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
 import type { Skill } from './skills/types.js';
 import { FileSessionStore } from './session/file-store.js';
@@ -52,6 +54,12 @@ import {
   REQUEST_TIMEOUT_MS,
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
+import { executeTools } from './tool-executor.js';
+import {
+  shouldCompact,
+  runCompaction,
+  preCompactMemoryFlush,
+} from './compaction-runner.js';
 
 /** Internal config extension for sub-agent creation (not part of public API). */
 interface InternalAgentConfig extends AgentConfig {
@@ -69,6 +77,7 @@ export class Agent {
   private cwd: string;
   private sessionStore: SessionStore;
   private compactionConfig: AgentConfig['compaction'];
+  private compactionStrategy?: CompactionStrategy;
   private onEvent?: (event: AgentEvent) => void;
   private toolGuard?: ToolGuard;
   private middleware: Middleware[];
@@ -81,6 +90,11 @@ export class Agent {
   private _children = new Map<string, Agent>();
   private _isSubAgent = false;
   private _lastSessionId?: string;
+  private _querying = false;
+
+  // Lifecycle hooks
+  private _onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
+  private _onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
 
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
@@ -93,6 +107,7 @@ export class Agent {
     this.skillDirs = config.skillDirs ?? [];
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
+    this.compactionStrategy = config.compactionStrategy;
     this.toolGuard = config.toolGuard;
     this.middleware = config.middleware ?? [];
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
@@ -100,6 +115,8 @@ export class Agent {
     this.providerConfig = config.provider;
     this.contextStrategy = new DefaultContextStrategy();
     this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
+    this._onQueryStart = config.onQueryStart;
+    this._onQueryEnd = config.onQueryEnd;
 
     // Workspace: auto-wire event log, memory, and system prompt from AGENT.md
     if (config.workspace) {
@@ -337,6 +354,11 @@ export class Agent {
       await log.append(session.id, event);
     };
 
+    // Lifecycle hook: onQueryStart
+    if (this._onQueryStart) {
+      await this._onQueryStart(session, prompt);
+    }
+
     // Event log: query_start
     await appendEvent({ ...makeBase(), type: 'query_start', prompt });
     emit({ type: 'query_start', prompt, sessionId: session.id });
@@ -349,10 +371,17 @@ export class Agent {
     });
     await appendEvent({ ...makeBase(), type: 'user_message', content: prompt });
 
+    this._querying = true;
+
     // Wrap main loop in try-catch to guarantee query_end is always emitted.
     // Without this, errors cause turns to stay "active" forever.
     try {
-      return await this._queryLoop(session, prompt, options, emit, appendEvent, makeBase, log, turnId);
+      const result = await this._queryLoop(session, prompt, options, emit, appendEvent, makeBase, log, turnId);
+      // Lifecycle hook: onQueryEnd
+      if (this._onQueryEnd) {
+        await this._onQueryEnd(session, result);
+      }
+      return result;
     } catch (err) {
       // Emit error query_end so the turn is marked as failed, not stuck "active"
       const errorResult: QueryResult = {
@@ -371,7 +400,13 @@ export class Agent {
       };
       await appendEvent({ ...makeBase(), type: 'query_end', result: errorResult }).catch(() => {});
       emit({ type: 'query_end', result: errorResult });
+      // Lifecycle hook: onQueryEnd (even on error)
+      if (this._onQueryEnd) {
+        try { await this._onQueryEnd(session, errorResult); } catch { /* ignore */ }
+      }
       throw err;
+    } finally {
+      this._querying = false;
     }
   }
 
@@ -397,112 +432,46 @@ export class Agent {
     const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
     let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let compacted = false;
-    let toolCalls = 0;
+    let toolCallCount = 0;
 
     while (turns < maxTurns) {
       turns++;
 
       // 5a. Two-tier compaction BEFORE API call
-      // 'soft' (≥60%): cheap layers only (clear_thinking, truncate_tool_results, merge)
-      // 'hard' (≥85%): all layers including LLM summarize
-      const compactLevel = this.shouldCompact(session);
+      const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+      const compactLevel = shouldCompact({
+        session,
+        compactionConfig: this.compactionConfig,
+        contextWindow: ctxWindow,
+      });
 
       // Pre-compact memory flush: save important context to memory before hard compact
       if (compactLevel === 'hard' && this._memory) {
-        const flushStart = Date.now();
-        let charsSaved = 0;
-        try {
-          const flushResponse = await this.provider.chat({
-            systemPrompt: fullSystemPrompt,
-            messages: [
-              ...session.messages,
-              {
-                role: 'user' as const,
-                content: 'Before context compaction, save important notes, decisions, and context from this conversation to memory. Be concise but capture key information that would be needed in future sessions. Output only the notes to save, nothing else.',
-                createdAt: Date.now(),
-              },
-            ],
-            tools: [],
-          });
-          const notes: string[] = [];
-          for (const block of flushResponse.content) {
-            if (block.type === 'text') notes.push(block.text);
-          }
-          const text = notes.join('\n').trim();
-          if (text) {
-            await this._memory.append(text);
-            charsSaved = text.length;
-          }
-        } catch {
-          // Best-effort: if flush fails, proceed with compaction anyway
-        }
-        const flushDuration = Date.now() - flushStart;
-        await appendEvent({
-          ...makeBase(),
-          type: 'memory_flush',
-          reason: 'pre_compact',
-          charsSaved,
-        });
-        emit({
-          type: 'memory_flush',
-          reason: 'pre_compact',
-          charsSaved,
-          durationMs: flushDuration,
+        await preCompactMemoryFlush({
+          session,
+          memory: this._memory,
+          provider: this.provider,
+          systemPrompt: fullSystemPrompt,
+          emit,
+          appendEvent,
+          makeBase,
         });
       }
 
       if (compactLevel !== 'none') {
-        const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-        const contextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
-        const thresholdPct = contextBefore / ctxWindow;
-        const layersForLevel = compactLevel === 'soft'
-          ? (this.compactionConfig?.softLayers ?? DEFAULT_SOFT_LAYERS as unknown as import('./types.js').CompactionLayer[])
-          : (this.compactionConfig?.enabledLayers);
-        // Build fork context for cache-sharing (only needed for hard — summarize uses it)
-        const forkCtx: ForkContext = {
+        await runCompaction({
+          compactionStrategy: this.compactionStrategy,
+          session,
+          compactionConfig: this.compactionConfig,
+          compactLevel,
+          provider: this.provider,
           systemPrompt: fullSystemPrompt,
-          tools: allowedTools.map(t => t.definition),
-        };
-        const compactStart = Date.now();
-        const result = await compact(
-          session.messages,
-          {
-            contextWindow: ctxWindow,
-            threshold: compactLevel === 'soft'
-              ? (this.compactionConfig?.softThreshold ?? Math.floor(ctxWindow * DEFAULT_SOFT_COMPACTION_RATIO))
-              : this.compactionConfig?.threshold,
-            enabledLayers: layersForLevel,
-          },
-          this.provider,
-          forkCtx,
-        );
-        const compactDuration = Date.now() - compactStart;
-        const contextAfter = estimateTokens(result.messages);
-        session.messages = result.messages;
-        session.metadata.compactionCount++;
+          allowedTools,
+          emit,
+          appendEvent,
+          makeBase,
+        });
         compacted = true;
-
-        const triggerReason = compactLevel === 'soft' ? 'soft_threshold' : 'threshold';
-
-        // Event log: compaction_marker
-        await appendEvent({
-          ...makeBase(),
-          type: 'compaction_marker',
-          strategy: triggerReason,
-          tokensFreed: result.tokensFreed,
-        });
-
-        emit({
-          type: 'compaction',
-          layersApplied: result.layersApplied,
-          tokensFreed: result.tokensFreed,
-          triggerReason,
-          contextBefore,
-          contextAfter,
-          thresholdPct,
-          contextWindow: ctxWindow,
-          durationMs: compactDuration,
-        });
       }
 
       // If event log is configured, rebuild messages from the log
@@ -551,50 +520,34 @@ export class Agent {
         } catch (err) {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
-            const ptlCtxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-            const ptlContextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
-            const ptlThresholdPct = ptlContextBefore / ptlCtxWindow;
             // Force compaction to shrink context, then retry
-            const ptlForkCtx: ForkContext = {
+            await runCompaction({
+          compactionStrategy: this.compactionStrategy,
+              session,
+              compactionConfig: this.compactionConfig,
+              compactLevel: 'hard',
+              provider: this.provider,
               systemPrompt: fullSystemPrompt,
-              tools: allowedTools.map(t => t.definition),
-            };
-            const ptlStart = Date.now();
-            const ptlResult = await compact(
-              session.messages,
-              {
-                contextWindow: ptlCtxWindow,
-                threshold: this.compactionConfig?.threshold,
-                enabledLayers: this.compactionConfig?.enabledLayers,
+              allowedTools,
+              emit: (event: AgentEvent) => {
+                // Override triggerReason for PTL recovery events
+                if (event.type === 'compaction') {
+                  emit({ ...event, triggerReason: 'overflow_retry' });
+                  return;
+                }
+                emit(event);
               },
-              this.provider,
-              ptlForkCtx,
-            );
-            const ptlDuration = Date.now() - ptlStart;
-            const ptlContextAfter = estimateTokens(ptlResult.messages);
-            session.messages = ptlResult.messages;
-            session.metadata.compactionCount++;
+              appendEvent: async (event: SessionEvent) => {
+                // Override strategy for PTL recovery events
+                if ('type' in event && event.type === 'compaction_marker') {
+                  await appendEvent({ ...event, strategy: 'overflow_retry' } as SessionEvent);
+                  return;
+                }
+                await appendEvent(event);
+              },
+              makeBase,
+            });
             compacted = true;
-
-            // Event log: compaction_marker (PTL recovery)
-            await appendEvent({
-              ...makeBase(),
-              type: 'compaction_marker',
-              strategy: 'overflow_retry',
-              tokensFreed: ptlResult.tokensFreed,
-            });
-
-            emit({
-              type: 'compaction',
-              layersApplied: ptlResult.layersApplied,
-              tokensFreed: ptlResult.tokensFreed,
-              triggerReason: 'overflow_retry',
-              contextBefore: ptlContextBefore,
-              contextAfter: ptlContextAfter,
-              thresholdPct: ptlThresholdPct,
-              contextWindow: ptlCtxWindow,
-              durationMs: ptlDuration,
-            });
             // Retry with compacted messages
             continue;
           }
@@ -626,13 +579,6 @@ export class Agent {
       session.metadata.totalCacheWriteTokens += response.usage.cacheWriteTokens ?? 0;
 
       // Track last known TOTAL input tokens for compaction decisions.
-      //
-      // Anthropic: input_tokens = only uncached portion.
-      //   Total context = input_tokens + cache_read + cache_creation.
-      // OpenAI: prompt_tokens already includes cached tokens.
-      //   cached_tokens is a SUBSET, not additive.
-      //
-      // Provider type determines the correct formula.
       if (this.provider.type === 'anthropic') {
         session.metadata.lastInputTokens =
           response.usage.inputTokens +
@@ -661,165 +607,32 @@ export class Agent {
         (b): b is ToolUseContent => b.type === 'tool_use',
       );
 
-      // Collect all tool results into a single user message
-      // (Anthropic expects tool_result blocks in the same user message)
-      // Execute all tool calls in PARALLEL (independent tools have no deps)
-
-      // Emit all tool_call events first
-      for (const toolUse of toolUses) {
-        toolCalls++;
-        emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
-      }
-
       const mwCtx = this.getMiddlewareContext(session);
 
-      const toolResultBlocks: ContentBlock[] = await Promise.all(
-        toolUses.map(async (toolUse): Promise<ContentBlock> => {
-          const tool = this.tools.get(toolUse.name);
-          if (!tool) {
-            emit({ type: 'tool_result', name: toolUse.name, isError: true });
-            return {
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: `Error: unknown tool "${toolUse.name}"`,
-              isError: true,
-            };
-          }
+      const execResult = await executeTools({
+        toolUses,
+        tools: this.tools,
+        toolGuard: this.toolGuard,
+        middleware: this.middleware,
+        session,
+        emit,
+        appendEvent,
+        makeBase,
+        middlewareContext: mwCtx,
+        cwd: this.cwd,
+        abortSignal: options?.abortSignal,
+      });
 
-          // Event log: tool_use
-          await appendEvent({
-            ...makeBase(),
-            type: 'tool_use',
-            name: toolUse.name,
-            toolUseId: toolUse.id,
-            input: toolUse.input,
-          });
-
-          // Tool guard check
-          let guardedInput = toolUse.input;
-          if (this.toolGuard) {
-            const guardStart = Date.now();
-            const decision = await this.toolGuard({
-              toolName: toolUse.name,
-              input: toolUse.input,
-              session: {
-                id: session.id,
-                cwd: session.metadata.cwd,
-                model: session.metadata.model,
-              },
-              callIndex: toolCalls,
-            });
-            const guardDuration = Date.now() - guardStart;
-
-            // Event log: guard_decision
-            await appendEvent({
-              ...makeBase(),
-              type: 'guard_decision',
-              toolName: toolUse.name,
-              decision,
-            });
-
-            emit({
-              type: 'guard_decision',
-              toolName: toolUse.name,
-              input: toolUse.input,
-              decision,
-              callIndex: toolCalls,
-              durationMs: guardDuration,
-            });
-
-            if (decision.action === 'deny') {
-              const denyContent = `Permission denied: ${decision.reason}`;
-              // Event log: tool_result (denied)
-              await appendEvent({
-                ...makeBase(),
-                type: 'tool_result',
-                toolUseId: toolUse.id,
-                content: denyContent,
-                isError: true,
-              });
-              emit({ type: 'tool_result', name: toolUse.name, isError: true });
-              return {
-                type: 'tool_result',
-                toolUseId: toolUse.id,
-                content: denyContent,
-                isError: true,
-              };
-            }
-            if (decision.action === 'modify') {
-              guardedInput = decision.input;
-            }
-          }
-
-          try {
-            // Middleware: onBeforeToolExec
-            for (const mw of this.middleware) {
-              if (mw.onBeforeToolExec) {
-                guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
-              }
-            }
-
-            const result = await tool.execute(guardedInput, {
-              cwd: this.cwd,
-              abortSignal: options?.abortSignal,
-            });
-
-            // Middleware: onAfterToolExec
-            for (const mw of this.middleware) {
-              if (mw.onAfterToolExec) {
-                await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
-              }
-            }
-
-            const resultContent = result.forLLM ?? result.content;
-            // Event log: tool_result
-            await appendEvent({
-              ...makeBase(),
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: resultContent,
-              isError: result.isError ?? false,
-            });
-
-            emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
-            return {
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: resultContent,
-              isError: result.isError,
-            };
-          } catch (err) {
-            const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
-            // Event log: tool_result (error)
-            await appendEvent({
-              ...makeBase(),
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: errContent,
-              isError: true,
-            });
-
-            emit({ type: 'tool_result', name: toolUse.name, isError: true });
-            return {
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: errContent,
-              isError: true,
-            };
-          }
-        }),
-      );
+      toolCallCount += execResult.toolCalls;
 
       // Add all tool results as one user message
       session.messages.push({
         role: 'user',
-        content: toolResultBlocks,
+        content: execResult.results,
         createdAt: Date.now(),
       });
 
       // Incremental save after each tool loop turn.
-      // When event log is configured, the log itself is the durable store
-      // (append-only, crash-safe). Skip FileSessionStore to avoid dual write.
       if (!log) {
         session.lastAccessedAt = Date.now();
         await this.sessionStore.save(session);
@@ -847,7 +660,7 @@ export class Agent {
         cacheReadTokens: session.metadata.totalCacheReadTokens,
         cacheWriteTokens: session.metadata.totalCacheWriteTokens,
       },
-      toolCalls,
+      toolCalls: toolCallCount,
       compacted,
     };
 
@@ -948,7 +761,20 @@ export class Agent {
     cwd: string;
     middleware: number;
     hasToolGuard: boolean;
+    workspace?: string;
+    memory?: { available: boolean };
+    compaction?: {
+      threshold: number;
+      softThreshold: number;
+      contextWindow: number;
+      enabledLayers?: string[];
+    };
+    eventLog?: { available: boolean };
+    hasCustomCompaction: boolean;
+    children: string[];
+    status: 'idle' | 'querying';
   } {
+    const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     return {
       provider: this.currentProvider,
       systemPrompt: [...this.systemPrompt],
@@ -957,6 +783,18 @@ export class Agent {
       cwd: this.cwd,
       middleware: this.middleware.length,
       hasToolGuard: !!this.toolGuard,
+      workspace: this._workspaceRoot,
+      memory: { available: !!this._memory },
+      compaction: {
+        threshold: this.compactionConfig?.threshold ?? Math.floor(ctxWindow * DEFAULT_COMPACTION_RATIO),
+        softThreshold: this.compactionConfig?.softThreshold ?? Math.floor(ctxWindow * DEFAULT_SOFT_COMPACTION_RATIO),
+        contextWindow: ctxWindow,
+        enabledLayers: this.compactionConfig?.enabledLayers,
+      },
+      eventLog: { available: !!this.eventLogStore },
+      hasCustomCompaction: !!this.compactionStrategy,
+      children: [...this._children.keys()],
+      status: this._querying ? 'querying' : 'idle',
     };
   }
 
@@ -1036,14 +874,14 @@ export class Agent {
     ];
 
     // Run the delegate's tool loop
-    let turns = 0;
+    let delegateTurns = 0;
     const maxTurns = config?.maxTurns ?? DEFAULT_MAX_TURNS;
     let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let toolCalls = 0;
     const toolMap = new Map(delegateTools.map(t => [t.definition.name, t]));
 
-    while (turns < maxTurns) {
-      turns++;
+    while (delegateTurns < maxTurns) {
+      delegateTurns++;
 
       let request: ProviderRequest = {
         systemPrompt: delegateSystemPrompt,
@@ -1125,7 +963,7 @@ export class Agent {
 
     const lastMsg = messages[messages.length - 1];
     const text = extractText(lastMsg);
-    const result: DelegateResult = { text, usage: totalUsage, turns, toolCalls };
+    const result: DelegateResult = { text, usage: totalUsage, turns: delegateTurns, toolCalls };
     emit({ type: 'delegate_end', result });
     return result;
   }
@@ -1398,38 +1236,6 @@ export class Agent {
     return parts.length > 0 ? parts.join('\n\n') : null;
   }
 
-  /**
-   * Decide whether to compact before the next API call.
-   *
-   * Strategy (same as CC):
-   * - If we have real `inputTokens` from the last API response, use that.
-   *   It tells us exactly how big the context was on the previous call.
-   * - Otherwise (first turn, no prior call), fall back to char-based estimate.
-   */
-  /**
-   * Two-tier compaction check:
-   * - 'hard' (≥85%): run all enabled layers (including LLM summarize)
-   * - 'soft' (≥60%): run only cheap layers (clear_thinking, truncate_tool_results, merge_messages)
-   * - 'none': no compaction needed
-   */
-  private shouldCompact(session: Session): 'none' | 'soft' | 'hard' {
-    const contextWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-    const hardThreshold = this.compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
-    const softThreshold = this.compactionConfig?.softThreshold ?? Math.floor(contextWindow * DEFAULT_SOFT_COMPACTION_RATIO);
-
-    let currentTokens: number;
-    const lastInput = session.metadata.lastInputTokens;
-    if (lastInput !== undefined && lastInput > 0) {
-      currentTokens = lastInput;
-    } else {
-      currentTokens = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
-    }
-
-    if (currentTokens > hardThreshold) return 'hard';
-    if (currentTokens > softThreshold) return 'soft';
-    return 'none';
-  }
-
   private async callProvider(
     request: ProviderRequest,
     stream: boolean,
@@ -1516,10 +1322,6 @@ function extractText(message: Message): string {
     .filter((b): b is import('./types.js').TextContent => b.type === 'text')
     .map(b => b.text)
     .join('\n');
-}
-
-function estimateTokens_system(blocks: string[]): number {
-  return blocks.reduce((sum, b) => sum + Math.ceil(b.length / 4), 0);
 }
 
 function accumulateUsage(total: TokenUsage, delta: TokenUsage): TokenUsage {

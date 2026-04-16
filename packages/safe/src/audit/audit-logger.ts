@@ -18,7 +18,7 @@ export function withAudit(guard: ToolGuard, sink: AuditSink): ToolGuard {
       toolName: ctx.toolName,
       input: ctx.input,
       decision: decision.action,
-      reason: decision.action === 'deny' ? (decision as any).reason : undefined,
+      reason: decision.action === 'deny' ? decision.reason : undefined,
       guardType: 'rule', // default; classifier wraps override this
       latencyMs: Date.now() - start,
     };

@@ -5,6 +5,7 @@
 // KEY: all changes happen at once to preserve cache prefixes.
 
 import type { Message, CompactionConfig, CompactionLayer, ContentBlock, Provider, ToolUseContent, ToolResultContent, ToolDefinition } from '../types.js';
+import type { CompactionStrategy, CompactionStrategyResult } from './types.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
@@ -307,20 +308,21 @@ function stripImagesFromMessages(messages: Message[]): Message[] {
     const newContent = msg.content.map(block => {
       if (block.type === 'thinking') return block;
       // Strip image blocks (base64 or URL-based)
-      if ('source' in block || ('type' in block && (block as any).type === 'image')) {
+      if ('source' in block || block.type === 'image') {
         hasMedia = true;
         return { type: 'text' as const, text: '[image]' };
       }
       // Strip document blocks (PDFs, etc.)
-      if ('type' in block && (block as any).type === 'document') {
+      if ((block as { type: string }).type === 'document') {
         hasMedia = true;
         return { type: 'text' as const, text: '[document]' };
       }
       // Strip images/documents nested inside tool_result content arrays
-      if (block.type === 'tool_result' && Array.isArray((block as any).content)) {
-        const tr = block as any;
+      const trBlock = block as unknown as Record<string, unknown>;
+      if (block.type === 'tool_result' && Array.isArray(trBlock.content)) {
+        const trContent = trBlock.content as Array<{ type: string }>;
         let toolHasMedia = false;
-        const newToolContent = tr.content.map((item: any) => {
+        const newToolContent = trContent.map((item) => {
           if (item.type === 'image') {
             toolHasMedia = true;
             return { type: 'text' as const, text: '[image]' };
@@ -333,7 +335,9 @@ function stripImagesFromMessages(messages: Message[]): Message[] {
         });
         if (toolHasMedia) {
           hasMedia = true;
-          return { ...tr, content: newToolContent };
+          // Flatten media-stripped content back to string for ToolResultContent
+          const stripped = newToolContent.map(c => 'text' in c ? (c as { text: string }).text : '').join('\n');
+          return { ...block, content: stripped } as typeof block;
         }
       }
       return block;
@@ -440,6 +444,30 @@ function truncateOldest(messages: Message[]): Message[] {
   ];
 }
 
+// ===== DefaultCompactionStrategy =====
+
+/**
+ * Default compaction strategy wrapping the 7-layer pipeline.
+ * Requires a Provider instance for the summarize layer.
+ */
+export class DefaultCompactionStrategy implements CompactionStrategy {
+  constructor(
+    private provider: Provider,
+    private forkContext?: ForkContext,
+  ) {}
+
+  async compact(
+    messages: Message[],
+    config: CompactionConfig,
+    options?: { contextWindow?: number },
+  ): Promise<CompactionStrategyResult> {
+    const cfg = options?.contextWindow
+      ? { ...config, contextWindow: options.contextWindow }
+      : config;
+    return compact(messages, cfg, this.provider, this.forkContext);
+  }
+}
+
 // ===== Helpers =====
 
 function hasThinkingBlock(msg: Message): boolean {
@@ -458,17 +486,19 @@ export function estimateTokens(messages: Message[]): number {
       total += Math.ceil(msg.content.length / 4);
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        if ('text' in block && typeof (block as any).text === 'string') {
-          total += Math.ceil((block as any).text.length / 4);
+        // Use Record to access arbitrary fields on the ContentBlock union
+        const b = block as unknown as Record<string, unknown>;
+        if (typeof b.text === 'string') {
+          total += Math.ceil(b.text.length / 4);
         }
-        if ('content' in block && typeof (block as any).content === 'string') {
-          total += Math.ceil((block as any).content.length / 4);
+        if (typeof b.content === 'string') {
+          total += Math.ceil(b.content.length / 4);
         }
-        if ('thinking' in block && typeof (block as any).thinking === 'string') {
-          total += Math.ceil((block as any).thinking.length / 4);
+        if (typeof b.thinking === 'string') {
+          total += Math.ceil(b.thinking.length / 4);
         }
-        if ('input' in block) {
-          total += Math.ceil(JSON.stringify((block as any).input).length / 4);
+        if ('input' in b) {
+          total += Math.ceil(JSON.stringify(b.input).length / 4);
         }
       }
     }

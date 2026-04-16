@@ -286,9 +286,9 @@ export function createCollector(config: CollectorConfig): {
           toolName: event.toolName,
           input: JSON.stringify(event.input),
           decision: event.decision.action,
-          reason: event.decision.action === 'deny' ? (event.decision as any).reason ?? null : null,
+          reason: event.decision.action === 'deny' ? event.decision.reason ?? null : null,
           modifiedInput: event.decision.action === 'modify'
-            ? JSON.stringify((event.decision as any).input)
+            ? JSON.stringify(event.decision.input)
             : null,
           callIndex: event.callIndex,
           durationMs: event.durationMs,

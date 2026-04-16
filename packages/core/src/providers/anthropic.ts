@@ -34,6 +34,12 @@ import type {
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
 
+// Extended Anthropic SDK types for beta features (thinking, etc.)
+interface ThinkingDelta { type: 'thinking_delta'; thinking: string }
+interface ThinkingBlock { type: 'thinking'; thinking: string }
+// Image block must satisfy ContentBlockParam union (ImageBlockParam)
+interface AnthropicImageBlock { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; [k: string]: unknown }
+
 export class AnthropicProvider implements Provider {
   readonly type = 'anthropic' as const;
   private client: Anthropic;
@@ -121,7 +127,7 @@ export class AnthropicProvider implements Provider {
               yield { type: 'text_delta', text };
             }
           } else if (delta.type === 'thinking_delta') {
-            const thinking = (delta as any).thinking ?? '';
+            const thinking = (delta as unknown as ThinkingDelta).thinking ?? '';
             const target = block && block.type === 'thinking'
               ? block
               : ({ type: 'thinking', thinking: '' } satisfies ThinkingContent);
@@ -298,7 +304,7 @@ export class AnthropicProvider implements Provider {
             data: (block as ImageContent).data,
           },
           ...cache,
-        } as any;
+        } as unknown as ContentBlockParam;
       }
       return { type: 'text' as const, text: JSON.stringify(block), ...cache };
     });
@@ -381,7 +387,7 @@ export class AnthropicProvider implements Provider {
       if (block.type === 'thinking') {
         return {
           type: 'thinking',
-          thinking: (block as any).thinking ?? '',
+          thinking: (block as unknown as ThinkingBlock).thinking ?? '',
         } as ThinkingContent;
       }
       return { type: 'text', text: JSON.stringify(block) } as TextContent;
@@ -403,7 +409,7 @@ export class AnthropicProvider implements Provider {
     if (block.type === 'thinking') {
       return {
         type: 'thinking',
-        thinking: (block as any).thinking ?? '',
+        thinking: (block as unknown as ThinkingBlock).thinking ?? '',
       };
     }
     return undefined;
