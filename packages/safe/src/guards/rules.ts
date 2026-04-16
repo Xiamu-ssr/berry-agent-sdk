@@ -45,9 +45,11 @@ export function directoryScope(allowedDir: string): ToolGuard {
     for (const field of pathFields) {
       const value = input[field];
       if (typeof value === 'string') {
-        const abs = resolve(value);
+        // Resolve relative paths against allowedDir, not process.cwd().
+        // Without this, path "." resolves to cwd and gets denied.
+        const abs = resolve(resolved, value);
         const rel = relative(resolved, abs);
-        if (rel.startsWith('..') || resolve(abs) === abs && !abs.startsWith(resolved)) {
+        if (rel.startsWith('..')) {
           return { action: 'deny', reason: `Path "${value}" is outside allowed directory "${allowedDir}"` };
         }
       }
