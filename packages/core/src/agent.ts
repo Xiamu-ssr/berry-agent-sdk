@@ -110,6 +110,16 @@ export class Agent {
     this.onEvent?.({ type: 'status_change', status, detail });
   }
 
+  /** Current runtime status. */
+  get status(): import('./types.js').AgentStatus {
+    return this._status;
+  }
+
+  /** Optional human-readable detail for the current status (e.g. active tool names). */
+  get statusDetail(): string | undefined {
+    return this._statusDetail;
+  }
+
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
     this.systemPrompt = Array.isArray(config.systemPrompt)
@@ -425,7 +435,10 @@ export class Agent {
       throw err;
     } finally {
       this._querying = false;
-      this.setStatus('idle');
+      // Preserve 'error' so UI can observe the failure. Observers that
+      // want to reset can do so explicitly; the next query() transitions
+      // back to 'thinking' anyway.
+      if (this._status !== 'error') this.setStatus('idle');
     }
   }
 
