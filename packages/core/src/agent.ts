@@ -103,6 +103,9 @@ export class Agent {
   private _interjectWakers: Array<() => void> = [];
   private _sleepDepth = 0;
 
+  // Hot-reload: instance-level tool allow-list. Intersects with per-query allowedTools.
+  private _instanceAllowedTools?: Set<string>;
+
   // Lifecycle hooks
   private _onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
   private _onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
@@ -840,6 +843,43 @@ export class Agent {
     return { ...this.providerConfig };
   }
 
+  // ===== Hot reload API =====
+  //
+  // These mutators let a product (e.g. berry-claw) reconfigure a running
+  // Agent without destroying the instance, so sessions/memory/pending
+  // interjects survive. Changes take effect on the next LLM inference.
+
+  /** Replace the user-facing system prompt blocks. */
+  setSystemPrompt(blocks: string | string[]): void {
+    this.systemPrompt = Array.isArray(blocks) ? [...blocks] : [blocks];
+  }
+
+  /** Register (or replace by name) a single tool. */
+  registerTool(registration: ToolRegistration): void {
+    this.tools.set(registration.definition.name, registration);
+  }
+
+  /** Remove a tool by name. Returns true if removed. */
+  unregisterTool(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
+  /**
+   * Set an explicit allow-list of tool names used on every query. Pass `null`
+   * or `undefined` to clear and use all registered + runtime tools.
+   *
+   * Runtime tools (memory/todo/sleep) are always allowed; this filter only
+   * applies to user-registered tools.
+   */
+  setAllowedTools(names: string[] | null | undefined): void {
+    this._instanceAllowedTools = names ? new Set(names) : undefined;
+  }
+
+  /** Current instance-level tool allow-list (read-only). */
+  getAllowedTools(): string[] | undefined {
+    return this._instanceAllowedTools ? [...this._instanceAllowedTools] : undefined;
+  }
+
   // ===== Introspection =====
 
   /** Get current system prompt blocks */
@@ -1288,10 +1328,22 @@ export class Agent {
     });
     const merged = mergeToolsByName(registered, runtime);
 
-    if (!allowed) return merged;
+    // Runtime tools (memory/todo/sleep) are always allowed; instance allow-list
+    // only filters user-registered tools.
+    const runtimeNames = new Set(runtime.map(t => t.definition.name));
+    const applyAllow = (tool: ToolRegistration, set?: Set<string>): boolean => {
+      if (!set) return true;
+      if (runtimeNames.has(tool.definition.name)) return true;
+      return set.has(tool.definition.name);
+    };
 
-    const allowedSet = new Set(allowed);
-    return merged.filter((tool) => allowedSet.has(tool.definition.name));
+    const afterInstance = this._instanceAllowedTools
+      ? merged.filter(t => applyAllow(t, this._instanceAllowedTools))
+      : merged;
+
+    if (!allowed) return afterInstance;
+    const perQuerySet = new Set(allowed);
+    return afterInstance.filter(t => applyAllow(t, perQuerySet));
   }
 
   /**
