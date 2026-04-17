@@ -517,7 +517,7 @@ export const AGENT_EVENT_TYPES = [
   'tool_call', 'tool_result', 'guard_decision', 'compaction', 'memory_flush',
   'query_end', 'delegate_start', 'delegate_end',
   'child_spawned', 'child_destroyed',
-  'status_change',
+  'status_change', 'todo_updated',
 ] as const;
 
 // ----- Agent Status -----
@@ -564,4 +564,5 @@ export type AgentEvent =
   | { type: 'delegate_end'; result: DelegateResult }
   | { type: 'child_spawned'; childId: string }
   | { type: 'child_destroyed'; childId: string }
-  | { type: 'status_change'; status: AgentStatus; detail?: string };
+  | { type: 'status_change'; status: AgentStatus; detail?: string }
+  | { type: 'todo_updated'; sessionId: string; todos: TodoItem[]; timestamp: number };

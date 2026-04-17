@@ -28,6 +28,7 @@ import type {
   Middleware,
   MiddlewareContext,
   ToolDefinition,
+  TodoItem,
 } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
@@ -1181,6 +1182,14 @@ export class Agent {
       memory: this._memory,
       memorySearch: this._memorySearch,
       session,
+      onTodoChange: (s, state) => {
+        this.emit({
+          type: 'todo_updated',
+          sessionId: s.id,
+          todos: state.items,
+          timestamp: state.updatedAt,
+        });
+      },
     });
     const merged = mergeToolsByName(registered, runtime);
 
@@ -1188,6 +1197,16 @@ export class Agent {
 
     const allowedSet = new Set(allowed);
     return merged.filter((tool) => allowedSet.has(tool.definition.name));
+  }
+
+  /**
+   * Get the current todo list for a session. Returns an empty array if
+   * no todos have been set yet.
+   */
+  async getTodos(sessionId: string): Promise<TodoItem[]> {
+    const session = await this.sessionStore.load(sessionId);
+    if (!session) return [];
+    return session.metadata.todo?.items ?? [];
   }
 
   private async buildSystemPrompt(basePrompt: string[], override?: string | string[]): Promise<string[]> {

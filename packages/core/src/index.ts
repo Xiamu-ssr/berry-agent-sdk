@@ -70,6 +70,14 @@ export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';
 export { withRetry, isRetryableError, getRetryDelay, classifyError } from './utils/retry.js';
 export type { ErrorKind } from './utils/retry.js';
 
+// Credential store (secrets / API keys)
+export {
+  DefaultCredentialStore,
+  MemoryCredentialStore,
+  defaultCredentialFilePath,
+} from './credentials.js';
+export type { CredentialStore } from './credentials.js';
+
 // Constants (for custom configs)
 export * from './constants.js';
 

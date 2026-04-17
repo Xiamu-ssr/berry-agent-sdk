@@ -3,7 +3,7 @@
 // ============================================================
 
 import { TOOL_WEB_SEARCH } from '@berry-agent/core';
-import type { ToolRegistration } from '@berry-agent/core';
+import type { CredentialStore, ToolRegistration } from '@berry-agent/core';
 
 // ----- Public types -----
 
@@ -17,25 +17,35 @@ export interface SearchProvider {
   search(query: string, options?: { count?: number }): Promise<SearchResult[]>;
 }
 
-export interface TavilySearchConfig {
-  provider: 'tavily';
-  apiKey: string;
+export type WebSearchProviderName = 'tavily' | 'brave' | 'serpapi';
+
+/**
+ * Mapping from each provider to the credential key names it looks up.
+ * Useful for Settings UIs ("which key do I need to configure?").
+ */
+export const WEB_SEARCH_CREDENTIAL_KEYS: Record<WebSearchProviderName, string> = {
+  tavily: 'TAVILY_API_KEY',
+  brave: 'BRAVE_API_KEY',
+  serpapi: 'SERPAPI_API_KEY',
+};
+
+export interface WebSearchConfig {
+  provider: WebSearchProviderName;
+  /**
+   * Credential store that resolves the provider's API key. Required when
+   * `apiKey` is not passed explicitly.
+   */
+  credentials?: CredentialStore;
+  /**
+   * Direct API key. Takes precedence over `credentials.get(...)` when set.
+   */
+  apiKey?: string;
+  /**
+   * Override the credential key name (defaults to WEB_SEARCH_CREDENTIAL_KEYS).
+   */
+  credentialKey?: string;
   baseUrl?: string;
 }
-
-export interface BraveSearchConfig {
-  provider: 'brave';
-  apiKey: string;
-  baseUrl?: string;
-}
-
-export interface SerpAPISearchConfig {
-  provider: 'serpapi';
-  apiKey: string;
-  baseUrl?: string;
-}
-
-export type WebSearchConfig = TavilySearchConfig | BraveSearchConfig | SerpAPISearchConfig;
 
 // ----- Built-in adapters -----
 
@@ -109,23 +119,57 @@ class SerpAPIAdapter implements SearchProvider {
 
 // ----- Factory -----
 
-function createProvider(config: WebSearchConfig): SearchProvider {
+function resolveApiKey(config: WebSearchConfig): string | undefined {
+  if (config.apiKey && config.apiKey.length > 0) return config.apiKey;
+  const keyName = config.credentialKey ?? WEB_SEARCH_CREDENTIAL_KEYS[config.provider];
+  return config.credentials?.get(keyName);
+}
+
+function createProvider(config: WebSearchConfig, apiKey: string): SearchProvider {
   switch (config.provider) {
     case 'tavily':
-      return new TavilyAdapter(config.apiKey, config.baseUrl);
+      return new TavilyAdapter(apiKey, config.baseUrl);
     case 'brave':
-      return new BraveAdapter(config.apiKey, config.baseUrl);
+      return new BraveAdapter(apiKey, config.baseUrl);
     case 'serpapi':
-      return new SerpAPIAdapter(config.apiKey, config.baseUrl);
+      return new SerpAPIAdapter(apiKey, config.baseUrl);
   }
 }
 
 /**
  * Create a web_search tool with the specified search provider.
- * Config (provider + API key) is set at creation time, not per-call.
+ * Config (provider + credentials) is set at creation time.
+ *
+ * If no API key can be resolved, returns a stub tool that reports the
+ * missing credential to the agent at call time — so the tool is still
+ * advertised but safely fails.
  */
 export function createWebSearchTool(config: WebSearchConfig): ToolRegistration {
-  const provider = createProvider(config);
+  const apiKey = resolveApiKey(config);
+  const keyName = config.credentialKey ?? WEB_SEARCH_CREDENTIAL_KEYS[config.provider];
+
+  if (!apiKey) {
+    return {
+      definition: {
+        name: TOOL_WEB_SEARCH,
+        description: `Search the web. Currently NOT configured (missing ${keyName}).`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            count: { type: 'number', description: 'Number of results to return (default 5)' },
+          },
+          required: ['query'],
+        },
+      },
+      execute: async () => ({
+        content: `web_search is not configured: missing credential "${keyName}" for provider "${config.provider}". Ask the user to configure it.`,
+        isError: true,
+      }),
+    };
+  }
+
+  const provider = createProvider(config, apiKey);
 
   return {
     definition: {

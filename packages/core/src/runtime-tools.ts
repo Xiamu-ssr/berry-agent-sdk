@@ -25,6 +25,11 @@ interface RuntimeToolOptions {
   memory?: AgentMemory;
   memorySearch?: MemorySearchProvider;
   session?: Session;
+  /**
+   * Optional hook invoked after todo state changes (via todo_write).
+   * Agent wires this up to emit `todo_updated` events.
+   */
+  onTodoChange?: (session: Session, state: SessionTodoState) => void;
 }
 
 const MEMORY_SEARCH_DEFINITION: ToolDefinition = {
@@ -165,13 +170,19 @@ export function createRuntimeTools(options: RuntimeToolOptions): ToolRegistratio
         return { content: 'Error: items must be an array of todo objects', isError: true };
       }
 
-      options.session.metadata.todo = {
+      const newState: SessionTodoState = {
         items,
         updatedAt: Date.now(),
       };
+      options.session.metadata.todo = newState;
+      try {
+        options.onTodoChange?.(options.session, newState);
+      } catch {
+        // never let listener failures break tool execution
+      }
 
       return {
-        content: JSON.stringify(formatTodoState(options.session.metadata.todo), null, 2),
+        content: JSON.stringify(formatTodoState(newState), null, 2),
       };
     },
   });
