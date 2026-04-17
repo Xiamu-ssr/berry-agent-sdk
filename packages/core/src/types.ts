@@ -533,6 +533,7 @@ export type AgentStatus =
   | 'compacting'         // Running compaction pipeline
   | 'memory_flushing'    // Pre-compact memory flush
   | 'delegating'         // Running a delegate sub-query
+  | 'sleeping'           // Suspended by sleep tool; interject() will wake
   | 'error';             // Query failed (transient, returns to idle)
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];

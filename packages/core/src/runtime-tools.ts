@@ -17,9 +17,27 @@ import type {
 import {
   TOOL_MEMORY_SEARCH,
   TOOL_MEMORY_WRITE,
+  TOOL_SLEEP,
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
 } from './tool-names.js';
+
+/** Hard upper bound on a single sleep call, to stop agents sleeping forever. */
+export const SLEEP_MAX_SECONDS = 300; // 5 minutes
+
+/**
+ * Signal object the agent loop passes to the sleep tool so that interject()
+ * can wake the agent early. The agent sets `wake` to a resolved promise when
+ * it wants to break sleeps in progress.
+ */
+export interface SleepSignal {
+  /** Called by the sleep tool when it begins waiting. */
+  onEnter: () => void;
+  /** Called by the sleep tool when it exits (either timer fired or interject). */
+  onExit: () => void;
+  /** Promise that resolves early when interject() is called. */
+  interjectWaker: () => Promise<void>;
+}
 
 interface RuntimeToolOptions {
   memory?: AgentMemory;
@@ -30,6 +48,11 @@ interface RuntimeToolOptions {
    * Agent wires this up to emit `todo_updated` events.
    */
   onTodoChange?: (session: Session, state: SessionTodoState) => void;
+  /**
+   * Sleep signal provided by the agent loop. When set, the sleep tool is
+   * registered and can be interrupted by interject().
+   */
+  sleepSignal?: SleepSignal;
 }
 
 const MEMORY_SEARCH_DEFINITION: ToolDefinition = {
@@ -90,6 +113,22 @@ const TODO_WRITE_DEFINITION: ToolDefinition = {
   },
 };
 
+const SLEEP_DEFINITION: ToolDefinition = {
+  name: TOOL_SLEEP,
+  description:
+    `Suspend yourself for up to ${SLEEP_MAX_SECONDS}s. Use this to wait for background jobs, rate-limit windows, or to poll external state on an interval. The sleep can be cut short by an external interject signal — you'll resume and continue reasoning immediately when that happens.`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      seconds: {
+        type: 'number',
+        description: `How long to sleep, in seconds. Clamped to [0, ${SLEEP_MAX_SECONDS}].`,
+      },
+    },
+    required: ['seconds'],
+  },
+};
+
 export function getRuntimeToolDefinitions(options: Omit<RuntimeToolOptions, 'session'>): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
 
@@ -102,6 +141,7 @@ export function getRuntimeToolDefinitions(options: Omit<RuntimeToolOptions, 'ses
   }
 
   definitions.push(TODO_READ_DEFINITION, TODO_WRITE_DEFINITION);
+  if (options.sleepSignal) definitions.push(SLEEP_DEFINITION);
   return definitions;
 }
 
@@ -186,6 +226,39 @@ export function createRuntimeTools(options: RuntimeToolOptions): ToolRegistratio
       };
     },
   });
+
+  if (options.sleepSignal) {
+    const sig = options.sleepSignal;
+    tools.push({
+      definition: SLEEP_DEFINITION,
+      execute: async (input) => {
+        const raw = typeof input.seconds === 'number' ? input.seconds : NaN;
+        if (!Number.isFinite(raw) || raw < 0) {
+          return { content: 'Error: seconds must be a non-negative number', isError: true };
+        }
+        const seconds = Math.min(raw, SLEEP_MAX_SECONDS);
+        sig.onEnter();
+        const started = Date.now();
+        try {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timerPromise = new Promise<'timer'>((resolve) => {
+            timer = setTimeout(() => resolve('timer'), seconds * 1000);
+          });
+          const interjectPromise = sig.interjectWaker().then(() => 'interject' as const);
+          const outcome = await Promise.race([timerPromise, interjectPromise]);
+          if (timer) clearTimeout(timer);
+          const elapsed = ((Date.now() - started) / 1000).toFixed(2);
+          return {
+            content: outcome === 'interject'
+              ? `Slept ${elapsed}s of ${seconds}s (woken early by interject)`
+              : `Slept ${elapsed}s`,
+          };
+        } finally {
+          sig.onExit();
+        }
+      },
+    });
+  }
 
   return tools;
 }

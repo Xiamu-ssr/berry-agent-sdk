@@ -29,6 +29,28 @@ export const WEB_SEARCH_CREDENTIAL_KEYS: Record<WebSearchProviderName, string> =
   serpapi: 'SERPAPI_API_KEY',
 };
 
+/**
+ * Rich metadata for each credential. Source-of-truth for Settings UIs so
+ * products don't have to keep a parallel list. Add a new entry here when
+ * you add a new provider — tool-common re-exports via index.ts.
+ */
+export interface CredentialKeyMeta {
+  /** Env var / file key name. */
+  key: string;
+  /** Grouping for UI (e.g. "web_search"). */
+  category: 'web_search';
+  /** Human-readable provider name. */
+  provider: string;
+  /** Signup / documentation URL. */
+  url: string;
+}
+
+export const WEB_SEARCH_CREDENTIAL_META: readonly CredentialKeyMeta[] = [
+  { key: 'TAVILY_API_KEY',  category: 'web_search', provider: 'Tavily',        url: 'https://tavily.com' },
+  { key: 'BRAVE_API_KEY',   category: 'web_search', provider: 'Brave Search',  url: 'https://brave.com/search/api' },
+  { key: 'SERPAPI_API_KEY', category: 'web_search', provider: 'SerpAPI',       url: 'https://serpapi.com' },
+] as const;
+
 export interface WebSearchConfig {
   provider: WebSearchProviderName;
   /**

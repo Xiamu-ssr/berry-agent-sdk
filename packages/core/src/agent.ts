@@ -98,6 +98,11 @@ export class Agent {
   private _status: import('./types.js').AgentStatus = 'idle';
   private _statusDetail?: string;
 
+  // Interject mechanism — see interject() + sleep tool wiring
+  private _pendingInterjects: string[] = [];
+  private _interjectWakers: Array<() => void> = [];
+  private _sleepDepth = 0;
+
   // Lifecycle hooks
   private _onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
   private _onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
@@ -118,6 +123,65 @@ export class Agent {
   /** Optional human-readable detail for the current status (e.g. active tool names). */
   get statusDetail(): string | undefined {
     return this._statusDetail;
+  }
+
+  /**
+   * Inject an immediate message into the currently-running query, to be seen
+   * by the next LLM inference within the same turn.
+   *
+   *   - Use `query()` for queued / next-turn messages (normal user prompts).
+   *   - Use `interject()` for right-now messages that should not wait for the
+   *     current turn to finish (e.g. "stop" nudges, breaking news).
+   *
+   * Also wakes any in-progress sleep tool early.
+   */
+  interject(text: string): void {
+    if (!text || !text.trim()) return;
+    this._pendingInterjects.push(text);
+    // Wake any pending sleep waiters
+    const wakers = this._interjectWakers.splice(0);
+    for (const w of wakers) {
+      try { w(); } catch { /* ignore */ }
+    }
+  }
+
+  /** Create a SleepSignal bound to this agent (consumed by runtime-tools). */
+  private createSleepSignal(): import('./runtime-tools.js').SleepSignal {
+    return {
+      onEnter: () => {
+        this._sleepDepth++;
+        this.setStatus('sleeping');
+      },
+      onExit: () => {
+        this._sleepDepth = Math.max(0, this._sleepDepth - 1);
+        if (this._sleepDepth === 0 && this._status === 'sleeping') {
+          // Return to tool_executing; the outer loop will reset status after.
+          this.setStatus('tool_executing');
+        }
+      },
+      interjectWaker: () => new Promise<void>((resolve) => {
+        // If there are already pending interjects, resolve immediately.
+        if (this._pendingInterjects.length > 0) {
+          resolve();
+          return;
+        }
+        this._interjectWakers.push(resolve);
+      }),
+    };
+  }
+
+  /**
+   * Drain any pending interject messages into a list of Message objects the
+   * loop can prepend to the next LLM call. Called inside _queryLoop.
+   */
+  private drainInterjects(): Message[] {
+    if (this._pendingInterjects.length === 0) return [];
+    const texts = this._pendingInterjects.splice(0);
+    return texts.map((t) => ({
+      role: 'user' as const,
+      content: t,
+      createdAt: Date.now(),
+    }));
   }
 
   constructor(config: AgentConfig) {
@@ -510,6 +574,17 @@ export class Agent {
 
       this.setStatus('thinking');
 
+      // Drain any pending interject messages into the session so the upcoming
+      // LLM call sees them. Interjects are always treated as user messages.
+      const interjects = this.drainInterjects();
+      if (interjects.length > 0) {
+        session.messages.push(...interjects);
+        for (const msg of interjects) {
+          const text = typeof msg.content === 'string' ? msg.content : '';
+          await appendEvent({ ...makeBase(), type: 'user_message', content: text });
+        }
+      }
+
       // If event log is configured, rebuild messages from the log
       const messagesForProvider = log
         ? this.contextStrategy.buildMessages(await log.getEvents(session.id))
@@ -775,9 +850,15 @@ export class Agent {
   /** Get all registered tool definitions */
   getTools(): ToolDefinition[] {
     const registered = [...this.tools.values()];
+    // Use a lightweight signal here — this path only needs definitions.
     const runtime = getRuntimeToolDefinitions({
       memory: this._memory,
       memorySearch: this._memorySearch,
+      sleepSignal: {
+        onEnter: () => {},
+        onExit: () => {},
+        interjectWaker: () => new Promise(() => {}),
+      },
     }).map((definition) => ({
       definition,
       execute: async () => ({ content: '' }),
@@ -1195,6 +1276,7 @@ export class Agent {
       memory: this._memory,
       memorySearch: this._memorySearch,
       session,
+      sleepSignal: this.createSleepSignal(),
       onTodoChange: (s, state) => {
         this.emit({
           type: 'todo_updated',

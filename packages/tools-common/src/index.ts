@@ -23,8 +23,8 @@ export { createSearchTools } from './search.js';
 export { createEditFileTool } from './edit.js';
 export { createWebFetchTool } from './web-fetch.js';
 export { createWebSearchTool } from './web-search.js';
-export type { SearchProvider, SearchResult, WebSearchConfig, WebSearchProviderName } from './web-search.js';
-export { WEB_SEARCH_CREDENTIAL_KEYS } from './web-search.js';
+export type { SearchProvider, SearchResult, WebSearchConfig, WebSearchProviderName, CredentialKeyMeta } from './web-search.js';
+export { WEB_SEARCH_CREDENTIAL_KEYS, WEB_SEARCH_CREDENTIAL_META } from './web-search.js';
 export { createBrowserTool } from './browser.js';
 export type { BrowserAction, BrowserToolOptions } from './browser.js';
 

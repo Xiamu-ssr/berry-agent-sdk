@@ -27,6 +27,9 @@ export const TOOL_TODO_READ = 'todo_read' as const;
 /** Per-session todo write tool (auto-registered). */
 export const TOOL_TODO_WRITE = 'todo_write' as const;
 
+/** Sleep tool (auto-registered). Suspends the agent loop; interject() wakes early. */
+export const TOOL_SLEEP = 'sleep' as const;
+
 // ----- Common tools (@berry-agent/tools-common) -----
 
 export const TOOL_READ_FILE = 'read_file' as const;
@@ -54,6 +57,7 @@ export const CORE_TOOL_NAMES = [
   TOOL_MEMORY_WRITE,
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
+  TOOL_SLEEP,
 ] as const;
 
 /** All common tool names from @berry-agent/tools-common. */
