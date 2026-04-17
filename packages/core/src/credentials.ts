@@ -19,9 +19,18 @@ import { homedir } from 'node:os';
  */
 export interface CredentialStore {
   get(key: string): string | undefined;
+  /** True iff get(key) would return a non-empty value. */
+  has?(key: string): boolean;
   /**
-   * List all known credential keys (optional — used by Settings UIs
-   * to render status). Not all stores expose this.
+   * Report where a key is resolved from. Useful for Settings UIs.
+   * - 'env'  — came from process.env
+   * - 'file' — came from backing store
+   * - null  — not configured
+   */
+  source?(key: string): 'env' | 'file' | null;
+  /**
+   * List known credential keys from the backing store (env-only keys are
+   * typically excluded to avoid leaking unrelated env vars into UIs).
    */
   list?(): string[];
 }
@@ -56,27 +65,67 @@ export class DefaultCredentialStore implements CredentialStore {
     return this.fileCache?.[key];
   }
 
+  /**
+   * List credential keys known to this store. Returns file-backed keys only
+   * (env typically contains many unrelated variables). Use `has(key)` to
+   * check whether a specific key resolves from env or file.
+   */
   list(): string[] {
     if (!this.fileLoaded) {
       this.loadFileSync();
       this.fileLoaded = true;
     }
-    const envKeys = Object.keys(process.env).filter(
-      (k) => typeof process.env[k] === 'string' && (process.env[k] ?? '').length > 0,
-    );
-    const fileKeys = this.fileCache ? Object.keys(this.fileCache) : [];
-    return Array.from(new Set([...envKeys, ...fileKeys]));
+    return this.fileCache ? Object.keys(this.fileCache) : [];
   }
 
   /**
-   * Persist a credential to the backing file (env-set keys are ignored —
-   * products should instead write to the file so env remains source of truth
-   * for env-configured deployments).
+   * Check whether a specific credential is available (env or file).
+   */
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+
+  /**
+   * Report where a key is resolved from. Useful for Settings UI to show
+   * "configured in env" vs "saved to file".
+   */
+  source(key: string): 'env' | 'file' | null {
+    const envVal = process.env[key];
+    if (envVal && envVal.trim().length > 0) return 'env';
+    if (!this.fileLoaded) {
+      this.loadFileSync();
+      this.fileLoaded = true;
+    }
+    if (this.fileCache?.[key]) return 'file';
+    return null;
+  }
+
+  /**
+   * Persist a credential to the backing file. Env-set keys still take
+   * precedence on read, but the file value is preserved as a fallback.
    */
   async set(key: string, value: string): Promise<void> {
     if (!this.filePath) throw new Error('DefaultCredentialStore: filePath not configured');
+    if (!this.fileLoaded) {
+      this.loadFileSync();
+      this.fileLoaded = true;
+    }
     if (!this.fileCache) this.fileCache = {};
     this.fileCache[key] = value;
+    await writeJsonAtomic(this.filePath, this.fileCache);
+  }
+
+  /**
+   * Remove a credential from the backing file. Env-set keys are not touched.
+   */
+  async delete(key: string): Promise<void> {
+    if (!this.filePath) throw new Error('DefaultCredentialStore: filePath not configured');
+    if (!this.fileLoaded) {
+      this.loadFileSync();
+      this.fileLoaded = true;
+    }
+    if (!this.fileCache || !(key in this.fileCache)) return;
+    delete this.fileCache[key];
     await writeJsonAtomic(this.filePath, this.fileCache);
   }
 
@@ -105,6 +154,14 @@ export class MemoryCredentialStore implements CredentialStore {
 
   get(key: string): string | undefined {
     return this.entries[key];
+  }
+
+  has(key: string): boolean {
+    return this.get(key) !== undefined;
+  }
+
+  source(key: string): 'env' | 'file' | null {
+    return this.entries[key] !== undefined ? 'file' : null;
   }
 
   list(): string[] {

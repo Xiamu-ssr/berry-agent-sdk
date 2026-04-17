@@ -80,12 +80,53 @@ describe('DefaultCredentialStore', () => {
     await expect(store.set('X', 'y')).rejects.toThrow(/filePath not configured/);
   });
 
-  it('list() returns union of env and file keys', async () => {
+  it('list() only returns file-backed keys (no env bleed)', async () => {
     await fs.writeFile(filePath, JSON.stringify({ FILE_ONLY_KEY_TEST: 'v' }));
-    process.env.BERRY_TEST_KEY = 'v';
+    process.env.BERRY_TEST_KEY = 'env-only';
     const store = new DefaultCredentialStore({ filePath });
     const keys = store.list();
-    expect(keys).toContain('FILE_ONLY_KEY_TEST');
-    expect(keys).toContain('BERRY_TEST_KEY');
+    expect(keys).toEqual(['FILE_ONLY_KEY_TEST']);
+    expect(keys).not.toContain('BERRY_TEST_KEY');
+    expect(keys).not.toContain('PATH');
+  });
+
+  it('has(key) works for both env and file', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ FILE_KEY: 'v' }));
+    process.env.BERRY_TEST_KEY = 'v';
+    const store = new DefaultCredentialStore({ filePath });
+    expect(store.has('FILE_KEY')).toBe(true);
+    expect(store.has('BERRY_TEST_KEY')).toBe(true);
+    expect(store.has('NOT_SET_KEY_FOR_TEST')).toBe(false);
+  });
+
+  it('source(key) distinguishes env from file', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ FILE_KEY: 'v' }));
+    process.env.BERRY_TEST_KEY = 'v';
+    const store = new DefaultCredentialStore({ filePath });
+    expect(store.source('BERRY_TEST_KEY')).toBe('env');
+    expect(store.source('FILE_KEY')).toBe('file');
+    expect(store.source('NEITHER_KEY_FOR_TEST')).toBeNull();
+  });
+
+  it('env precedence reported in source()', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ BERRY_TEST_KEY: 'from-file' }));
+    process.env.BERRY_TEST_KEY = 'from-env';
+    const store = new DefaultCredentialStore({ filePath });
+    expect(store.source('BERRY_TEST_KEY')).toBe('env');
+  });
+
+  it('delete() removes a file-backed credential', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ BERRY_TEST_KEY: 'v' }));
+    const store = new DefaultCredentialStore({ filePath });
+    expect(store.has('BERRY_TEST_KEY')).toBe(true);
+    await store.delete('BERRY_TEST_KEY');
+    expect(store.has('BERRY_TEST_KEY')).toBe(false);
+    const raw = await fs.readFile(filePath, 'utf-8');
+    expect(JSON.parse(raw)).not.toHaveProperty('BERRY_TEST_KEY');
+  });
+
+  it('delete() is a no-op for missing keys', async () => {
+    const store = new DefaultCredentialStore({ filePath });
+    await expect(store.delete('NOPE')).resolves.toBeUndefined();
   });
 });
