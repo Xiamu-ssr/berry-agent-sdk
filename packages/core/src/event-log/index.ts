@@ -9,6 +9,7 @@ export type {
   BaseEvent,
   SessionEvent,
   SessionEventType,
+  CompactionTriggerReason,
   UserMessageEvent,
   AssistantMessageEvent,
   ToolUseEvent,

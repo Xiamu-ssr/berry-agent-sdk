@@ -8,6 +8,7 @@ TypeScript Agent Harness SDK — the infrastructure layer for building autonomou
 @berry-agent/observe       Full-stack observability (SQLite + analyzers + REST + dashboard UI)
 @berry-agent/safe          Guards, LLM classifier, PI probe, audit
 @berry-agent/mcp           MCP client → Berry tool adapter
+@berry-agent/memory        Memory backends (file, mem0, zep) with unified interface
 ```
 
 ## Install
@@ -15,7 +16,7 @@ TypeScript Agent Harness SDK — the infrastructure layer for building autonomou
 ```bash
 npm install @berry-agent/core @berry-agent/tools-common
 # Optional:
-npm install @berry-agent/observe @berry-agent/safe @berry-agent/mcp
+npm install @berry-agent/observe @berry-agent/safe @berry-agent/mcp @berry-agent/memory
 ```
 
 ## Quick Start
@@ -41,9 +42,14 @@ console.log(result.text);
 ### Agent Loop
 - Tool calling with **parallel execution** (Promise.all)
 - Session resume / fork with FileSessionStore
-- 7-layer batch compaction (context window management)
-- Streaming + 14 event types
+- **Session Event Log** (append-only JSONL, crash-safe)
+- **7-layer batch compaction** with pluggable `CompactionStrategy`
+- **Pre-compact memory flush** (save important context before compaction)
+- **Stream idle timeout** (auto-abort stalled provider streams)
+- Streaming + 16 event types
 - Structured output (JSON schema)
+- Lifecycle hooks: `onQueryStart` / `onQueryEnd`
+- `ChatMessage` type + `toChatMessages()` converter
 
 ### Built-in Agent Tools
 - **delegate** — LLM self-decides to fork a one-shot sub-agent for complex sub-tasks
@@ -128,16 +134,16 @@ Your App (e.g., berry-claw)
 
 ## Numbers
 
-- **Source**: 7,825 lines across 5 packages + UI
-- **Tests**: 183 (16 test files), all passing
-- **Status**: Alpha
+- **Source**: ~9,600 lines across 6 packages + UI
+- **Tests**: 257 (21 test files), all passing
+- **Status**: Alpha (v0.3.0-alpha.0)
 
 ## Development
 
 ```bash
 npm install
 npm run build          # Build all packages
-npm test               # Run all unit tests (183)
+npm test               # Run all unit tests (257)
 npm run test:integration  # Run integration tests (requires API keys)
 ```
 

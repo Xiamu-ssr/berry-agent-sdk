@@ -25,9 +25,9 @@ export type { ExecuteToolsParams, ExecuteToolsResult } from './tool-executor.js'
 // Compaction Runner
 export { shouldCompact, runCompaction, preCompactMemoryFlush } from './compaction-runner.js';
 
-// Chat Messages (UI-friendly format)
-export { toChatMessages } from './chat.js';
-export type { ChatMessage } from './chat.js';
+// Chat / Timeline (UI-friendly format)
+export { toChatMessages, toChatTimeline } from './chat.js';
+export type { ChatMessage, ChatToolCall, ChatCompactionMarker, ChatTimelineItem } from './chat.js';
 
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
@@ -38,6 +38,7 @@ export type {
   BaseEvent,
   SessionEvent,
   SessionEventType,
+  CompactionTriggerReason,
   UserMessageEvent,
   AssistantMessageEvent,
   ToolUseEvent,
@@ -51,6 +52,7 @@ export type {
   DelegateEndEvent,
   ApiCallEvent,
   MetadataEvent,
+  MemoryFlushEvent,
   GetEventsOptions,
   EventLogStore,
   ContextStrategy,
@@ -58,7 +60,7 @@ export type {
 
 // Workspace
 export { FileAgentMemory, FileProjectContext, initWorkspace } from './workspace/index.js';
-export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata } from './workspace/index.js';
+export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata, MemorySearchProvider, MemorySearchResult } from './workspace/index.js';
 
 // Skills
 export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
@@ -81,6 +83,7 @@ export type {
   QueryOptions,
   QueryResult,
   AgentEvent,
+  AgentStatus,
 
   // Messages
   Message,
@@ -109,7 +112,9 @@ export type {
   // Session
   Session,
   SessionMetadata,
+  SessionTodoState,
   SessionStore,
+  TodoItem,
 
   // Compaction
   CompactionConfig,
@@ -144,6 +149,3 @@ export type {
   AGENT_EVENT_TYPES,
   GUARD_EVENT_KINDS,
 } from './types.js';
-
-// Re-export MemoryFlushEvent from event log
-export type { MemoryFlushEvent } from './event-log/index.js';

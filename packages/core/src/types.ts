@@ -146,6 +146,18 @@ export interface SessionMetadata {
   compactionCount: number;
   /** Last known input token count from the most recent API response (for compaction decisions). */
   lastInputTokens?: number;
+  /** Minimal per-session todo state kept outside the system prompt. */
+  todo?: SessionTodoState;
+}
+
+export interface TodoItem {
+  text: string;
+  done?: boolean;
+}
+
+export interface SessionTodoState {
+  items: TodoItem[];
+  updatedAt: number;
 }
 
 // ----- Agent Config -----
@@ -196,6 +208,8 @@ export interface AgentConfig {
    * Auto-initializes workspace structure on first use (unless autoInit is false).
    */
   workspace?: string;
+  /** Optional searchable memory adapter for memory_search (e.g. @berry-agent/memory backend). */
+  memorySearch?: import('./workspace/types.js').MemorySearchProvider;
   /** Project root directory (optional binding for shared project context). */
   project?: string;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
@@ -267,6 +281,8 @@ export interface AgentCreateConfig {
    * Auto-initializes workspace structure on first use.
    */
   workspace?: string;
+  /** Optional searchable memory adapter for memory_search (e.g. @berry-agent/memory backend). */
+  memorySearch?: import('./workspace/types.js').MemorySearchProvider;
   /** Project root directory (optional binding for shared project context). */
   project?: string;
   /** Middleware pipeline. */
@@ -501,7 +517,23 @@ export const AGENT_EVENT_TYPES = [
   'tool_call', 'tool_result', 'guard_decision', 'compaction', 'memory_flush',
   'query_end', 'delegate_start', 'delegate_end',
   'child_spawned', 'child_destroyed',
+  'status_change',
 ] as const;
+
+// ----- Agent Status -----
+
+/**
+ * Fine-grained agent status for UI consumption.
+ * Transitions: idle → thinking → (tool_executing | compacting | memory_flushing) → thinking → ... → idle
+ */
+export type AgentStatus =
+  | 'idle'               // Not running a query
+  | 'thinking'           // Waiting for LLM response
+  | 'tool_executing'     // Executing tool calls
+  | 'compacting'         // Running compaction pipeline
+  | 'memory_flushing'    // Pre-compact memory flush
+  | 'delegating'         // Running a delegate sub-query
+  | 'error';             // Query failed (transient, returns to idle)
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
 
@@ -531,4 +563,5 @@ export type AgentEvent =
   | { type: 'delegate_start'; message: string }
   | { type: 'delegate_end'; result: DelegateResult }
   | { type: 'child_spawned'; childId: string }
-  | { type: 'child_destroyed'; childId: string };
+  | { type: 'child_destroyed'; childId: string }
+  | { type: 'status_change'; status: AgentStatus; detail?: string };

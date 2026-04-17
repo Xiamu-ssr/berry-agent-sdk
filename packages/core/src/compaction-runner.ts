@@ -129,7 +129,14 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
     ...makeBase(),
     type: 'compaction_marker',
     strategy: triggerReason,
+    triggerReason,
     tokensFreed: result.tokensFreed,
+    contextBefore,
+    contextAfter,
+    thresholdPct,
+    contextWindow: ctxWindow,
+    layersApplied: result.layersApplied,
+    durationMs: compactDuration,
   });
 
   emit({

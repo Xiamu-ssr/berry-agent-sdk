@@ -4,6 +4,7 @@
 
 import { exec } from 'node:child_process';
 import type { ToolRegistration } from '@berry-agent/core';
+import { resolveScopedRelativePath, shellEscape } from './path.js';
 
 const MAX_OUTPUT = 10_000;
 
@@ -38,10 +39,16 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
         },
       },
       execute: async (input) => {
-        const pattern = (input.pattern as string).replace(/'/g, "'\\''");
-        const path = (input.path as string) || '.';
-        const include = input.include ? `--include='${input.include}'` : '';
-        return run(`grep -rn ${include} '${pattern}' ${path} 2>/dev/null || echo '(no matches)'`);
+        try {
+          const pattern = input.pattern as string;
+          const path = resolveScopedRelativePath(baseDir, (input.path as string) || '.');
+          const include = typeof input.include === 'string'
+            ? `--include=${shellEscape(input.include)}`
+            : '';
+          return run(`grep -rn ${include} -e ${shellEscape(pattern)} ${shellEscape(path)} 2>/dev/null || echo '(no matches)'`);
+        } catch (err) {
+          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+        }
       },
     },
     {
@@ -59,10 +66,17 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
         },
       },
       execute: async (input) => {
-        const pattern = (input.pattern as string).replace(/'/g, "'\\''");
-        const path = (input.path as string) || '.';
-        const depth = input.maxDepth ? `-maxdepth ${input.maxDepth}` : '';
-        return run(`find ${path} ${depth} -name '${pattern}' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -100`);
+        try {
+          const pattern = input.pattern as string;
+          const path = resolveScopedRelativePath(baseDir, (input.path as string) || '.');
+          const maxDepth = typeof input.maxDepth === 'number' && Number.isFinite(input.maxDepth)
+            ? Math.max(0, Math.trunc(input.maxDepth))
+            : undefined;
+          const depth = maxDepth !== undefined ? `-maxdepth ${maxDepth}` : '';
+          return run(`find ${shellEscape(path)} ${depth} -name ${shellEscape(pattern)} -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -100`);
+        } catch (err) {
+          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+        }
       },
     },
   ];

@@ -22,6 +22,30 @@ export interface AgentMemory {
   exists(): Promise<boolean>;
 }
 
+export interface MemorySearchResult {
+  /** Optional stable entry ID when backed by a structured memory system. */
+  id?: string;
+  /** Textual memory content or snippet. */
+  content: string;
+  /** Backend-specific relevance score. */
+  score?: number;
+  /** Optional metadata attached by the backend. */
+  metadata?: Record<string, unknown>;
+  /** Creation timestamp in ms. */
+  createdAt?: number;
+  /** Last update timestamp in ms. */
+  updatedAt?: number;
+}
+
+/**
+ * Optional search adapter for richer memory backends.
+ * This stays separate from AgentMemory so core's file memory and external
+ * backends can coexist instead of forcing a single storage strategy.
+ */
+export interface MemorySearchProvider {
+  search(query: string, options?: { limit?: number }): Promise<MemorySearchResult[]>;
+}
+
 /** Project context interface — shared knowledge across agents. */
 export interface ProjectContext {
   /** Project root directory. */

@@ -5,7 +5,13 @@
 // The event log is the source of truth; the context window
 // (messages[]) is a derived view built by ContextStrategy.
 
-import type { ContentBlock, QueryResult, ToolGuardDecision, DelegateResult } from '../types.js';
+import type {
+  ContentBlock,
+  QueryResult,
+  ToolGuardDecision,
+  DelegateResult,
+  CompactionLayer,
+} from '../types.js';
 
 // ----- Base Event -----
 
@@ -69,11 +75,26 @@ export interface QueryEndEvent extends BaseEvent {
   result: QueryResult;
 }
 
+/** Structured reason for why compaction ran. */
+export type CompactionTriggerReason = 'soft_threshold' | 'threshold' | 'overflow_retry';
+
 /** Marker inserted when compaction occurs. Events before the last marker can be skipped for context building. */
 export interface CompactionMarkerEvent extends BaseEvent {
   type: 'compaction_marker';
+  /**
+   * Legacy field kept for backward compatibility.
+   * Mirrors triggerReason when the marker is produced by core.
+   */
   strategy: string;
+  /** Structured trigger reason for UI rendering / analytics. */
+  triggerReason?: CompactionTriggerReason;
   tokensFreed: number;
+  contextBefore?: number;
+  contextAfter?: number;
+  thresholdPct?: number;
+  contextWindow?: number;
+  layersApplied?: CompactionLayer[];
+  durationMs?: number;
 }
 
 /** Guard decision for a tool call. */

@@ -91,14 +91,14 @@
 - **Commits**: 68acb62 (observe v2), f07cd8a (observer fix), 595e398 (delegate/spawn fixes)
 
 ### Numbers (v0.3)
-- **SDK Source**: ~8,663 lines (5 packages)
-- **SDK Tests**: ~5,660 lines, 211 total (137 core + 42 observe + 32 safe)
+- **SDK Source**: ~9,600 lines (6 packages)
+- **SDK Tests**: ~5,660 lines, 257 total (21 test files)
 - **Observe UI**: 1,764 lines (14 components, dark mode)
-- **Key commits**: 4af94bb (event log), 7511899 (workspace + observe split), 1146d06 (context builder fix), 899c0de (metrics + dark mode)
+- **Key commits**: 4af94bb (event log), 7511899 (workspace + observe split), b523f09 (major restructure)
 
 ---
 
-## v0.3 (planned) — Session Event Log + Agent Identity
+## v0.3 (current) — Session Event Log + Agent Identity + Restructure
 
 > 详细设计见 PLAN-V0.3.md
 
@@ -123,12 +123,24 @@
 - [x] Dark mode 主题支持（CSS 变量 + 14 组件 dark: variants + auto-detect）
 - [ ] npm publish
 
+### Phase 4: Memory + Restructure ✅
+- [x] @berry-agent/memory 包（FileMemoryBackend, Mem0, Zep — 统一 MemoryBackend 接口）
+- [x] Pre-compact memory flush（hard compact 前自动保存重要上下文到 AgentMemory）
+- [x] agent.ts 拆分为 3 文件（agent.ts + tool-executor.ts + compaction-runner.ts）
+- [x] CompactionStrategy 接口 + DefaultCompactionStrategy（可插拔）
+- [x] Agent lifecycle hooks: onQueryStart / onQueryEnd
+- [x] Agent.inspect() 扩展（workspace, memory, compaction, eventLog, status, children）
+- [x] ChatMessage 类型 + toChatMessages() 转换器
+- [x] `as any` 清理（46 → 0）
+- [x] Stream idle timeout (BUG-05)
+- [x] query_end on error (BUG-06)
+- [x] directoryScope "." bug fix (BUG-07)
+
 ### Future (v0.4+)
 - [ ] Skill self-creation (L3+ on evolvability ladder)
-- [ ] Credential Isolation middleware
-- [ ] OpenTelemetry export
-- [ ] Event Log → diary 自动摘要
-- [ ] Event Log → memory search 集成
+- [ ] Credential scrubbing (tool input/output 密钥保护)
+- [ ] Tool ecosystem expansion (MCP prefix naming, more built-in tools)
+- [ ] Task mode / Agent orchestration
 - [ ] Multi-agent orchestration protocol
 
 ---

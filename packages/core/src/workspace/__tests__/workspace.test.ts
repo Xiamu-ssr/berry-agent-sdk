@@ -109,6 +109,18 @@ describe('FileAgentMemory', () => {
     expect(content).toMatch(/## \d{4}-\d{2}-\d{2}T/);
   });
 
+  it('search() finds matching entries in memory markdown', async () => {
+    await memory.write('');
+    await memory.append('Architecture decision: use JSONL event logs');
+    await memory.append('Implementation note: todo lives in session metadata');
+
+    const results = await memory.search('architecture', { limit: 1 });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].content).toContain('Architecture decision');
+    expect(results[0].score).toBeGreaterThan(0);
+  });
+
   it('write() replaces existing content entirely', async () => {
     await memory.write('original');
     await memory.write('replaced');

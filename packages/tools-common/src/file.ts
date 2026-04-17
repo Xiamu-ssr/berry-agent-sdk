@@ -2,22 +2,17 @@
 // Berry Agent SDK — Common Tools: File Operations
 // ============================================================
 
-import { readFile, writeFile, readdir, mkdir, stat } from 'node:fs/promises';
-import { join, resolve, relative } from 'node:path';
+import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { ToolRegistration } from '@berry-agent/core';
+import { resolveScopedPath } from './path.js';
 
 /**
  * Create file operation tools scoped to a base directory.
  * Tools: read_file, write_file, list_files
  */
 export function createFileTools(baseDir: string): ToolRegistration[] {
-  const safePath = (p: string) => {
-    const full = resolve(baseDir, p);
-    if (!full.startsWith(resolve(baseDir))) {
-      throw new Error('Path escapes base directory');
-    }
-    return full;
-  };
+  const safePath = (p: string) => resolveScopedPath(baseDir, p);
 
   return [
     {
@@ -66,7 +61,7 @@ export function createFileTools(baseDir: string): ToolRegistration[] {
       execute: async (input) => {
         try {
           const filePath = safePath(input.path as string);
-          await mkdir(resolve(filePath, '..'), { recursive: true });
+          await mkdir(dirname(filePath), { recursive: true });
           await writeFile(filePath, input.content as string, 'utf-8');
           return { content: `Written ${(input.content as string).length} bytes to ${input.path}` };
         } catch (err) {

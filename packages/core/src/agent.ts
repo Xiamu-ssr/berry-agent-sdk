@@ -15,6 +15,7 @@ import type {
   ProviderRequest,
   ToolRegistration,
   Session,
+  SessionMetadata,
   SessionStore,
   ContentBlock,
   ToolUseContent,
@@ -33,7 +34,7 @@ import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
-import type { AgentMemory, ProjectContext } from './workspace/types.js';
+import type { AgentMemory, MemorySearchProvider, ProjectContext } from './workspace/types.js';
 import { FileAgentMemory } from './workspace/file-memory.js';
 import { FileProjectContext } from './workspace/file-project.js';
 import { initWorkspace } from './workspace/initializer.js';
@@ -60,6 +61,7 @@ import {
   runCompaction,
   preCompactMemoryFlush,
 } from './compaction-runner.js';
+import { createRuntimeTools, getRuntimeToolDefinitions } from './runtime-tools.js';
 
 /** Internal config extension for sub-agent creation (not part of public API). */
 interface InternalAgentConfig extends AgentConfig {
@@ -84,6 +86,7 @@ export class Agent {
   private eventLogStore?: EventLogStore;
   private contextStrategy: ContextStrategy;
   private _memory?: AgentMemory;
+  private _memorySearch?: MemorySearchProvider;
   private _projectContext?: ProjectContext;
   private _workspaceRoot?: string;
   private _workspaceReady?: Promise<void>;
@@ -91,10 +94,20 @@ export class Agent {
   private _isSubAgent = false;
   private _lastSessionId?: string;
   private _querying = false;
+  private _status: import('./types.js').AgentStatus = 'idle';
+  private _statusDetail?: string;
 
   // Lifecycle hooks
   private _onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
   private _onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
+
+  /** Update agent status and emit status_change event. */
+  private setStatus(status: import('./types.js').AgentStatus, detail?: string): void {
+    if (this._status === status && this._statusDetail === detail) return;
+    this._status = status;
+    this._statusDetail = detail;
+    this.onEvent?.({ type: 'status_change', status, detail });
+  }
 
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
@@ -133,6 +146,7 @@ export class Agent {
     } else {
       this.eventLogStore = config.eventLogStore;
     }
+    this._memorySearch = config.memorySearch;
 
     // Project context
     if (config.project) {
@@ -320,6 +334,7 @@ export class Agent {
       toolGuard: config.toolGuard,
       eventLogStore: config.eventLogStore,
       workspace: config.workspace,
+      memorySearch: config.memorySearch,
       project: config.project,
       middleware: config.middleware,
       onEvent: config.onEvent,
@@ -372,6 +387,7 @@ export class Agent {
     await appendEvent({ ...makeBase(), type: 'user_message', content: prompt });
 
     this._querying = true;
+    this.setStatus('thinking');
 
     // Wrap main loop in try-catch to guarantee query_end is always emitted.
     // Without this, errors cause turns to stay "active" forever.
@@ -383,6 +399,7 @@ export class Agent {
       }
       return result;
     } catch (err) {
+      this.setStatus('error', err instanceof Error ? err.message : String(err));
       // Emit error query_end so the turn is marked as failed, not stuck "active"
       const errorResult: QueryResult = {
         text: '',
@@ -407,6 +424,7 @@ export class Agent {
       throw err;
     } finally {
       this._querying = false;
+      this.setStatus('idle');
     }
   }
 
@@ -422,7 +440,7 @@ export class Agent {
     turnId: string | undefined,
   ): Promise<QueryResult> {
     // 3. Resolve tools for this query
-    const allowedTools = this.resolveAllowedTools(options?.allowedTools);
+    const allowedTools = this.resolveAllowedTools(options?.allowedTools, session);
 
     // 4. Build system prompt (static blocks + dynamic skills)
     const fullSystemPrompt = await this.buildSystemPrompt(session.systemPrompt, options?.systemPrompt);
@@ -447,6 +465,7 @@ export class Agent {
 
       // Pre-compact memory flush: save important context to memory before hard compact
       if (compactLevel === 'hard' && this._memory) {
+        this.setStatus('memory_flushing');
         await preCompactMemoryFlush({
           session,
           memory: this._memory,
@@ -459,6 +478,7 @@ export class Agent {
       }
 
       if (compactLevel !== 'none') {
+        this.setStatus('compacting', compactLevel);
         await runCompaction({
           compactionStrategy: this.compactionStrategy,
           session,
@@ -473,6 +493,8 @@ export class Agent {
         });
         compacted = true;
       }
+
+      this.setStatus('thinking');
 
       // If event log is configured, rebuild messages from the log
       const messagesForProvider = log
@@ -521,6 +543,7 @@ export class Agent {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
             // Force compaction to shrink context, then retry
+            this.setStatus('compacting', 'overflow_retry');
             await runCompaction({
           compactionStrategy: this.compactionStrategy,
               session,
@@ -540,7 +563,11 @@ export class Agent {
               appendEvent: async (event: SessionEvent) => {
                 // Override strategy for PTL recovery events
                 if ('type' in event && event.type === 'compaction_marker') {
-                  await appendEvent({ ...event, strategy: 'overflow_retry' } as SessionEvent);
+                  await appendEvent({
+                    ...event,
+                    strategy: 'overflow_retry',
+                    triggerReason: 'overflow_retry',
+                  } as SessionEvent);
                   return;
                 }
                 await appendEvent(event);
@@ -606,12 +633,13 @@ export class Agent {
       const toolUses = (response.content as ContentBlock[]).filter(
         (b): b is ToolUseContent => b.type === 'tool_use',
       );
+      this.setStatus('tool_executing', toolUses.map(t => t.name).join(', '));
 
       const mwCtx = this.getMiddlewareContext(session);
 
       const execResult = await executeTools({
         toolUses,
-        tools: this.tools,
+        tools: new Map(allowedTools.map(tool => [tool.definition.name, tool])),
         toolGuard: this.toolGuard,
         middleware: this.middleware,
         session,
@@ -624,6 +652,7 @@ export class Agent {
       });
 
       toolCallCount += execResult.toolCalls;
+      this.setStatus('thinking');
 
       // Add all tool results as one user message
       session.messages.push({
@@ -633,19 +662,15 @@ export class Agent {
       });
 
       // Incremental save after each tool loop turn.
-      if (!log) {
-        session.lastAccessedAt = Date.now();
-        await this.sessionStore.save(session);
-      }
+      session.lastAccessedAt = Date.now();
+      await this.sessionStore.save(session);
 
       // Loop continues → next API call with tool results
     }
 
     // 6. Persist session (skip when event log is source of truth)
-    if (!log) {
-      session.lastAccessedAt = Date.now();
-      await this.sessionStore.save(session);
-    }
+    session.lastAccessedAt = Date.now();
+    await this.sessionStore.save(session);
 
     // 7. Extract final text
     const text = extractText(session.messages[session.messages.length - 1]);
@@ -678,14 +703,15 @@ export class Agent {
   async getSession(id: string): Promise<Session | null> {
     if (this.eventLogStore) {
       const events = await this.eventLogStore.getEvents(id);
-      if (events.length === 0) return this.sessionStore.load(id); // fallback
+      const stored = await this.sessionStore.load(id);
+      if (events.length === 0) return stored; // fallback
       return {
         id,
         messages: this.contextStrategy.buildMessages(events),
-        systemPrompt: this.systemPrompt,
-        createdAt: events[0].timestamp,
-        lastAccessedAt: events[events.length - 1].timestamp,
-        metadata: { cwd: this.cwd, model: this.providerConfig.model, totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheWriteTokens: 0, compactionCount: 0 },
+        systemPrompt: stored?.systemPrompt ?? this.systemPrompt,
+        createdAt: stored?.createdAt ?? events[0].timestamp,
+        lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
+        metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
       };
     }
     return this.sessionStore.load(id);
@@ -734,7 +760,16 @@ export class Agent {
 
   /** Get all registered tool definitions */
   getTools(): ToolDefinition[] {
-    return [...this.tools.values()].map(t => t.definition);
+    const registered = [...this.tools.values()];
+    const runtime = getRuntimeToolDefinitions({
+      memory: this._memory,
+      memorySearch: this._memorySearch,
+    }).map((definition) => ({
+      definition,
+      execute: async () => ({ content: '' }),
+    }));
+
+    return mergeToolsByName(registered, runtime).map(t => t.definition);
   }
 
   /** Get loaded skill metadata (empty if skills not yet loaded) */
@@ -772,7 +807,8 @@ export class Agent {
     eventLog?: { available: boolean };
     hasCustomCompaction: boolean;
     children: string[];
-    status: 'idle' | 'querying';
+    status: import('./types.js').AgentStatus;
+    statusDetail?: string;
   } {
     const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     return {
@@ -794,7 +830,8 @@ export class Agent {
       eventLog: { available: !!this.eventLogStore },
       hasCustomCompaction: !!this.compactionStrategy,
       children: [...this._children.keys()],
-      status: this._querying ? 'querying' : 'idle',
+      status: this._status,
+      statusDetail: this._statusDetail,
     };
   }
 
@@ -815,6 +852,8 @@ export class Agent {
    * @returns Final text + usage from the delegate's execution
    */
   async delegate(message: string, config?: DelegateConfig): Promise<DelegateResult> {
+    const previousStatus = this._status;
+    this.setStatus('delegating');
     const emit = (event: AgentEvent) => {
       this.onEvent?.(event);
       config?.onEvent?.(event);
@@ -849,15 +888,25 @@ export class Agent {
       }
     }
 
+    // Build messages: context prefix + delegate prompt
+    const messages: Message[] = [
+      ...contextMessages,
+      { role: 'user' as const, content: message, createdAt: Date.now() },
+    ];
+
+    const delegateSession: Session = {
+      id: delegateSessionId,
+      messages,
+      systemPrompt: delegateSystemPrompt,
+      createdAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      metadata: createEmptySessionMetadata(this.cwd, config?.model ?? this.providerConfig.model),
+    };
+
     // Resolve tools
-    let delegateTools: ToolRegistration[];
-    if (config?.allowedTools) {
-      delegateTools = this.resolveAllowedTools(config.allowedTools);
-    } else {
-      delegateTools = [...this.tools.values()];
-    }
+    let delegateTools = this.resolveAllowedTools(config?.allowedTools, delegateSession);
     if (config?.additionalTools) {
-      delegateTools = [...delegateTools, ...config.additionalTools];
+      delegateTools = mergeToolsByName(config.additionalTools, delegateTools);
     }
 
     // Create a transient provider (same instance for cache sharing, or new for model override)
@@ -867,12 +916,6 @@ export class Agent {
 
     const delegateGuard = config?.toolGuard ?? this.toolGuard;
 
-    // Build messages: context prefix + delegate prompt
-    const messages: Message[] = [
-      ...contextMessages,
-      { role: 'user' as const, content: message, createdAt: Date.now() },
-    ];
-
     // Run the delegate's tool loop
     let delegateTurns = 0;
     const maxTurns = config?.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -880,7 +923,8 @@ export class Agent {
     let toolCalls = 0;
     const toolMap = new Map(delegateTools.map(t => [t.definition.name, t]));
 
-    while (delegateTurns < maxTurns) {
+    try {
+      while (delegateTurns < maxTurns) {
       delegateTurns++;
 
       let request: ProviderRequest = {
@@ -961,11 +1005,14 @@ export class Agent {
       messages.push({ role: 'user', content: toolResultBlocks, createdAt: Date.now() });
     }
 
-    const lastMsg = messages[messages.length - 1];
-    const text = extractText(lastMsg);
-    const result: DelegateResult = { text, usage: totalUsage, turns: delegateTurns, toolCalls };
-    emit({ type: 'delegate_end', result });
-    return result;
+      const lastMsg = messages[messages.length - 1];
+      const text = extractText(lastMsg);
+      const result: DelegateResult = { text, usage: totalUsage, turns: delegateTurns, toolCalls };
+      emit({ type: 'delegate_end', result });
+      return result;
+    } finally {
+      this.setStatus(previousStatus);
+    }
   }
 
   private async callProvider_delegate(
@@ -1023,6 +1070,7 @@ export class Agent {
       onEvent: this.onEvent,
       sessionStore: config.sessionStore ?? this.sessionStore,
       eventLogStore: this.eventLogStore,
+      memorySearch: this._memorySearch,
       _isSubAgent: true,
     };
     const child = new Agent(childConfig);
@@ -1075,9 +1123,10 @@ export class Agent {
       // When event log is configured, rebuild session from event log (source of truth)
       if (this.eventLogStore) {
         const events = await this.eventLogStore.getEvents(options.resume);
+        const stored = await this.sessionStore.load(options.resume);
         if (events.length === 0) {
           // No events — maybe a legacy session, fall back to session store
-          const session = await this.sessionStore.load(options.resume);
+          const session = stored;
           if (!session) throw new Error(`Session not found: ${options.resume}`);
           if (options.systemPrompt) {
             session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
@@ -1091,18 +1140,10 @@ export class Agent {
           messages,
           systemPrompt: options.systemPrompt
             ? normalizeSystemPrompt(options.systemPrompt)
-            : this.systemPrompt,
-          createdAt: events[0].timestamp,
-          lastAccessedAt: events[events.length - 1].timestamp,
-          metadata: {
-            cwd: this.cwd,
-            model: this.providerConfig.model,
-            totalInputTokens: 0,
-            totalOutputTokens: 0,
-            totalCacheReadTokens: 0,
-            totalCacheWriteTokens: 0,
-            compactionCount: 0,
-          },
+            : stored?.systemPrompt ?? this.systemPrompt,
+          createdAt: stored?.createdAt ?? events[0].timestamp,
+          lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
+          metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
         };
         return session;
       }
@@ -1130,23 +1171,23 @@ export class Agent {
       systemPrompt: this.systemPrompt,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
-      metadata: {
-        cwd: this.cwd,
-        model: this.providerConfig.model,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCacheReadTokens: 0,
-        totalCacheWriteTokens: 0,
-        compactionCount: 0,
-      },
+      metadata: createEmptySessionMetadata(this.cwd, this.providerConfig.model),
     };
   }
 
-  private resolveAllowedTools(allowed?: string[]): ToolRegistration[] {
-    if (!allowed) return [...this.tools.values()];
-    return allowed
-      .map(name => this.tools.get(name))
-      .filter((t): t is ToolRegistration => t !== undefined);
+  private resolveAllowedTools(allowed?: string[], session?: Session): ToolRegistration[] {
+    const registered = [...this.tools.values()];
+    const runtime = createRuntimeTools({
+      memory: this._memory,
+      memorySearch: this._memorySearch,
+      session,
+    });
+    const merged = mergeToolsByName(registered, runtime);
+
+    if (!allowed) return merged;
+
+    const allowedSet = new Set(allowed);
+    return merged.filter((tool) => allowedSet.has(tool.definition.name));
   }
 
   private async buildSystemPrompt(basePrompt: string[], override?: string | string[]): Promise<string[]> {
@@ -1352,6 +1393,32 @@ function createInMemoryStore(): SessionStore {
     list: async () => [...sessions.keys()],
     delete: async (id) => { sessions.delete(id); },
   };
+}
+
+function createEmptySessionMetadata(cwd: string, model: string): SessionMetadata {
+  return {
+    cwd,
+    model,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    compactionCount: 0,
+  };
+}
+
+function mergeToolsByName(primary: ToolRegistration[], secondary: ToolRegistration[]): ToolRegistration[] {
+  const merged = new Map<string, ToolRegistration>();
+
+  for (const tool of secondary) {
+    merged.set(tool.definition.name, tool);
+  }
+
+  for (const tool of primary) {
+    merged.set(tool.definition.name, tool);
+  }
+
+  return [...merged.values()];
 }
 
 /**

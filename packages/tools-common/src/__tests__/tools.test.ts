@@ -1,20 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createFileTools, createShellTool, createSearchTools, createAllTools, createEditFileTool, createWebFetchTool, createWebSearchTool } from '../index.js';
+import { createFileTools, createShellTool, createShellTools, createSearchTools, createAllTools, createEditFileTool, createWebFetchTool, createWebSearchTool } from '../index.js';
 
 let tmpDir: string;
+let siblingDir: string;
 
 beforeAll(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'berry-tools-test-'));
+  siblingDir = `${tmpDir}-evil`;
   await mkdir(join(tmpDir, 'src'), { recursive: true });
+  await mkdir(siblingDir, { recursive: true });
   await writeFile(join(tmpDir, 'hello.txt'), 'Hello World\nSecond line\nThird line');
   await writeFile(join(tmpDir, 'src/code.ts'), 'const x = 42;\nexport default x;');
+  await writeFile(join(siblingDir, 'secret.txt'), 'top-secret');
 });
 
 afterAll(async () => {
   await rm(tmpDir, { recursive: true, force: true });
+  await rm(siblingDir, { recursive: true, force: true });
 });
 
 describe('File tools', () => {
@@ -65,6 +70,14 @@ describe('File tools', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('escapes');
   });
+
+  it('blocks sibling paths that only share the baseDir prefix', async () => {
+    const tools = createFileTools(tmpDir);
+    const readFile = tools.find(t => t.definition.name === 'read_file')!;
+    const result = await readFile.execute({ path: `../${basename(siblingDir)}/secret.txt` }, { cwd: tmpDir });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('escapes');
+  });
 });
 
 describe('Shell tool', () => {
@@ -86,6 +99,59 @@ describe('Shell tool', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('blocked');
   });
+
+  it('supports first-stage background process management', async () => {
+    const tools = createShellTools(tmpDir);
+    const shell = tools.find(t => t.definition.name === 'shell')!;
+    const processList = tools.find(t => t.definition.name === 'process_list')!;
+    const processPoll = tools.find(t => t.definition.name === 'process_poll')!;
+    const processLog = tools.find(t => t.definition.name === 'process_log')!;
+    const processWrite = tools.find(t => t.definition.name === 'process_write')!;
+    const processKill = tools.find(t => t.definition.name === 'process_kill')!;
+
+    const command = `node -e "process.stdin.setEncoding('utf8');console.log('ready');process.stdin.on('data', chunk => console.log('echo:' + chunk.trim()));setInterval(() => {}, 1000);"`;
+    const started = await shell.execute({ command, background: true }, { cwd: tmpDir });
+    const { sessionId } = JSON.parse(started.content) as { sessionId: string };
+    expect(sessionId).toContain('proc_');
+
+    const listed = JSON.parse((await processList.execute({}, { cwd: tmpDir })).content) as {
+      processes: Array<{ id: string }>;
+    };
+    expect(listed.processes.some(process => process.id === sessionId)).toBe(true);
+
+    let readyLog = '';
+    for (let i = 0; i < 40; i++) {
+      readyLog = (await processLog.execute({ id: sessionId }, { cwd: tmpDir })).content;
+      if (readyLog.includes('ready')) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    expect(readyLog).toContain('ready');
+
+    const running = JSON.parse((await processPoll.execute({ id: sessionId }, { cwd: tmpDir })).content) as {
+      status: string;
+    };
+    expect(running.status).toBe('running');
+
+    await processWrite.execute({ id: sessionId, data: 'ping\n' }, { cwd: tmpDir });
+
+    let echoedLog = readyLog;
+    for (let i = 0; i < 40; i++) {
+      echoedLog = (await processLog.execute({ id: sessionId }, { cwd: tmpDir })).content;
+      if (echoedLog.includes('echo:ping')) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    expect(echoedLog).toContain('echo:ping');
+
+    await processKill.execute({ id: sessionId }, { cwd: tmpDir });
+
+    let finalStatus = running.status;
+    for (let i = 0; i < 40; i++) {
+      finalStatus = JSON.parse((await processPoll.execute({ id: sessionId }, { cwd: tmpDir })).content).status as string;
+      if (finalStatus === 'exited') break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    expect(finalStatus).toBe('exited');
+  });
 });
 
 describe('Search tools', () => {
@@ -101,6 +167,14 @@ describe('Search tools', () => {
     const find = tools.find(t => t.definition.name === 'find_files')!;
     const result = await find.execute({ pattern: '*.ts', path: '.' }, { cwd: tmpDir });
     expect(result.content).toContain('code.ts');
+  });
+
+  it('blocks search paths outside the scoped workspace', async () => {
+    const tools = createSearchTools(tmpDir);
+    const grep = tools.find(t => t.definition.name === 'grep')!;
+    const result = await grep.execute({ pattern: 'top-secret', path: `../${basename(siblingDir)}` }, { cwd: tmpDir });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('escapes');
   });
 });
 
@@ -158,6 +232,19 @@ describe('edit_file tool', () => {
     expect(result.content).toContain('Applied 2 edit(s)');
     const updated = await readFile(join(tmpDir, 'edit-multi.txt'), 'utf-8');
     expect(updated).toBe('FOO\nbar\nBAZ');
+  });
+
+  it('blocks edits outside the scoped workspace', async () => {
+    const editTool = createEditFileTool(tmpDir);
+    const result = await editTool.execute(
+      {
+        path: `../${basename(siblingDir)}/secret.txt`,
+        edits: [{ oldText: 'top-secret', newText: 'leaked' }],
+      },
+      { cwd: tmpDir },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('escapes');
   });
 });
 
@@ -322,15 +409,20 @@ describe('browser tool', () => {
 });
 
 describe('createAllTools', () => {
-  it('returns all 7 tools including edit_file', () => {
+  it('returns file, shell/process, and search tools together', () => {
     const tools = createAllTools(tmpDir);
-    expect(tools).toHaveLength(7);
+    expect(tools).toHaveLength(12);
     const names = tools.map(t => t.definition.name);
     expect(names).toContain('read_file');
     expect(names).toContain('write_file');
     expect(names).toContain('list_files');
     expect(names).toContain('edit_file');
     expect(names).toContain('shell');
+    expect(names).toContain('process_list');
+    expect(names).toContain('process_poll');
+    expect(names).toContain('process_log');
+    expect(names).toContain('process_write');
+    expect(names).toContain('process_kill');
     expect(names).toContain('grep');
     expect(names).toContain('find_files');
   });

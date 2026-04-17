@@ -4,17 +4,26 @@ Pure-library Agent SDK for building AI agents with TypeScript. No CLI dependency
 
 ## Features
 
-- **Agent loop** — tool-calling loop with automatic iteration
+- **Agent loop** — tool-calling loop with automatic iteration + parallel execution
 - **Providers** — Anthropic (with prompt cache) + OpenAI-compatible
-- **Compaction** — 7-layer context compaction pipeline (forked compact for cache sharing)
+- **Session Event Log** — append-only JSONL recording (crash-safe, never modified by compaction)
+- **Compaction** — two-tier (soft 60% + hard 85%), 7-layer pipeline with forked cache sharing. See [docs/compaction.md](../../docs/compaction.md)
+- **Pre-compact memory flush** — saves important context to AgentMemory before hard compaction
+- **CompactionStrategy** — pluggable interface to replace the default pipeline
 - **Delegate** — one-shot fork execution with cache sharing (like CC's `runForkedAgent`)
 - **Spawn** — persistent sub-agents with lifecycle management
 - **Skills** — SKILL.md loader compatible with CC, ClawHub, and SkillsDirectory
 - **Tool Guard** — pluggable permission hook (deny/allow/modify)
 - **Middleware** — `onBeforeApiCall` / `onAfterApiCall` / `onBeforeToolExec` / `onAfterToolExec`
+- **Lifecycle hooks** — `onQueryStart` / `onQueryEnd`
+- **Agent status** — fine-grained runtime phases (`thinking` / `tool_executing` / `compacting` / `memory_flushing` / `delegating`)
+- **Chat UI helpers** — `toChatMessages()` for Message[] + `toChatTimeline()` for full Event Log timelines with compaction markers
 - **Structured Output** — JSON schema responses (Anthropic tool-based + OpenAI `response_format`)
 - **Multi-modal** — image input support (base64)
-- **Streaming** — text + thinking deltas
+- **Streaming** — text + thinking deltas + 16 event types
+- **Stream idle timeout** — auto-abort stalled provider streams
+- **Agent Workspace** — independent directory per agent (agent.json + AGENT.md + MEMORY.md)
+- **Agent Memory** — persistent memory via AgentMemory interface (file/mem0/zep backends in `@berry-agent/memory`)
 - **MCP** — via `@berry-agent/mcp` adapter package
 
 ## Install
@@ -60,6 +69,29 @@ const agent = new Agent({
   }],
 });
 ```
+
+## UI Timeline from Event Log
+
+Use the append-only Event Log as the frontend source of truth, then convert it into timeline items for rendering:
+
+```typescript
+import { FileEventLogStore, toChatTimeline } from '@berry-agent/core';
+
+const log = new FileEventLogStore('./my-agent-workspace');
+const events = await log.getEvents(sessionId);
+const timeline = toChatTimeline(events);
+
+for (const item of timeline) {
+  if (item.kind === 'compaction_marker') {
+    console.log(item.content);           // e.g. "Context compaction — freed ~45,000 tokens"
+    console.log(item.compaction);        // structured metadata for badges / details drawers
+  } else {
+    console.log(item.role, item.content);
+  }
+}
+```
+
+`DefaultContextStrategy` still builds provider messages from **after the last `compaction_marker`** only. `toChatTimeline()` is for UI rendering, not for model context reconstruction.
 
 ## Delegate (One-Shot Fork)
 
@@ -158,10 +190,12 @@ const agent = new Agent({
 ## Architecture
 
 ```
-@berry-agent/core          — Agent, providers, compaction, tools, skills
+@berry-agent/core          — Agent, providers, compaction, event log, workspace, skills
+@berry-agent/tools-common  — 10 pre-built tools (file, shell, search, web, browser)
+@berry-agent/observe       — SQLite observability (collector + analyzer + REST + dashboard)
+@berry-agent/safe          — Guards, LLM classifier, PI probe, audit
 @berry-agent/mcp           — MCP client → Berry tool adapter
-@berry-agent/safe (future) — Pre-built guards, sandbox policies
-@berry-agent/team (future) — Multi-agent team orchestration
+@berry-agent/memory        — Memory backends (file, mem0, zep)
 ```
 
 ## License

@@ -55,6 +55,22 @@ function makeUsage() {
   return { inputTokens: 10, outputTokens: 5 };
 }
 
+function getToolResultContents(session: Session): string[] {
+  const contents: string[] = [];
+
+  for (const message of session.messages) {
+    if (!Array.isArray(message.content)) continue;
+
+    for (const block of message.content) {
+      if (block.type === 'tool_result') {
+        contents.push(block.content);
+      }
+    }
+  }
+
+  return contents;
+}
+
 describe('Agent', () => {
   it('runs a tool loop and persists tool results into the session', async () => {
     const provider = new SequenceProvider([
@@ -594,6 +610,174 @@ describe('Agent', () => {
   });
 });
 
+describe('runtime memory/todo tools', () => {
+  let workspaceRoot: string;
+
+  beforeAll(async () => {
+    const { mkdtemp } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+
+    workspaceRoot = await mkdtemp(join(tmpdir(), 'berry-runtime-tools-'));
+  });
+
+  afterAll(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it('persists todo state across resumed workspace sessions without prompt injection', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'todo_write_1',
+            name: 'todo_write',
+            input: { items: [{ text: 'Plan minimal feature' }, { text: 'Run targeted tests', done: true }] },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'todo saved' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'todo_read_1',
+            name: 'todo_read',
+            input: {},
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'todo loaded' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      workspace: workspaceRoot,
+    });
+
+    const first = await agent.query('write todo');
+    const stored = await agent.getSession(first.sessionId);
+    expect(stored?.metadata.todo?.items).toEqual([
+      { text: 'Plan minimal feature', done: false },
+      { text: 'Run targeted tests', done: true },
+    ]);
+
+    await agent.query('read todo', { resume: first.sessionId });
+    const resumed = await agent.getSession(first.sessionId);
+    const toolResults = resumed ? getToolResultContents(resumed) : [];
+
+    expect(toolResults.some((content) => content.includes('Plan minimal feature'))).toBe(true);
+    expect(provider.requests[0].systemPrompt.join('\n')).not.toContain('Plan minimal feature');
+  });
+
+  it('writes memory and searches it through the built-in file memory path', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'memory_write_1',
+            name: 'memory_write',
+            input: { content: 'Architecture decision: use append-only JSONL event logs.' },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'memory_search_1',
+            name: 'memory_search',
+            input: { query: 'architecture' },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'memory ok' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      workspace: workspaceRoot,
+    });
+
+    const result = await agent.query('manage memory');
+    const session = await agent.getSession(result.sessionId);
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const memoryFile = await readFile(join(workspaceRoot, 'MEMORY.md'), 'utf-8');
+
+    expect(memoryFile).toContain('Architecture decision');
+    expect(session ? getToolResultContents(session).some((content) => content.includes('Architecture decision')) : false).toBe(true);
+  });
+
+  it('uses a provided memorySearch adapter without requiring workspace memory writes', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'memory_search_adapter_1',
+            name: 'memory_search',
+            input: { query: 'semantic recall' },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'adapter ok' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      memorySearch: {
+        search: async (query) => [{ id: 'mem_1', content: `adapter:${query}`, score: 0.9 }],
+      },
+    });
+
+    const result = await agent.query('search memory');
+    const session = await agent.getSession(result.sessionId);
+    const names = agent.getTools().map(tool => tool.name);
+
+    expect(names).toContain('memory_search');
+    expect(names).not.toContain('memory_write');
+    expect(names).toContain('todo_read');
+    expect(names).toContain('todo_write');
+    expect(session ? getToolResultContents(session).some((content) => content.includes('adapter:semantic recall')) : false).toBe(true);
+  });
+});
+
 describe('load_skill tool', () => {
   let skillDir: string;
 
@@ -772,5 +956,59 @@ Review the code thoroughly. Check for:
     const fullSystemPrompt = req.systemPrompt.join('\n');
     expect(fullSystemPrompt).toContain('code-review');
     expect(fullSystemPrompt).toContain('Reviews code for bugs and style');
+  });
+
+  it('tracks fine-grained agent status for ui consumption', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_status',
+            name: 'echo',
+            input: { value: 'hello' },
+          },
+        ],
+        stopReason: 'tool_use',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'done' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const events: AgentEvent[] = [];
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      onEvent: (event) => events.push(event),
+      tools: [
+        {
+          definition: {
+            name: 'echo',
+            description: 'Echo back a value',
+            inputSchema: {
+              type: 'object',
+              properties: { value: { type: 'string' } },
+              required: ['value'],
+            },
+          },
+          execute: async (input) => ({ content: String(input.value) }),
+        },
+      ],
+    });
+
+    await agent.query('use a tool');
+
+    const statusEvents = events.filter((event): event is Extract<AgentEvent, { type: 'status_change' }> => event.type === 'status_change');
+    expect(statusEvents.map(event => event.status)).toContain('thinking');
+    expect(statusEvents.map(event => event.status)).toContain('tool_executing');
+    expect(statusEvents).toContainEqual(expect.objectContaining({ type: 'status_change', status: 'tool_executing', detail: 'echo' }));
+    expect(statusEvents.at(-1)).toEqual(expect.objectContaining({ type: 'status_change', status: 'idle' }));
+    expect(agent.inspect().status).toBe('idle');
+    expect(agent.inspect().statusDetail).toBeUndefined();
   });
 });

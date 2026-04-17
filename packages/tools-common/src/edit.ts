@@ -3,9 +3,9 @@
 // ============================================================
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { TOOL_EDIT_FILE } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
+import { resolveScopedPath } from './path.js';
 
 interface Edit {
   oldText: string;
@@ -17,13 +17,7 @@ interface Edit {
  * Performs exact text replacements — each oldText must be unique in the file.
  */
 export function createEditFileTool(baseDir: string): ToolRegistration {
-  const safePath = (p: string) => {
-    const full = resolve(baseDir, p);
-    if (!full.startsWith(resolve(baseDir))) {
-      throw new Error('Path escapes base directory');
-    }
-    return full;
-  };
+  const safePath = (p: string) => resolveScopedPath(baseDir, p);
 
   return {
     definition: {
