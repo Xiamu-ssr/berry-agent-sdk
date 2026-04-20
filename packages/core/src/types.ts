@@ -517,8 +517,15 @@ export const AGENT_EVENT_TYPES = [
   'tool_call', 'tool_result', 'guard_decision', 'compaction', 'memory_flush',
   'query_end', 'delegate_start', 'delegate_end',
   'child_spawned', 'child_destroyed',
-  'status_change', 'todo_updated',
+  'status_change', 'todo_updated', 'retry',
 ] as const;
+
+/**
+ * Reasons a provider call may be retried under strong-supervision policy.
+ * 'stream_idle_timeout' fires when the provider stalled before the first token.
+ * 'transient_error' covers retryable HTTP / network errors.
+ */
+export type RetryReason = 'stream_idle_timeout' | 'transient_error';
 
 // ----- Agent Status -----
 
@@ -566,4 +573,5 @@ export type AgentEvent =
   | { type: 'child_spawned'; childId: string }
   | { type: 'child_destroyed'; childId: string }
   | { type: 'status_change'; status: AgentStatus; detail?: string }
-  | { type: 'todo_updated'; sessionId: string; todos: TodoItem[]; timestamp: number };
+  | { type: 'todo_updated'; sessionId: string; todos: TodoItem[]; timestamp: number }
+  | { type: 'retry'; scope: 'stream' | 'chat'; attempt: number; maxAttempts: number; reason: RetryReason; errorMessage: string; delayMs: number };

@@ -33,6 +33,12 @@ describe('isRetryableError', () => {
     expect(isRetryableError({ status: 404 })).toBe(false);
   });
 
+  it('retries AbortError-style timeout aborts', () => {
+    const err = new Error('Request was aborted');
+    err.name = 'AbortError';
+    expect(isRetryableError(err)).toBe(true);
+  });
+
   it('does NOT retry on unknown errors', () => {
     expect(isRetryableError({})).toBe(false);
     expect(isRetryableError(new Error('random'))).toBe(false);

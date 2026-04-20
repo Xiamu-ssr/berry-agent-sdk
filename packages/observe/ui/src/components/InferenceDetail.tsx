@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Check, X, Edit, Clock, Cpu, MessageSquare, Wrench } from 'lucide-react';
 import { useObserveApi } from '../hooks/useObserve';
+import { MessageBlock } from './blocks/MessageBlock';
 
 interface Props {
   baseUrl: string;
@@ -93,7 +94,7 @@ export function InferenceDetail({ baseUrl, inferenceId, onBack }: Props) {
               {/* Response */}
               {data.responseContent && (
                 <CollapsibleSection title="Response Content" defaultOpen>
-                  <JsonView data={safeParse(data.responseContent)} />
+                  <ResponseContent content={safeParse(data.responseContent)} />
                 </CollapsibleSection>
               )}
             </div>
@@ -222,20 +223,39 @@ function JsonView({ data, fallback }: { data: unknown; fallback?: string }) {
   );
 }
 
+const ROLE_STYLES: Record<string, { bg: string; accent: string; label: string }> = {
+  user:      { bg: 'bg-blue-50 dark:bg-blue-900/20',   accent: 'text-blue-600 dark:text-blue-400',   label: 'User' },
+  assistant: { bg: 'bg-green-50 dark:bg-green-900/20',  accent: 'text-green-600 dark:text-green-400', label: 'Assistant' },
+  system:    { bg: 'bg-gray-50 dark:bg-gray-800/50',    accent: 'text-gray-500 dark:text-gray-400',   label: 'System' },
+};
+
 function MessageList({ messages }: { messages: any[] | null }) {
   if (!messages) return <div className="text-gray-400 dark:text-gray-500">No messages</div>;
   return (
-    <div className="space-y-2">
-      {messages.map((msg: any, i: number) => (
-        <div key={i} className={`p-2 rounded-lg text-sm ${msg.role === 'user' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'}`}>
-          <div className="font-medium text-xs text-gray-500 dark:text-gray-400 mb-1">{msg.role}</div>
-          {typeof msg.content === 'string' ? (
-            <div className="whitespace-pre-wrap break-words text-gray-800 dark:text-gray-200">{msg.content.slice(0, 500)}{msg.content.length > 500 ? '...' : ''}</div>
-          ) : (
-            <div className="font-mono text-xs text-gray-700 dark:text-gray-300">{JSON.stringify(msg.content).slice(0, 300)}...</div>
-          )}
-        </div>
-      ))}
+    <div className="space-y-3">
+      {messages.map((msg: any, i: number) => {
+        const style = ROLE_STYLES[msg.role] ?? ROLE_STYLES.user;
+        return (
+          <div key={i} className={`rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 ${style.bg}`}>
+            {/* Role header */}
+            <div className={`px-3 py-1.5 text-xs font-semibold ${style.accent} border-b border-gray-200/60 dark:border-gray-700/60`}>
+              {style.label}
+            </div>
+            {/* Content blocks */}
+            <div className="px-3 py-2 space-y-2">
+              {typeof msg.content === 'string' ? (
+                <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words">{msg.content}</div>
+              ) : Array.isArray(msg.content) ? (
+                msg.content.map((block: any, j: number) => (
+                  <MessageBlock key={j} block={block} />
+                ))
+              ) : (
+                <pre className="text-xs font-mono text-gray-600 dark:text-gray-400 overflow-x-auto">{JSON.stringify(msg.content, null, 2)}</pre>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -248,6 +268,29 @@ function ToolDefList({ tools }: { tools: any[] | null }) {
         <span key={i} className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono text-gray-700 dark:text-gray-300">{t.name}</span>
       ))}
     </div>
+  );
+}
+
+function ResponseContent({ content }: { content: any }) {
+  if (!content) return <div className="text-gray-400 dark:text-gray-500">No response</div>;
+  // Berry response content is an array of blocks (text, tool_use, thinking)
+  if (Array.isArray(content)) {
+    return (
+      <div className="space-y-2">
+        {content.map((block: any, i: number) => (
+          <MessageBlock key={i} block={block} />
+        ))}
+      </div>
+    );
+  }
+  // Fallback: string or unknown shape
+  if (typeof content === 'string') {
+    return <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{content}</div>;
+  }
+  return (
+    <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-x-auto max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all text-gray-800 dark:text-gray-200">
+      {JSON.stringify(content, null, 2)}
+    </pre>
   );
 }
 

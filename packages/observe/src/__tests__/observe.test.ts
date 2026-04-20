@@ -276,7 +276,7 @@ describe('Collector', () => {
     expect(rows[0]!.isError).toBe(false);
   });
 
-  it('middleware truncates long tool output', () => {
+  it('middleware stores full tool output for normal-sized results', () => {
     database.db.insert(sessions).values({
       id: 'ses_test_001',
       startTime: Date.now(),
@@ -288,13 +288,35 @@ describe('Collector', () => {
     const input = { path: '/tmp/test' };
 
     const modifiedInput = mw.onBeforeToolExec!('read_file', input, ctx);
+    // 10KB — well under the 500KB DB ceiling → stored in full
     const longOutput = 'x'.repeat(10000);
     const result: ToolResult = { content: longOutput };
     mw.onAfterToolExec!('read_file', modifiedInput, result, ctx);
 
     const rows = database.db.select().from(toolCalls).all();
-    expect(rows[0]!.output.length).toBeLessThan(longOutput.length);
-    expect(rows[0]!.output).toContain('...');
+    expect(rows[0]!.output).toBe(longOutput);
+  });
+
+  it('middleware truncates tool output that exceeds 500KB DB ceiling', () => {
+    database.db.insert(sessions).values({
+      id: 'ses_test_002',
+      startTime: Date.now(),
+      status: 'active',
+    }).run();
+
+    const mw = createMiddleware({ db: database });
+    const ctx = makeContext({ sessionId: 'ses_test_002' });
+    const input = { path: '/tmp/huge' };
+
+    const modifiedInput = mw.onBeforeToolExec!('read_file', input, ctx);
+    // 600KB — exceeds the 500KB ceiling
+    const hugeOutput = 'x'.repeat(600_000);
+    const result: ToolResult = { content: hugeOutput };
+    mw.onAfterToolExec!('read_file', modifiedInput, result, ctx);
+
+    const rows = database.db.select().from(toolCalls).all();
+    expect(rows[0]!.output.length).toBeLessThan(hugeOutput.length);
+    expect(rows[0]!.output).toContain('truncated-at-500kb');
   });
 
   it('event listener creates session on query_start', () => {

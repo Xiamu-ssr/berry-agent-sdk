@@ -91,6 +91,29 @@ describe('AnthropicProvider adapters', () => {
     });
   });
 
+  it('reconciles stop_reason when content has tool_use but API says end_turn', () => {
+    const provider = new AnthropicProvider({
+      type: 'anthropic',
+      apiKey: 'test',
+      model: 'claude-sonnet-4-20250514',
+    });
+
+    // Simulate a proxy returning end_turn with tool_use content
+    const content = [
+      { type: 'text' as const, text: 'Let me check.' },
+      { type: 'tool_use' as const, id: 'toolu_1', name: 'read_file', input: { path: '/tmp' } },
+    ];
+    const result = (provider as any).reconcileStopReason('end_turn', content);
+    expect(result).toBe('tool_use');
+
+    // When no tool_use blocks, keep original stop_reason
+    const noTools = [{ type: 'text' as const, text: 'Done.' }];
+    expect((provider as any).reconcileStopReason('end_turn', noTools)).toBe('end_turn');
+
+    // When already tool_use, keep it
+    expect((provider as any).reconcileStopReason('tool_use', content)).toBe('tool_use');
+  });
+
   it('parses Anthropic response blocks into Berry content', () => {
     const provider = new AnthropicProvider({
       type: 'anthropic',
@@ -113,6 +136,17 @@ describe('AnthropicProvider adapters', () => {
 });
 
 describe('OpenAIProvider adapters', () => {
+  it('normalizes bare gateway origins to /v1', () => {
+    const provider = new OpenAIProvider({
+      type: 'openai',
+      apiKey: 'test',
+      model: 'gpt-5.4',
+      baseUrl: 'https://ai.yescode.cloud',
+    });
+
+    expect((provider as any).client.baseURL).toBe('https://ai.yescode.cloud/v1');
+  });
+
   it('builds OpenAI wire messages with tool_calls and tool results', () => {
     const provider = new OpenAIProvider({
       type: 'openai',
@@ -166,6 +200,20 @@ describe('OpenAIProvider adapters', () => {
       content: 'contents',
     });
     expect(wireMessages[4]).toEqual({ role: 'user', content: 'extra note' });
+  });
+
+  it('throws on empty OpenAI assistant messages', () => {
+    const provider = new OpenAIProvider({
+      type: 'openai',
+      apiKey: 'test',
+      model: 'gpt-5.4',
+      baseUrl: 'https://ai.yescode.cloud/v1',
+    });
+
+    expect(() => (provider as any).parseResponse({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: null } }],
+      usage: {},
+    })).toThrow(/empty assistant message/i);
   });
 
   it('parses OpenAI responses into Berry content blocks', () => {

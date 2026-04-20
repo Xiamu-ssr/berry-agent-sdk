@@ -16,8 +16,15 @@ import type { ObserveDB } from './db.js';
 import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './schema.js';
 import { calculateCost, type ModelPricing } from './pricing.js';
 
-const MAX_OUTPUT_LENGTH = 4096;
-const MAX_JSON_FIELD = 512_000; // 500KB limit per JSON field to prevent DB bloat
+/**
+ * DB bloat guard: each JSON/text field caps at 500KB. Tool outputs that exceed
+ * this are stored with a trailing '..."truncated"' sentinel so the UI can show
+ * a "truncated at 500KB" notice and avoid pretending the payload is complete.
+ *
+ * Historical `MAX_OUTPUT_LENGTH = 4096` removed 2026-04-17: Observe is supposed
+ * to retain the full tool output. If rendering is expensive, the UI lazy-loads.
+ */
+const MAX_JSON_FIELD = 512_000;
 
 function safeJsonStringify(value: unknown, maxLen = MAX_JSON_FIELD): string | null {
   if (value == null) return null;
@@ -189,8 +196,11 @@ export function createCollector(config: CollectorConfig): {
         durationMs = pending ? Date.now() - pending.startTime : 0;
       }
 
-      const output = result.content.length > MAX_OUTPUT_LENGTH
-        ? result.content.slice(0, MAX_OUTPUT_LENGTH) + '...'
+      // Store the full output, only trimming at the DB-bloat ceiling (500KB).
+      // We mark the truncation sentinel so the UI can show "truncated" instead
+      // of silently cutting off a 600KB dump.
+      const output = result.content.length > MAX_JSON_FIELD
+        ? result.content.slice(0, MAX_JSON_FIELD) + '..."truncated-at-500kb"'
         : result.content;
 
       db.db.insert(toolCalls).values({

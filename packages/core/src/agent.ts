@@ -19,6 +19,7 @@ import type {
   SessionStore,
   ContentBlock,
   ToolUseContent,
+  ToolResultContent,
   TokenUsage,
   AgentEvent,
   ToolGuard,
@@ -53,6 +54,7 @@ import {
   DEFAULT_SOFT_LAYERS,
   DEFAULT_MAX_TURNS,
   MAX_PTL_RETRIES,
+  MAX_RETRIES,
   REQUEST_TIMEOUT_MS,
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
@@ -63,6 +65,7 @@ import {
   preCompactMemoryFlush,
 } from './compaction-runner.js';
 import { createRuntimeTools, getRuntimeToolDefinitions } from './runtime-tools.js';
+import { getRetryDelay, isRetryableError } from './utils/retry.js';
 
 /** Internal config extension for sub-agent creation (not part of public API). */
 interface InternalAgentConfig extends AgentConfig {
@@ -431,6 +434,14 @@ export class Agent {
 
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
+
+    // 1b. Repair corrupted sessions: if the last assistant message contains
+    // tool_use blocks but the next message is NOT a tool_result user message,
+    // inject synthetic tool_result blocks so the API doesn't reject the whole
+    // conversation. This can happen when stop_reason was incorrectly reported
+    // as 'end_turn' despite tool_use content being present.
+    repairOrphanToolUses(session.messages);
+
     const emit = (event: AgentEvent) => this.emit(event, options?.onEvent);
     const log = this.eventLogStore;
     const turnId = log ? generateTurnId() : undefined;
@@ -717,14 +728,22 @@ export class Agent {
       await appendEvent({ ...makeBase(), type: 'assistant_message', content: response.content });
 
       // 5e. If no tool calls → done
-      if (response.stopReason !== 'tool_use') {
-        break;
-      }
-
-      // 5f. Execute tool calls
+      // DEFENSIVE: check actual content for tool_use blocks, not just stopReason.
+      // Anthropic streaming can sometimes lose stop_reason='tool_use' (e.g. if
+      // message_delta arrives with null stop_reason). Trusting only stopReason
+      // would skip tool execution, leaving orphan tool_use blocks in the session
+      // that permanently corrupt it (Anthropic rejects messages without matching
+      // tool_result blocks).
       const toolUses = (response.content as ContentBlock[]).filter(
         (b): b is ToolUseContent => b.type === 'tool_use',
       );
+      if (response.stopReason !== 'tool_use' && toolUses.length === 0) {
+        break;
+      }
+      // Auto-correct stopReason if content has tool_use but API said end_turn
+      if (response.stopReason !== 'tool_use' && toolUses.length > 0) {
+        response.stopReason = 'tool_use';
+      }
       this.setStatus('tool_executing', toolUses.map(t => t.name).join(', '));
 
       const mwCtx = this.getMiddlewareContext(session);
@@ -1095,12 +1114,15 @@ export class Agent {
       // Add assistant message
       messages.push({ role: 'assistant', content: response.content, createdAt: Date.now() });
 
-      if (response.stopReason !== 'tool_use') break;
-
-      // Execute tools
+      // DEFENSIVE: same as main loop — check content for tool_use blocks, not
+      // just stopReason. See comment in main loop for rationale.
       const toolUses = (response.content as ContentBlock[]).filter(
         (b): b is ToolUseContent => b.type === 'tool_use',
       );
+      if (response.stopReason !== 'tool_use' && toolUses.length === 0) break;
+      if (response.stopReason !== 'tool_use' && toolUses.length > 0) {
+        response.stopReason = 'tool_use';
+      }
       const toolResultBlocks: ContentBlock[] = [];
 
       for (const toolUse of toolUses) {
@@ -1449,45 +1471,81 @@ export class Agent {
     emit: (event: AgentEvent) => void,
   ): Promise<import('./types.js').ProviderResponse> {
     if (stream && this.provider.stream) {
-      let finalResponse: import('./types.js').ProviderResponse | null = null;
+      let lastError: unknown;
 
-      // Stream idle timeout: abort if no data received for REQUEST_TIMEOUT_MS.
-      // Prevents indefinite hangs when the provider stream stalls.
-      const idleController = new AbortController();
-      let idleTimer: ReturnType<typeof setTimeout> | null = null;
-      const resetIdle = () => {
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => idleController.abort(), REQUEST_TIMEOUT_MS);
-      };
+      for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+        let finalResponse: import('./types.js').ProviderResponse | null = null;
+        let sawAnyStreamEvent = false;
 
-      // Compose with caller's abort signal
-      const composedSignal = request.signal
-        ? AbortSignal.any([request.signal, idleController.signal])
-        : idleController.signal;
+        // Stream idle timeout: abort if no data received for REQUEST_TIMEOUT_MS.
+        // Strong supervision rule: first-token stall counts as an inference failure
+        // and may be retried a bounded number of times.
+        const idleController = new AbortController();
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        const resetIdle = () => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => idleController.abort(new Error('Provider stream idle timeout')), REQUEST_TIMEOUT_MS);
+        };
 
-      const streamRequest: ProviderRequest = { ...request, signal: composedSignal };
+        // Compose with caller's abort signal
+        const composedSignal = request.signal
+          ? AbortSignal.any([request.signal, idleController.signal])
+          : idleController.signal;
 
-      try {
-        resetIdle();
-        for await (const event of this.provider.stream(streamRequest)) {
+        const streamRequest: ProviderRequest = { ...request, signal: composedSignal };
+
+        try {
           resetIdle();
-          if (event.type === 'text_delta') {
-            emit({ type: 'text_delta', text: event.text });
-          } else if (event.type === 'thinking_delta') {
-            emit({ type: 'thinking_delta', thinking: event.thinking });
-          } else if (event.type === 'response') {
-            finalResponse = event.response;
+          for await (const event of this.provider.stream(streamRequest)) {
+            sawAnyStreamEvent = true;
+            resetIdle();
+            if (event.type === 'text_delta') {
+              emit({ type: 'text_delta', text: event.text });
+            } else if (event.type === 'thinking_delta') {
+              emit({ type: 'thinking_delta', thinking: event.thinking });
+            } else if (event.type === 'response') {
+              finalResponse = event.response;
+            }
           }
+
+          if (!finalResponse) {
+            throw new Error('Provider stream ended without a final response');
+          }
+
+          return finalResponse;
+        } catch (error: any) {
+          lastError = error;
+
+          const callerAborted = !!request.signal?.aborted && !idleController.signal.aborted;
+          const timedOutBeforeFirstToken = idleController.signal.aborted && !sawAnyStreamEvent;
+          const retryableBeforeFirstToken = !sawAnyStreamEvent && !callerAborted && (timedOutBeforeFirstToken || isRetryableError(error));
+
+          if (!retryableBeforeFirstToken || attempt > MAX_RETRIES) {
+            throw error;
+          }
+
+          const retryAfter = error.headers?.['retry-after'] ?? error.headers?.get?.('retry-after') ?? null;
+          const delayMs = getRetryDelay(attempt, retryAfter);
+
+          // Structured retry event so UIs / observe can surface strong-supervision decisions
+          // (e.g. "retrying after first-token timeout 2/4") without parsing error strings.
+          emit({
+            type: 'retry',
+            scope: 'stream',
+            attempt,
+            maxAttempts: MAX_RETRIES + 1,
+            reason: timedOutBeforeFirstToken ? 'stream_idle_timeout' : 'transient_error',
+            errorMessage: typeof error?.message === 'string' ? error.message : String(error),
+            delayMs,
+          });
+
+          await sleep(delayMs, request.signal);
+        } finally {
+          if (idleTimer) clearTimeout(idleTimer);
         }
-      } finally {
-        if (idleTimer) clearTimeout(idleTimer);
       }
 
-      if (!finalResponse) {
-        throw new Error('Provider stream ended without a final response');
-      }
-
-      return finalResponse;
+      throw lastError;
     }
 
     return this.provider.chat(request);
@@ -1500,6 +1558,34 @@ export class Agent {
 }
 
 // ===== Provider Factory =====
+
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      cleanup();
+      reject(signal?.reason ?? new Error('Aborted during retry backoff'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    if (signal?.aborted) {
+      cleanup();
+      reject(signal.reason ?? new Error('Aborted during retry backoff'));
+      return;
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function createProvider(config: ProviderConfig): Provider {
   switch (config.type) {
@@ -1594,6 +1680,55 @@ function mergeToolsByName(primary: ToolRegistration[], secondary: ToolRegistrati
  *   message contains 'prompt is too long' or 'too many tokens'
  * OpenAI: status 400, code = 'context_length_exceeded'
  */
+/**
+ * Repair orphan tool_use blocks: if an assistant message contains tool_use
+ * blocks but the immediately following message is NOT a user message with
+ * matching tool_result blocks, inject synthetic tool_result(s) so the
+ * Anthropic API doesn't reject the entire conversation.
+ *
+ * This is a defensive measure against the stop_reason desync bug where
+ * streaming returns stop_reason='end_turn' despite tool_use content.
+ *
+ * Modifies `messages` in place. Safe to call multiple times (idempotent).
+ */
+function repairOrphanToolUses(messages: Message[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant') continue;
+    const blocks = Array.isArray(msg.content) ? msg.content : [];
+    const toolUseIds = blocks
+      .filter((b): b is ToolUseContent => (b as ContentBlock).type === 'tool_use')
+      .map(b => b.id);
+    if (toolUseIds.length === 0) continue;
+
+    // Check if the next message is a user message containing tool_result
+    // blocks for every tool_use id.
+    const next = messages[i + 1];
+    if (next && next.role === 'user') {
+      const nextBlocks = Array.isArray(next.content) ? next.content : [];
+      const resultIds = new Set(
+        nextBlocks
+          .filter((b): b is ToolResultContent => (b as ContentBlock).type === 'tool_result')
+          .map(b => b.toolUseId),
+      );
+      if (toolUseIds.every(id => resultIds.has(id))) continue; // all matched
+    }
+
+    // Orphan detected — inject synthetic tool_result blocks
+    const syntheticBlocks: ContentBlock[] = toolUseIds.map(id => ({
+      type: 'tool_result' as const,
+      toolUseId: id,
+      content: '[Berry SDK] Session repair: tool execution was interrupted. This tool_result was synthesized to maintain conversation integrity.',
+      isError: true,
+    }));
+    messages.splice(i + 1, 0, {
+      role: 'user',
+      content: syntheticBlocks,
+      createdAt: Date.now(),
+    });
+  }
+}
+
 function isPromptTooLongError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as Record<string, unknown>;

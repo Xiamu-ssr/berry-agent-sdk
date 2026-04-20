@@ -51,6 +51,37 @@ class StreamingProvider implements Provider {
   }
 }
 
+class RetryThenStreamProvider implements Provider {
+  readonly type = 'anthropic' as const;
+  readonly requests: ProviderRequest[] = [];
+  private attempts = 0;
+
+  async chat(): Promise<ProviderResponse> {
+    throw new Error('chat should not be called when stream=true');
+  }
+
+  async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
+    this.requests.push(structuredClone(request));
+    this.attempts++;
+
+    if (this.attempts === 1) {
+      const err = new Error('Request was aborted');
+      err.name = 'AbortError';
+      throw err;
+    }
+
+    yield { type: 'text_delta', text: 'ok' };
+    yield {
+      type: 'response',
+      response: {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    };
+  }
+}
+
 function makeUsage() {
   return { inputTokens: 10, outputTokens: 5 };
 }
@@ -270,6 +301,42 @@ describe('Agent', () => {
     ]);
     expect(events.some((event) => event.type === 'thinking_delta')).toBe(true);
     expect(perQueryEvents.at(-1)).toEqual(expect.objectContaining({ type: 'query_end' }));
+  });
+
+  it('retries a stream that aborts before first token and then succeeds', async () => {
+    const provider = new RetryThenStreamProvider();
+    const events: AgentEvent[] = [];
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: provider,
+      systemPrompt: 'base',
+      onEvent: (event) => events.push(event),
+    });
+
+    const result = await agent.query('retry the stalled stream', { stream: true });
+
+    expect(result.text).toBe('ok');
+    expect(provider.requests).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'text_delta')).toEqual([
+      { type: 'text_delta', text: 'ok' },
+    ]);
+
+    const retries = events.filter(
+      (event): event is Extract<AgentEvent, { type: 'retry' }> => event.type === 'retry',
+    );
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({
+      scope: 'stream',
+      attempt: 1,
+      reason: 'transient_error',
+    });
+    expect(retries[0].maxAttempts).toBeGreaterThan(1);
+    expect(typeof retries[0].delayMs).toBe('number');
   });
 
   it('tracks lastInputTokens and uses it for compaction decisions', async () => {

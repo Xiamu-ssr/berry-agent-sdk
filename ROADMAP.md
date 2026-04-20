@@ -1,6 +1,6 @@
 # Berry Agent SDK — Roadmap
 
-## v0.1 (current) ✅
+## v0.1 ✅
 
 ### @berry-agent/core
 - [x] Agent loop with tool calling

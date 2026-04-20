@@ -62,9 +62,11 @@ export class AnthropicProvider implements Provider {
       request.signal,
     );
 
+    const content = this.parseResponseContent(response.content);
+    const rawStopReason = this.mapStopReason(response.stop_reason);
     return {
-      content: this.parseResponseContent(response.content),
-      stopReason: this.mapStopReason(response.stop_reason),
+      content,
+      stopReason: this.reconcileStopReason(rawStopReason, content),
       usage: this.extractUsage(response.usage),
       rawUsage: response.usage as unknown as Record<string, unknown>,
       rawRequest: params as Record<string, unknown>,
@@ -167,12 +169,14 @@ export class AnthropicProvider implements Provider {
     }
 
     const finalContent = content.filter((block): block is ContentBlock => block !== undefined);
+    // Reconcile: proxy layers may report wrong stop_reason
+    const reconciledStopReason = this.reconcileStopReason(stopReason, finalContent);
 
     const rawResponse: Record<string, unknown> = {
       id: rawMessageId,
       type: rawMessageType,
       model: rawMessageModel,
-      stop_reason: stopReason === 'tool_use' ? 'tool_use' : stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn',
+      stop_reason: reconciledStopReason === 'tool_use' ? 'tool_use' : reconciledStopReason === 'max_tokens' ? 'max_tokens' : 'end_turn',
       usage: rawUsageRaw,
       content: finalContent,
     };
@@ -181,7 +185,7 @@ export class AnthropicProvider implements Provider {
       type: 'response',
       response: {
         content: finalContent.length > 0 ? finalContent : [{ type: 'text', text: '' }],
-        stopReason,
+        stopReason: reconciledStopReason,
         usage,
         rawUsage: rawUsageRaw,
         rawRequest,
@@ -419,6 +423,25 @@ export class AnthropicProvider implements Provider {
     if (reason === 'tool_use') return 'tool_use';
     if (reason === 'max_tokens') return 'max_tokens';
     return 'end_turn';
+  }
+
+  /**
+   * Reconcile stop_reason with actual response content. Some proxy layers
+   * (zenmux, OpenRouter) can return stop_reason='end_turn' while the content
+   * actually contains tool_use blocks (e.g. when streaming is interrupted or
+   * the proxy reassembles chunks incorrectly). The Anthropic API itself is
+   * authoritative: if content has tool_use blocks, the semantic stop reason
+   * is 'tool_use' regardless of what the wire says.
+   */
+  private reconcileStopReason(
+    stopReason: ProviderResponse['stopReason'],
+    content: ContentBlock[],
+  ): ProviderResponse['stopReason'] {
+    const hasToolUse = content.some(b => b.type === 'tool_use');
+    if (hasToolUse && stopReason !== 'tool_use') {
+      return 'tool_use';
+    }
+    return stopReason;
   }
 
   private extractUsage(usage: any): TokenUsage {

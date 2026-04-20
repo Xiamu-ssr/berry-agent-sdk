@@ -46,7 +46,10 @@ export class OpenAIProvider implements Provider {
     this.config = config;
     this.client = new OpenAI({
       apiKey: config.apiKey,
-      baseURL: config.baseUrl,
+      // Many OpenAI-compatible gateways require `/v1` but users often paste the
+      // site origin (e.g. https://ai.yescode.cloud). Normalize the common case
+      // so the provider doesn't silently talk to an HTML landing page.
+      baseURL: normalizeOpenAIBaseUrl(config.baseUrl),
       maxRetries: 0,
       timeout: REQUEST_TIMEOUT_MS,
     });
@@ -58,6 +61,7 @@ export class OpenAIProvider implements Provider {
       () => this.client.chat.completions.create(params, { signal: request.signal }),
       request.signal,
     );
+    assertValidOpenAIResponse(response, this.config.baseUrl);
     const result = this.parseResponse(response);
     result.rawRequest = params as unknown as Record<string, unknown>;
     result.rawResponse = response as unknown as Record<string, unknown>;
@@ -79,8 +83,10 @@ export class OpenAIProvider implements Provider {
     let lastChunkId: string | undefined;
     let lastChunkModel: string | undefined;
     let rawUsageRaw: Record<string, unknown> = {};
+    let chunkCount = 0;
 
     for await (const chunk of stream) {
+      chunkCount++;
       lastChunkId = chunk.id;
       lastChunkModel = chunk.model;
       if (chunk.usage) {
@@ -120,6 +126,12 @@ export class OpenAIProvider implements Provider {
 
         toolCalls.set(toolCallDelta.index, current);
       }
+    }
+
+    if (chunkCount === 0) {
+      throw new Error(
+        `OpenAI-compatible stream returned 0 chunks. This usually means the baseUrl is wrong or the gateway is serving HTML instead of /v1 API responses. baseUrl=${this.config.baseUrl ?? '(default)'}`,
+      );
     }
 
     const content: ContentBlock[] = [];
@@ -380,8 +392,17 @@ export class OpenAIProvider implements Provider {
       }
     }
 
+    // Some gateways return finish_reason='stop' but omit both content and
+    // tool_calls. Treat this as an invalid gateway response instead of silently
+    // producing an empty assistant message that looks like an agent bug.
+    if (content.length === 0) {
+      throw new Error(
+        `OpenAI-compatible endpoint returned an empty assistant message (no content, no tool_calls). This usually indicates an incompatible gateway or wrong baseUrl. baseUrl=${this.config.baseUrl ?? '(default)'}`,
+      );
+    }
+
     return {
-      content: content.length > 0 ? content : [{ type: 'text', text: '' }],
+      content,
       stopReason: this.mapStopReason(choice.finish_reason),
       usage: this.extractUsage(response.usage),
       rawUsage: response.usage as unknown as Record<string, unknown>,
@@ -413,5 +434,36 @@ export class OpenAIProvider implements Provider {
       cacheReadTokens: details?.cached_tokens ?? 0,
       cacheWriteTokens: 0,
     };
+  }
+}
+
+function normalizeOpenAIBaseUrl(baseUrl?: string): string | undefined {
+  if (!baseUrl) return baseUrl;
+  try {
+    const url = new URL(baseUrl);
+    // Common user mistake: pasting the site origin instead of the API root.
+    // Only normalize the empty-path case. If the user already supplied any path
+    // (/v1, /openai/v1, /proxy/foo), leave it untouched.
+    if (url.pathname === '/' || url.pathname === '') {
+      url.pathname = '/v1';
+      return url.toString().replace(/\/$/, '');
+    }
+    return baseUrl;
+  } catch {
+    return baseUrl;
+  }
+}
+
+function assertValidOpenAIResponse(response: unknown, baseUrl?: string): void {
+  if (!response || typeof response !== 'object') {
+    throw new Error(
+      `OpenAI-compatible endpoint returned a non-JSON response. Check baseUrl (expected an API endpoint like .../v1). baseUrl=${baseUrl ?? '(default)'}`,
+    );
+  }
+  const obj = response as Record<string, unknown>;
+  if (!Array.isArray(obj.choices)) {
+    throw new Error(
+      `OpenAI-compatible endpoint response is missing choices[]. Check baseUrl / gateway compatibility. baseUrl=${baseUrl ?? '(default)'}`,
+    );
   }
 }

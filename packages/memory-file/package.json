@@ -1,36 +1,34 @@
 {
-  "name": "@berry-agent/memory",
-  "version": "0.1.0-alpha.0",
-  "description": "Memory backend adapters for Berry Agent SDK — file-based, mem0, zep",
+  "name": "@berry-agent/memory-file",
+  "version": "0.4.0-alpha.0",
+  "description": "File-backed MemoryProvider for Berry Agent SDK — SQLite FTS5 over MEMORY.md and memory/*.md",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
   "files": [
-    "dist",
-    "README.md"
+    "dist"
   ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
   },
-  "dependencies": {},
   "peerDependencies": {
-    "@berry-agent/core": ">=0.2.0"
+    "@berry-agent/core": ">=0.3.0-alpha.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0"
   },
   "devDependencies": {
     "@berry-agent/core": "*",
+    "@types/better-sqlite3": "^7.6.11",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
-  },
-  "publishConfig": {
-    "access": "public",
-    "tag": "alpha"
   },
   "license": "MIT"
 }

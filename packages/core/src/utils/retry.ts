@@ -26,7 +26,10 @@ export function classifyError(error: any): ErrorKind {
   if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') return 'transient';
   if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') return 'transient';
   if (error.code === 'UND_ERR_CONNECT_TIMEOUT') return 'transient';
-  if (error.name === 'AbortError') return 'permanent'; // intentional abort
+  // Provider/client-side timeouts often surface as AbortError (e.g. "Request was aborted").
+  // Caller-initiated aborts are still not retried because withRetry checks signal.aborted.
+  if (error.name === 'AbortError') return 'transient';
+  if (typeof error.message === 'string' && /request was aborted/i.test(error.message)) return 'transient';
   // Permanent: auth errors, bad requests, not found
   if (error.status === 401 || error.status === 403) return 'permanent';
   if (error.status === 404) return 'permanent';

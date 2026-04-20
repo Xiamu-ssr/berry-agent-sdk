@@ -7,7 +7,7 @@
 // ----- Provider / Retry -----
 
 /** Max retry attempts for transient API errors (429, 5xx, timeouts). */
-export const MAX_RETRIES = 10;
+export const MAX_RETRIES = 3;
 
 /** Initial delay (ms) for exponential backoff. */
 export const BASE_DELAY_MS = 500;
@@ -15,8 +15,13 @@ export const BASE_DELAY_MS = 500;
 /** Ceiling for exponential backoff (ms). */
 export const MAX_BACKOFF_MS = 32_000;
 
-/** SDK-level request timeout (ms) passed to provider clients. */
-export const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * SDK-level request timeout (ms) passed to provider clients.
+ *
+ * Strong-supervision rule: a single inference should either make progress
+ * quickly or be treated as failed and retried, not hang for many minutes.
+ */
+export const REQUEST_TIMEOUT_MS = 60_000;
 
 /** Default max_tokens sent to the model when the user doesn't specify. */
 export const DEFAULT_MAX_TOKENS = 16_384;
