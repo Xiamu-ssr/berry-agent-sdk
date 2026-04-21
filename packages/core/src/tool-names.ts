@@ -15,12 +15,6 @@ export const TOOL_DELEGATE = 'delegate' as const;
 /** Spawn persistent sub-agent tool (auto-registered unless disabled). */
 export const TOOL_SPAWN = 'spawn_agent' as const;
 
-/** Memory search tool (auto-registered when memory search is available). */
-export const TOOL_MEMORY_SEARCH = 'memory_search' as const;
-
-/** Memory write tool (auto-registered when agent memory is available). */
-export const TOOL_MEMORY_WRITE = 'memory_write' as const;
-
 /** Per-session todo read tool (auto-registered). */
 export const TOOL_TODO_READ = 'todo_read' as const;
 
@@ -53,8 +47,6 @@ export const CORE_TOOL_NAMES = [
   TOOL_LOAD_SKILL,
   TOOL_DELEGATE,
   TOOL_SPAWN,
-  TOOL_MEMORY_SEARCH,
-  TOOL_MEMORY_WRITE,
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
   TOOL_SLEEP,

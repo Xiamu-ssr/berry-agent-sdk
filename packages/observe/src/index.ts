@@ -23,7 +23,7 @@ export { calculateCost, getPricing, MODEL_PRICING } from './collector/pricing.js
 export type { ModelPricing, CostResult } from './collector/pricing.js';
 
 // Collectors
-export { createCollector, createMiddleware, createEventListener } from './collector/collector.js';
+export { createCollector } from './collector/collector.js';
 export type { CollectorConfig } from './collector/collector.js';
 
 // Retention

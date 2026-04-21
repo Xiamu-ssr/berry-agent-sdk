@@ -169,8 +169,6 @@ export interface AgentConfig {
   /** System prompt — string or array of blocks (for cache optimization) */
   systemPrompt: string | string[];
   tools?: ToolRegistration[];
-  /** @deprecated Use skillDirs instead. Paths to skill .md files (injected directly into system prompt). */
-  skills?: string[];
   /** Directories containing skills (each subdirectory has a SKILL.md). */
   skillDirs?: string[];
   cwd?: string;
@@ -208,8 +206,8 @@ export interface AgentConfig {
    * Auto-initializes workspace structure on first use (unless autoInit is false).
    */
   workspace?: string;
-  /** Optional searchable memory adapter for memory_search (e.g. @berry-agent/memory backend). */
-  memorySearch?: import('./workspace/types.js').MemorySearchProvider;
+  /** Pluggable MemoryProvider — contributes memory tools (search, get, …) to the agent. */
+  memory?: import('./memory/provider.js').MemoryProvider;
   /** Project root directory (optional binding for shared project context). */
   project?: string;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
@@ -281,8 +279,8 @@ export interface AgentCreateConfig {
    * Auto-initializes workspace structure on first use.
    */
   workspace?: string;
-  /** Optional searchable memory adapter for memory_search (e.g. @berry-agent/memory backend). */
-  memorySearch?: import('./workspace/types.js').MemorySearchProvider;
+  /** Pluggable MemoryProvider — contributes memory tools (search, get, …) to the agent. */
+  memory?: import('./memory/provider.js').MemoryProvider;
   /** Project root directory (optional binding for shared project context). */
   project?: string;
   /** Middleware pipeline. */

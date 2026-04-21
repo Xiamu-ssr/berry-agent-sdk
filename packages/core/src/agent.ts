@@ -36,7 +36,8 @@ import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
-import type { AgentMemory, MemorySearchProvider, ProjectContext } from './workspace/types.js';
+import type { AgentMemory, ProjectContext } from './workspace/types.js';
+import type { MemoryProvider } from './memory/provider.js';
 import { FileAgentMemory } from './workspace/file-memory.js';
 import { FileProjectContext } from './workspace/file-project.js';
 import { initWorkspace } from './workspace/initializer.js';
@@ -90,7 +91,7 @@ export class Agent {
   private eventLogStore?: EventLogStore;
   private contextStrategy: ContextStrategy;
   private _memory?: AgentMemory;
-  private _memorySearch?: MemorySearchProvider;
+  private _memoryProvider?: MemoryProvider;
   private _projectContext?: ProjectContext;
   private _workspaceRoot?: string;
   private _workspaceReady?: Promise<void>;
@@ -197,7 +198,7 @@ export class Agent {
       : [config.systemPrompt];
 
     this.tools = new Map();
-    this.legacySkills = config.skills ?? [];
+    this.legacySkills = [];
     this.skillDirs = config.skillDirs ?? [];
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
@@ -227,7 +228,7 @@ export class Agent {
     } else {
       this.eventLogStore = config.eventLogStore;
     }
-    this._memorySearch = config.memorySearch;
+    this._memoryProvider = config.memory;
 
     // Project context
     if (config.project) {
@@ -367,9 +368,14 @@ export class Agent {
         },
       });
     }
-  }
 
-  // ===== Static Factory =====
+    // Register tools from MemoryProvider (if provided).
+    if (this._memoryProvider) {
+      for (const tool of this._memoryProvider.tools()) {
+        this.tools.set(tool.definition.name, tool);
+      }
+    }
+  }
 
   /**
    * Simplified agent creation. Sensible defaults:
@@ -415,7 +421,7 @@ export class Agent {
       toolGuard: config.toolGuard,
       eventLogStore: config.eventLogStore,
       workspace: config.workspace,
-      memorySearch: config.memorySearch,
+      
       project: config.project,
       middleware: config.middleware,
       onEvent: config.onEvent,
@@ -560,7 +566,7 @@ export class Agent {
         this.setStatus('memory_flushing');
         await preCompactMemoryFlush({
           session,
-          memory: this._memory,
+          memory: this._memory!,
           provider: this.provider,
           systemPrompt: fullSystemPrompt,
           emit,
@@ -911,8 +917,8 @@ export class Agent {
     const registered = [...this.tools.values()];
     // Use a lightweight signal here — this path only needs definitions.
     const runtime = getRuntimeToolDefinitions({
-      memory: this._memory,
-      memorySearch: this._memorySearch,
+      
+      
       sleepSignal: {
         onEnter: () => {},
         onExit: () => {},
@@ -1227,7 +1233,7 @@ export class Agent {
       onEvent: this.onEvent,
       sessionStore: config.sessionStore ?? this.sessionStore,
       eventLogStore: this.eventLogStore,
-      memorySearch: this._memorySearch,
+      
       _isSubAgent: true,
     };
     const child = new Agent(childConfig);
@@ -1335,8 +1341,8 @@ export class Agent {
   private resolveAllowedTools(allowed?: string[], session?: Session): ToolRegistration[] {
     const registered = [...this.tools.values()];
     const runtime = createRuntimeTools({
-      memory: this._memory,
-      memorySearch: this._memorySearch,
+      
+      
       session,
       sleepSignal: this.createSleepSignal(),
       onTodoChange: (s, state) => {

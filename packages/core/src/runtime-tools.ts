@@ -9,17 +9,10 @@ import type {
   ToolDefinition,
   ToolRegistration,
 } from './types.js';
-import type {
-  AgentMemory,
-  MemorySearchProvider,
-  MemorySearchResult,
-} from './workspace/types.js';
 import {
-  TOOL_MEMORY_SEARCH,
-  TOOL_MEMORY_WRITE,
-  TOOL_SLEEP,
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
+  TOOL_SLEEP,
 } from './tool-names.js';
 
 /** Hard upper bound on a single sleep call, to stop agents sleeping forever. */
@@ -40,8 +33,6 @@ export interface SleepSignal {
 }
 
 interface RuntimeToolOptions {
-  memory?: AgentMemory;
-  memorySearch?: MemorySearchProvider;
   session?: Session;
   /**
    * Optional hook invoked after todo state changes (via todo_write).
@@ -54,32 +45,6 @@ interface RuntimeToolOptions {
    */
   sleepSignal?: SleepSignal;
 }
-
-const MEMORY_SEARCH_DEFINITION: ToolDefinition = {
-  name: TOOL_MEMORY_SEARCH,
-  description: 'Search agent memory for relevant notes or previous decisions.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: 'Search query for memory lookup' },
-      limit: { type: 'number', description: 'Maximum number of matches to return (default: 5)' },
-    },
-    required: ['query'],
-  },
-};
-
-const MEMORY_WRITE_DEFINITION: ToolDefinition = {
-  name: TOOL_MEMORY_WRITE,
-  description: 'Write to agent memory. Appends by default; set append=false to replace the full memory.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      content: { type: 'string', description: 'Memory content to store' },
-      append: { type: 'boolean', description: 'Append instead of replacing the full memory (default: true)' },
-    },
-    required: ['content'],
-  },
-};
 
 const TODO_READ_DEFINITION: ToolDefinition = {
   name: TOOL_TODO_READ,
@@ -131,15 +96,6 @@ const SLEEP_DEFINITION: ToolDefinition = {
 
 export function getRuntimeToolDefinitions(options: Omit<RuntimeToolOptions, 'session'>): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
-
-  if (options.memory || options.memorySearch) {
-    definitions.push(MEMORY_SEARCH_DEFINITION);
-  }
-
-  if (options.memory) {
-    definitions.push(MEMORY_WRITE_DEFINITION);
-  }
-
   definitions.push(TODO_READ_DEFINITION, TODO_WRITE_DEFINITION);
   if (options.sleepSignal) definitions.push(SLEEP_DEFINITION);
   return definitions;
@@ -147,49 +103,6 @@ export function getRuntimeToolDefinitions(options: Omit<RuntimeToolOptions, 'ses
 
 export function createRuntimeTools(options: RuntimeToolOptions): ToolRegistration[] {
   const tools: ToolRegistration[] = [];
-
-  if (options.memory || options.memorySearch) {
-    tools.push({
-      definition: MEMORY_SEARCH_DEFINITION,
-      execute: async (input) => {
-        const query = typeof input.query === 'string' ? input.query.trim() : '';
-        if (!query) {
-          return { content: 'Error: query must be a non-empty string', isError: true };
-        }
-
-        const limit = normalizeLimit(input.limit);
-        const matches = await searchMemory(options, query, limit);
-        return {
-          content: JSON.stringify({ query, matches }, null, 2),
-        };
-      },
-    });
-  }
-
-  if (options.memory) {
-    tools.push({
-      definition: MEMORY_WRITE_DEFINITION,
-      execute: async (input) => {
-        const content = typeof input.content === 'string' ? input.content : '';
-        if (!content.trim()) {
-          return { content: 'Error: content must be a non-empty string', isError: true };
-        }
-
-        const append = input.append !== false;
-        if (append) {
-          await options.memory!.append(content);
-        } else {
-          await options.memory!.write(content);
-        }
-
-        return {
-          content: append
-            ? `Appended ${content.length} chars to memory`
-            : `Replaced memory with ${content.length} chars`,
-        };
-      },
-    });
-  }
 
   tools.push({
     definition: TODO_READ_DEFINITION,
@@ -263,106 +176,7 @@ export function createRuntimeTools(options: RuntimeToolOptions): ToolRegistratio
   return tools;
 }
 
-async function searchMemory(
-  options: RuntimeToolOptions,
-  query: string,
-  limit: number,
-): Promise<MemorySearchResult[]> {
-  if (options.memorySearch) {
-    const results = await options.memorySearch.search(query, { limit });
-    return normalizeMemoryResults(results, limit);
-  }
-
-  const searchFromMemory = getMemorySearchProvider(options.memory);
-  if (searchFromMemory) {
-    const results = await searchFromMemory.search(query, { limit });
-    return normalizeMemoryResults(results, limit);
-  }
-
-  const content = options.memory ? await options.memory.load() : '';
-  return fallbackSearch(content, query, limit);
-}
-
-function getMemorySearchProvider(memory?: AgentMemory): MemorySearchProvider | undefined {
-  if (!memory) return undefined;
-  const candidate = memory as AgentMemory & Partial<MemorySearchProvider>;
-  return typeof candidate.search === 'function' ? candidate as MemorySearchProvider : undefined;
-}
-
-function normalizeMemoryResults(results: MemorySearchResult[], limit: number): MemorySearchResult[] {
-  return results.slice(0, limit).map((result) => ({
-    id: result.id,
-    content: result.content,
-    score: result.score,
-    metadata: result.metadata,
-    createdAt: result.createdAt,
-    updatedAt: result.updatedAt,
-  }));
-}
-
-function fallbackSearch(content: string, query: string, limit: number): MemorySearchResult[] {
-  const normalizedQuery = query.toLowerCase();
-  const sections = splitMemorySections(content);
-
-  return sections
-    .map((section) => {
-      const score = countMatches(section.content.toLowerCase(), normalizedQuery);
-      if (score === 0) return null;
-      return { ...section, score };
-    })
-    .filter((section): section is MemorySearchResult & { score: number } => section !== null)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return (b.createdAt ?? 0) - (a.createdAt ?? 0);
-    })
-    .slice(0, limit);
-}
-
-function splitMemorySections(content: string): MemorySearchResult[] {
-  const body = content.replace(/^# Agent Memory\s*/m, '').trim();
-  if (!body) return [];
-
-  const sections = body.includes('\n## ')
-    ? body.split(/\n(?=## )/g)
-    : [body];
-
-  const results: MemorySearchResult[] = [];
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed) continue;
-
-    const [, timestamp] = /^##\s+([^\n]+)\n?/.exec(trimmed) ?? [];
-    const createdAt = timestamp ? Date.parse(timestamp) : Number.NaN;
-    const result: MemorySearchResult = { content: trimmed };
-
-    if (!Number.isNaN(createdAt)) {
-      result.createdAt = createdAt;
-    }
-
-    results.push(result);
-  }
-
-  return results;
-}
-
-function countMatches(haystack: string, needle: string): number {
-  let count = 0;
-  let index = 0;
-
-  while (index < haystack.length) {
-    const next = haystack.indexOf(needle, index);
-    if (next === -1) break;
-    count++;
-    index = next + needle.length;
-  }
-
-  return count;
-}
-
-function normalizeLimit(input: unknown): number {
-  if (typeof input !== 'number' || !Number.isFinite(input)) return 5;
-  return Math.max(1, Math.trunc(input));
-}
+// ===== Internal Helpers =====
 
 function parseTodoItems(input: unknown): TodoItem[] | null {
   if (!Array.isArray(input)) return null;

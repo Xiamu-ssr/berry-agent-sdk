@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createDatabase } from '../collector/db.js';
-import { createMiddleware, createEventListener } from '../collector/collector.js';
+import { createCollector } from '../collector/collector.js';
 import { Analyzer } from '../analyzer/analyzer.js';
 import { cleanup } from '../collector/retention.js';
 import { calculateCost, MODEL_PRICING } from '../collector/pricing.js';
@@ -234,7 +234,7 @@ describe('Collector', () => {
       status: 'active',
     }).run();
 
-    const mw = createMiddleware({ db: database });
+    const mw = createCollector({ db: database }).middleware;
     const req = makeRequest();
     const ctx = makeContext();
 
@@ -262,7 +262,7 @@ describe('Collector', () => {
       status: 'active',
     }).run();
 
-    const mw = createMiddleware({ db: database });
+    const mw = createCollector({ db: database }).middleware;
     const ctx = makeContext();
     const input = { path: '/tmp/test' };
 
@@ -283,7 +283,7 @@ describe('Collector', () => {
       status: 'active',
     }).run();
 
-    const mw = createMiddleware({ db: database });
+    const mw = createCollector({ db: database }).middleware;
     const ctx = makeContext();
     const input = { path: '/tmp/test' };
 
@@ -304,7 +304,7 @@ describe('Collector', () => {
       status: 'active',
     }).run();
 
-    const mw = createMiddleware({ db: database });
+    const mw = createCollector({ db: database }).middleware;
     const ctx = makeContext({ sessionId: 'ses_test_002' });
     const input = { path: '/tmp/huge' };
 
@@ -320,7 +320,7 @@ describe('Collector', () => {
   });
 
   it('event listener creates session on query_start', () => {
-    const listener = createEventListener({ db: database });
+    const listener = createCollector({ db: database }).eventListener;
 
     const event: AgentEvent = {
       type: 'query_start',
@@ -339,7 +339,7 @@ describe('Collector', () => {
   });
 
   it('event listener updates session on query_end', () => {
-    const listener = createEventListener({ db: database });
+    const listener = createCollector({ db: database }).eventListener;
 
     // Start
     listener({

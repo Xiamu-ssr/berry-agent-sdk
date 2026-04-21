@@ -60,7 +60,8 @@ export type {
 
 // Workspace
 export { FileAgentMemory, FileProjectContext, initWorkspace } from './workspace/index.js';
-export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata, MemorySearchProvider, MemorySearchResult } from './workspace/index.js';
+export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata } from './workspace/index.js';
+export type { MemoryProvider, MemoryInitContext } from './memory/index.js';
 
 // Skills
 export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';

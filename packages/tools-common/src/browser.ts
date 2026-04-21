@@ -150,9 +150,19 @@ export function createBrowserTool(options: BrowserToolOptions = {}): ToolRegistr
           const mod = 'playwright-core';
           pw = await import(/* webpackIgnore: true */ mod);
         } catch {
-          throw new Error(
-            'playwright-core is not installed. Install it with: npm install playwright-core',
-          );
+          // When tools-common is consumed via file: link (e.g. berry-claw → SDK monorepo),
+          // the dynamic import resolves relative to dist/browser.js inside the SDK, which
+          // may not have playwright-core in its own node_modules.  Try resolving from the
+          // consumer's working directory as a fallback.
+          try {
+            const { createRequire } = await import('node:module');
+            const consumerRequire = createRequire(process.cwd() + '/__browser__.js');
+            pw = consumerRequire('playwright-core');
+          } catch {
+            throw new Error(
+              'playwright-core is not installed. Install it with: npm install playwright-core',
+            );
+          }
         }
       }
 

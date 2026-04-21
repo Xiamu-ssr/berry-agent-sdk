@@ -387,20 +387,3 @@ export function createCollector(config: CollectorConfig): {
 
   return { middleware, eventListener };
 }
-
-/**
- * Create a middleware that collects LLM call and tool call data.
- * @deprecated Prefer createCollector() which shares state with the event listener.
- */
-export function createMiddleware(config: CollectorConfig): Middleware {
-  return createCollector(config).middleware;
-}
-
-/**
- * Create an event listener that records agent events, guard decisions,
- * compaction events, and manages session lifecycle.
- * @deprecated Prefer createCollector() which shares state with the middleware.
- */
-export function createEventListener(config: CollectorConfig): (event: AgentEvent) => void {
-  return createCollector(config).eventListener;
-}

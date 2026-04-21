@@ -753,34 +753,10 @@ describe('runtime memory/todo tools', () => {
     expect(provider.requests[0].systemPrompt.join('\n')).not.toContain('Plan minimal feature');
   });
 
-  it('writes memory and searches it through the built-in file memory path', async () => {
+  it('persists memory via workspace FileAgentMemory (compaction uses this)', async () => {
     const provider = new SequenceProvider([
       {
-        content: [
-          {
-            type: 'tool_use',
-            id: 'memory_write_1',
-            name: 'memory_write',
-            input: { content: 'Architecture decision: use append-only JSONL event logs.' },
-          },
-        ],
-        stopReason: 'tool_use',
-        usage: makeUsage(),
-      },
-      {
-        content: [
-          {
-            type: 'tool_use',
-            id: 'memory_search_1',
-            name: 'memory_search',
-            input: { query: 'architecture' },
-          },
-        ],
-        stopReason: 'tool_use',
-        usage: makeUsage(),
-      },
-      {
-        content: [{ type: 'text', text: 'memory ok' }],
+        content: [{ type: 'text', text: 'workspace ready' }],
         stopReason: 'end_turn',
         usage: makeUsage(),
       },
@@ -793,55 +769,47 @@ describe('runtime memory/todo tools', () => {
       workspace: workspaceRoot,
     });
 
-    const result = await agent.query('manage memory');
-    const session = await agent.getSession(result.sessionId);
-    const { readFile } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const memoryFile = await readFile(join(workspaceRoot, 'MEMORY.md'), 'utf-8');
-
-    expect(memoryFile).toContain('Architecture decision');
-    expect(session ? getToolResultContents(session).some((content) => content.includes('Architecture decision')) : false).toBe(true);
+    // FileAgentMemory is initialized when workspace is set.
+    // Verify we can write and read from it (compaction uses memory.append()).
+    const mem = agent.memory;
+    expect(mem).toBeDefined();
+    await mem!.append('Architecture decision: use append-only JSONL event logs.');
+    const content = await mem!.load();
+    expect(content).toContain('Architecture decision');
   });
 
-  it('uses a provided memorySearch adapter without requiring workspace memory writes', async () => {
+  it('registers memory tools from a MemoryProvider', async () => {
     const provider = new SequenceProvider([
       {
-        content: [
-          {
-            type: 'tool_use',
-            id: 'memory_search_adapter_1',
-            name: 'memory_search',
-            input: { query: 'semantic recall' },
-          },
-        ],
-        stopReason: 'tool_use',
-        usage: makeUsage(),
-      },
-      {
-        content: [{ type: 'text', text: 'adapter ok' }],
+        content: [{ type: 'text', text: 'provider ok' }],
         stopReason: 'end_turn',
         usage: makeUsage(),
       },
     ]);
 
+    const mockProvider: import('../memory/provider.js').MemoryProvider = {
+      id: 'test-memory',
+      tools: () => [{
+        definition: {
+          name: 'memory_search',
+          description: 'Search memory',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
+        execute: async (input) => ({ content: `search:${input.query}` }),
+      }],
+    };
+
     const agent = new Agent({
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
-      memorySearch: {
-        search: async (query) => [{ id: 'mem_1', content: `adapter:${query}`, score: 0.9 }],
-      },
+      memory: mockProvider,
     });
 
-    const result = await agent.query('search memory');
-    const session = await agent.getSession(result.sessionId);
     const names = agent.getTools().map(tool => tool.name);
-
     expect(names).toContain('memory_search');
-    expect(names).not.toContain('memory_write');
     expect(names).toContain('todo_read');
     expect(names).toContain('todo_write');
-    expect(session ? getToolResultContents(session).some((content) => content.includes('adapter:semantic recall')) : false).toBe(true);
   });
 });
 
