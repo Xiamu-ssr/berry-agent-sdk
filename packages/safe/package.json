@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/safe",
-  "version": "0.3.0-alpha.0",
+  "version": "0.3.0-alpha.1",
   "description": "Safety guards, LLM classifier, and audit for Berry Agent SDK",
   "type": "module",
   "main": "dist/index.js",
