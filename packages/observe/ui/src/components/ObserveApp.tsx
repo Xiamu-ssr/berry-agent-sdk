@@ -58,15 +58,26 @@ function getBreadcrumbs(view: View): BreadcrumbItem[] {
 export function ObserveApp({ baseUrl }: Props) {
   const [view, setView] = useState<View>({ page: 'overview' });
 
-  // Detect dark mode from parent app (check .dark class or data-theme on root)
-  // Do NOT mutate the root element — just read it and apply to our own container
+  // Detect dark mode from parent app (check .dark class or data-theme on root).
+  // Observed via MutationObserver so toggling the parent's dark class updates
+  // the Observe subtree live. We do NOT mutate the root element ourselves.
   const [isDark, setIsDark] = useState(false);
   useEffect(() => {
     const root = document.documentElement;
-    const dark = root.classList.contains('dark')
+    const compute = () =>
+      root.classList.contains('dark')
       || root.getAttribute('data-theme') === 'dark'
       || window.matchMedia('(prefers-color-scheme: dark)').matches;
-    setIsDark(dark);
+    setIsDark(compute());
+    const observer = new MutationObserver(() => setIsDark(compute()));
+    observer.observe(root, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onMedia = () => setIsDark(compute());
+    media.addEventListener?.('change', onMedia);
+    return () => {
+      observer.disconnect();
+      media.removeEventListener?.('change', onMedia);
+    };
   }, []);
 
   const nav = (v: View) => setView(v);
@@ -81,12 +92,12 @@ export function ObserveApp({ baseUrl }: Props) {
           <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">🔬 Observe</h2>
         </div>
         <NavItem icon={<BarChart3 size={16} />} label="Overview" active={view.page === 'overview'} onClick={() => nav({ page: 'overview' })} />
-        <div className="px-4 mt-3 mb-1"><span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Records</span></div>
+        <div className="px-4 mt-3 mb-1"><span className="text-xs font-medium text-gray-500 dark:text-gray-400">Records</span></div>
         <NavItem icon={<Bot size={16} />} label="Agents" active={view.page === 'agents' || view.page === 'agent-detail'} onClick={() => nav({ page: 'agents' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Sessions" active={view.page === 'sessions' || view.page === 'session-detail'} onClick={() => nav({ page: 'sessions' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Turns" active={view.page === 'turn-list' || view.page === 'turn-detail'} onClick={() => nav({ page: 'turn-list' })} />
         <NavItem icon={<Cpu size={16} />} label="Inferences" active={view.page === 'inferences' || view.page === 'inference-detail'} onClick={() => nav({ page: 'inferences' })} />
-        <div className="px-4 mt-3 mb-1"><span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Analytics</span></div>
+        <div className="px-4 mt-3 mb-1"><span className="text-xs font-medium text-gray-500 dark:text-gray-400">Analytics</span></div>
         <NavItem icon={<DollarSign size={16} />} label="Cost" active={view.page === 'cost'} onClick={() => nav({ page: 'cost' })} />
         <NavItem icon={<Zap size={16} />} label="Cache" active={view.page === 'cache'} onClick={() => nav({ page: 'cache' })} />
         <NavItem icon={<Shield size={16} />} label="Guard" active={view.page === 'guard'} onClick={() => nav({ page: 'guard' })} />
@@ -207,10 +218,10 @@ function NavItem({ icon, label, active, onClick }: {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 text-sm w-full text-left transition-colors ${
+      className={`flex items-center gap-2 px-4 py-2 text-sm w-full text-left transition-colors border-l-2 ${
         active
-          ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium'
-          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+          ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium border-indigo-500'
+          : 'border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
       }`}
     >
       {icon} {label}
