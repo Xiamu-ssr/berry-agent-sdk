@@ -59,6 +59,18 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
     ],
   },
 
+  'moonshot-coding': {
+    id: 'moonshot-coding',
+    name: 'Moonshot Coding Plan (subscription)',
+    type: 'anthropic',
+    baseUrl: 'https://api.kimi.com/coding/',
+    apiKeyDocsUrl: 'https://platform.moonshot.cn/console/api-keys',
+    knownModels: [
+      'kimi-k2.6',
+      'kimi-k2.6-preview',
+    ],
+  },
+
   glm: {
     id: 'glm',
     name: 'ZhipuAI GLM',
