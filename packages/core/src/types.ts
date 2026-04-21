@@ -96,6 +96,59 @@ export interface ProviderConfig {
   thinkingBudget?: number;
 }
 
+/**
+ * Pluggable provider resolver — the hook point for failover / multi-provider
+ * bindings that live OUTSIDE core (see @berry-agent/models).
+ *
+ * Core never implements failover policy. It only asks "which provider config
+ * do I use right now?" and reports errors back so the resolver can decide
+ * whether to rotate, retry, or give up.
+ *
+ * Consumers that don't need failover can keep passing a plain ProviderConfig
+ * to `new Agent({ provider })` — that path is never going away.
+ */
+export interface ProviderResolver {
+  /** Unique id for logging. */
+  readonly id: string;
+
+  /**
+   * Return the provider config to use for the next call.
+   * Called at the start of every provider request; cheap to invoke.
+   */
+  resolve(): ProviderConfig;
+
+  /**
+   * Called by the agent loop when a provider call fails. The resolver may
+   * rotate its internal pointer so the next `resolve()` returns a different
+   * provider. If the resolver throws, the agent propagates the original error.
+   *
+   * `isTransient` is a hint from core: 4xx auth / 402 / 429 / 5xx / network.
+   * Resolvers decide their own policy.
+   */
+  reportError?(err: unknown, hints?: { isTransient?: boolean; statusCode?: number }): void;
+
+  /**
+   * Optional — reset state (e.g. when a new session starts). Core calls this
+   * at session boundary if defined. Useful for per-session stickiness.
+   */
+  resetForSession?(sessionId: string): void;
+}
+
+/** Convenience: input accepted by Agent.provider / AgentCreateConfig.provider. */
+export type ProviderInput = ProviderConfig | ProviderResolver;
+
+/** Narrow a ProviderInput into a ProviderResolver form (even for static configs). */
+export function toProviderResolver(input: ProviderInput): ProviderResolver {
+  if ('resolve' in input && typeof (input as ProviderResolver).resolve === 'function') {
+    return input as ProviderResolver;
+  }
+  const cfg = input as ProviderConfig;
+  return {
+    id: `static:${cfg.type}:${cfg.model}`,
+    resolve: () => cfg,
+  };
+}
+
 export interface ProviderRequest {
   /** System prompt blocks (split for cache optimization) */
   systemPrompt: string[];
@@ -163,7 +216,11 @@ export interface SessionTodoState {
 // ----- Agent Config -----
 
 export interface AgentConfig {
-  provider: ProviderConfig;
+  /**
+   * Provider config, or a resolver (from @berry-agent/models or a custom
+   * failover implementation). Static configs still work unchanged.
+   */
+  provider: ProviderInput;
   /** Optional injected provider instance (useful for tests/custom providers) */
   providerInstance?: Provider;
   /** System prompt — string or array of blocks (for cache optimization) */
@@ -237,8 +294,8 @@ export interface AgentCreateConfig {
   // --- Provider (pick one approach) ---
   /** Use a ProviderRegistry for multi-provider support. */
   registry?: ProviderRegistry;
-  /** Full provider config (alternative to registry/shorthand). */
-  provider?: ProviderConfig;
+  /** Full provider config or resolver (alternative to registry/shorthand). */
+  provider?: ProviderInput;
   /** Shorthand: provider type (default: 'anthropic'). */
   providerType?: ProviderType;
   /** Shorthand: API key. */

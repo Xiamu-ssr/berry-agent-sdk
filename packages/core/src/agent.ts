@@ -12,6 +12,8 @@ import type {
   Message,
   Provider,
   ProviderConfig,
+  ProviderResolver,
+  ProviderInput,
   ProviderRequest,
   ToolRegistration,
   Session,
@@ -31,6 +33,7 @@ import type {
   ToolDefinition,
   TodoItem,
 } from './types.js';
+import { toProviderResolver } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
@@ -76,6 +79,15 @@ interface InternalAgentConfig extends AgentConfig {
 export class Agent {
   private provider: Provider;
   private providerConfig: ProviderConfig;
+  /**
+   * Optional resolver. When set, the agent calls resolve() before each
+   * provider request, rebuilding `this.provider` when the config changes,
+   * and calls reportError() on failure.
+   *
+   * When `null`, the agent uses the static `providerConfig` / `provider`
+   * fields unchanged (original behavior — backward compatible).
+   */
+  private providerResolver: ProviderResolver | null;
   private systemPrompt: string[];
   private tools: Map<string, ToolRegistration>;
   private legacySkills: string[];  // deprecated: raw .md paths
@@ -207,7 +219,16 @@ export class Agent {
     this.middleware = config.middleware ?? [];
     this.sessionStore = config.sessionStore ?? createInMemoryStore();
     this.onEvent = config.onEvent;
-    this.providerConfig = config.provider;
+    // Normalize provider input — plain ProviderConfig still works, but the
+    // agent loop funnels everything through a resolver internally so the
+    // failover hook (@berry-agent/models) can slot in transparently.
+    if (isProviderResolver(config.provider)) {
+      this.providerResolver = config.provider as ProviderResolver;
+      this.providerConfig = this.providerResolver.resolve();
+    } else {
+      this.providerResolver = null;
+      this.providerConfig = config.provider as ProviderConfig;
+    }
     this.contextStrategy = new DefaultContextStrategy();
     this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
     this._onQueryStart = config.onQueryStart;
@@ -240,8 +261,8 @@ export class Agent {
       this.tools.set(tool.definition.name, tool);
     }
 
-    // Create provider
-    this.provider = config.providerInstance ?? createProvider(config.provider);
+    // Create provider from the (possibly just-resolved) config.
+    this.provider = config.providerInstance ?? createProvider(this.providerConfig);
 
     // Register built-in load_skill tool when skills are configured.
     // The model calls load_skill(name) via standard tool_use to get full skill body.
@@ -388,8 +409,8 @@ export class Agent {
   static create(config: AgentCreateConfig): Agent {
     const cwd = config.cwd ?? process.cwd();
 
-    // Resolve provider config
-    let providerConfig: ProviderConfig;
+    // Resolve provider config (or pass-through resolver unchanged)
+    let providerConfig: ProviderInput;
     if (config.registry) {
       providerConfig = config.registry.toProviderConfig(config.model);
     } else if (config.provider) {
@@ -1471,11 +1492,44 @@ export class Agent {
     return parts.length > 0 ? parts.join('\n\n') : null;
   }
 
+  /**
+   * If a resolver is attached, pull the latest ProviderConfig from it and
+   * rebuild `this.provider` when the config materially changed. Called at
+   * the start of every provider call.
+   */
+  private refreshProviderIfNeeded(): void {
+    if (!this.providerResolver) return;
+    const next = this.providerResolver.resolve();
+    if (!providerConfigsEqual(this.providerConfig, next)) {
+      this.providerConfig = next;
+      this.provider = createProvider(next);
+    }
+  }
+
+  /**
+   * Forward a provider-side error to the resolver (if any). Never throws —
+   * the agent loop still owns whether to retry or surface the error.
+   */
+  private reportProviderError(err: unknown, statusCode?: number): void {
+    if (!this.providerResolver?.reportError) return;
+    const isTransient =
+      typeof statusCode === 'number'
+        ? statusCode === 402 || statusCode === 408 || statusCode === 429 || statusCode >= 500
+        : isRetryableError(err);
+    try {
+      this.providerResolver.reportError(err, { isTransient, statusCode });
+    } catch {
+      /* resolver errors must not poison the agent */
+    }
+  }
+
   private async callProvider(
     request: ProviderRequest,
     stream: boolean,
     emit: (event: AgentEvent) => void,
   ): Promise<import('./types.js').ProviderResponse> {
+    this.refreshProviderIfNeeded();
+
     if (stream && this.provider.stream) {
       let lastError: unknown;
 
@@ -1526,6 +1580,12 @@ export class Agent {
           const timedOutBeforeFirstToken = idleController.signal.aborted && !sawAnyStreamEvent;
           const retryableBeforeFirstToken = !sawAnyStreamEvent && !callerAborted && (timedOutBeforeFirstToken || isRetryableError(error));
 
+          if (!callerAborted) {
+            this.reportProviderError(error, typeof error?.status === 'number' ? error.status : undefined);
+            // Let the resolver rotate before the next retry attempt.
+            this.refreshProviderIfNeeded();
+          }
+
           if (!retryableBeforeFirstToken || attempt > MAX_RETRIES) {
             throw error;
           }
@@ -1554,7 +1614,16 @@ export class Agent {
       throw lastError;
     }
 
-    return this.provider.chat(request);
+    try {
+      return await this.provider.chat(request);
+    } catch (error: any) {
+      const statusCode = typeof error?.status === 'number' ? error.status : undefined;
+      const callerAborted = !!request.signal?.aborted;
+      if (!callerAborted) {
+        this.reportProviderError(error, statusCode);
+      }
+      throw error;
+    }
   }
 
   private emit(event: AgentEvent, queryOnEvent?: (event: AgentEvent) => void): void {
@@ -1602,6 +1671,19 @@ function createProvider(config: ProviderConfig): Provider {
     default:
       throw new Error(`Unknown provider type: ${config.type}`);
   }
+}
+
+function isProviderResolver(input: ProviderInput): input is ProviderResolver {
+  return typeof (input as ProviderResolver).resolve === 'function';
+}
+
+function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
+  return (
+    a.type === b.type &&
+    a.apiKey === b.apiKey &&
+    a.model === b.model &&
+    (a.baseUrl ?? '') === (b.baseUrl ?? '')
+  );
 }
 
 // ===== Helpers =====

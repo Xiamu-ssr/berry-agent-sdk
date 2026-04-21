@@ -4,6 +4,7 @@
 
 // Core
 export { Agent } from './agent.js';
+export { toProviderResolver } from './types.js';
 
 // Provider Registry
 export { ProviderRegistry } from './registry.js';
@@ -112,6 +113,8 @@ export type {
   // Provider
   Provider,
   ProviderConfig,
+  ProviderResolver,
+  ProviderInput,
   ProviderType,
   ProviderRequest,
   ProviderResponse,
