@@ -298,6 +298,7 @@ export class Analyzer {
     id: string; sessionId: string; agentId: string | null; prompt: string | null;
     startTime: number; endTime: number | null; llmCallCount: number; toolCallCount: number;
     totalCost: number; status: string;
+    recoveredFromCrash: boolean; orphanedToolCount: number; previousTurnId: string | null;
   }> {
     const conditions = [];
     if (filter?.sessionId) conditions.push(eq(turns.sessionId, filter.sessionId));
@@ -328,6 +329,9 @@ export class Analyzer {
       toolCallCount: turn.toolCallCount,
       totalCost: turn.totalCost,
       status: turn.status,
+      recoveredFromCrash: !!turn.recoveredFromCrash,
+      orphanedToolCount: turn.orphanedToolCount ?? 0,
+      previousTurnId: turn.previousTurnId,
       cost,
       cache,
       guard,

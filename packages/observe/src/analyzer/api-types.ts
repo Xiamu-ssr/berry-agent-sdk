@@ -170,6 +170,13 @@ export interface TurnSummary {
   toolCallCount: number;
   totalCost: number;
   status: string;
+  /** v0.4 crash recovery metadata. True iff this turn began with a
+   *  crash_recovered event (previous run crashed). */
+  recoveredFromCrash: boolean;
+  /** Number of tool calls that were orphaned in the previous crashed run. */
+  orphanedToolCount: number;
+  /** ID of the prior turn the crash happened in, if known. */
+  previousTurnId: string | null;
   // aggregated sub-objects
   cost: CostBreakdown;
   cache: CacheEfficiency;

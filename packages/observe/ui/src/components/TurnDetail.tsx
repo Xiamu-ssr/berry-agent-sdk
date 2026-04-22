@@ -1,4 +1,4 @@
-import { ArrowLeft, MessageSquare } from 'lucide-react';
+import { ArrowLeft, MessageSquare, AlertTriangle } from 'lucide-react';
 import { useObserveApi } from '../hooks/useObserve';
 import { MiniStats } from './MiniStats';
 import { InferenceList } from './InferenceList';
@@ -35,6 +35,25 @@ export function TurnDetail({ baseUrl, turnId, onBack, onSelectInference }: Props
           data.status === 'completed' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
         }`}>{data.status}</span>
       </div>
+
+      {/* Crash recovery banner (v0.4) — shown when this turn resumed after a crash. */}
+      {data.recoveredFromCrash && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-800 rounded-lg px-4 py-3 text-sm flex items-start gap-3">
+          <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <div className="font-medium text-amber-800 dark:text-amber-300">Crash recovery turn</div>
+            <div className="text-amber-700 dark:text-amber-400 mt-0.5">
+              This turn resumed a session that crashed during a previous run.
+              {data.orphanedToolCount > 0 && (
+                <> <span className="font-medium">{data.orphanedToolCount}</span> tool call{data.orphanedToolCount === 1 ? ' was' : 's were'} orphaned (started but never finished).</>
+              )}
+              {data.previousTurnId && (
+                <> Previous turn: <span className="font-mono text-xs">{data.previousTurnId}</span></>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Prompt */}
       {data.prompt && (

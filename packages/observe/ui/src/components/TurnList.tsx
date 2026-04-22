@@ -1,4 +1,4 @@
-import { MessageSquare, ArrowRight } from 'lucide-react';
+import { MessageSquare, ArrowRight, AlertTriangle } from 'lucide-react';
 import { useObserveApi } from '../hooks/useObserve';
 
 interface TurnRow {
@@ -12,6 +12,8 @@ interface TurnRow {
   toolCallCount: number;
   totalCost: number;
   status: string;
+  recoveredFromCrash?: boolean;
+  orphanedToolCount?: number;
 }
 
 interface Props {
@@ -46,8 +48,18 @@ export function TurnList({ baseUrl, sessionId, agentId, limit = 50, onSelect }: 
             onClick={() => onSelect?.(t.id)}
           >
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-gray-700 dark:text-gray-300 truncate">
-                {t.prompt ? `"${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}"` : <span className="text-gray-400 dark:text-gray-500 italic">no prompt</span>}
+              <div className="text-sm text-gray-700 dark:text-gray-300 truncate flex items-center gap-2">
+                {t.recoveredFromCrash && (
+                  <span
+                    title={`Crash recovery turn${t.orphanedToolCount ? ` — ${t.orphanedToolCount} orphaned tool${t.orphanedToolCount > 1 ? 's' : ''}` : ''}`}
+                    className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400"
+                  >
+                    <AlertTriangle size={12} />
+                  </span>
+                )}
+                <span className="truncate">
+                  {t.prompt ? `"${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}"` : <span className="text-gray-400 dark:text-gray-500 italic">no prompt</span>}
+                </span>
               </div>
               <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
                 {new Date(t.startTime).toLocaleString()} ·
