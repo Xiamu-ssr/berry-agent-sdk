@@ -19,11 +19,26 @@ export function CompactionAnalysis({ baseUrl, sessionId }: Props) {
 
       {/* Stats summary */}
       {stats && stats.totalCount > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <MiniStat label="Total" value={stats.totalCount} />
           <MiniStat label="Avg Tokens Freed" value={Math.round(stats.avgTokensFreed).toLocaleString()} />
           <MiniStat label="Avg Duration" value={`${Math.round(stats.avgDurationMs)}ms`} />
           <MiniStat label="Avg Reduction" value={`${(stats.avgReductionPct * 100).toFixed(1)}%`} />
+          <MiniStat label="Avg Threshold" value={`${(stats.avgThresholdPct * 100).toFixed(0)}%`} />
+        </div>
+      )}
+
+      {/* Trigger frequency */}
+      {stats?.byTrigger?.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h4 className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Trigger Frequency</h4>
+          <div className="flex flex-wrap gap-2">
+            {stats.byTrigger.map((t: any) => (
+              <span key={t.reason} className="px-2 py-1 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded text-xs font-mono">
+                {t.reason} ({t.count})
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -70,6 +85,9 @@ export function CompactionAnalysis({ baseUrl, sessionId }: Props) {
                   <span className="text-green-600 dark:text-green-400 font-medium">{evt.contextAfter.toLocaleString()} tokens</span>
                   <span className="text-gray-400 dark:text-gray-500">(-{reductionPct}%)</span>
                   <span className="text-gray-400 dark:text-gray-500 ml-2">
+                    freed {evt.tokensFreed?.toLocaleString() ?? '?'} tokens
+                  </span>
+                  <span className="text-gray-400 dark:text-gray-500">
                     at {(evt.thresholdPct * 100).toFixed(0)}% of {evt.contextWindow.toLocaleString()} window
                   </span>
                 </div>
