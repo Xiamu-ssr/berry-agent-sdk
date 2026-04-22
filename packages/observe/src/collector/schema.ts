@@ -28,6 +28,12 @@ export const turns = sqliteTable('turns', {
   toolCallCount: integer('tool_call_count').notNull().default(0),
   totalCost: real('total_cost').notNull().default(0),
   status: text('status', { enum: ['active', 'completed', 'error'] }).notNull(),
+  // Crash recovery metadata (v0.4). Set when a crash_recovered event was
+  // detected at the START of this turn. See @berry-agent/core crash-detector.
+  recoveredFromCrash: integer('recovered_from_crash', { mode: 'boolean' }).notNull().default(false),
+  orphanedToolCount: integer('orphaned_tool_count').notNull().default(0),
+  /** Turn in which the crash happened. NULL when unknown. */
+  previousTurnId: text('previous_turn_id'),
 });
 
 // ----- llm_calls -----
@@ -79,6 +85,13 @@ export const toolCalls = sqliteTable('tool_calls', {
   isError: integer('is_error', { mode: 'boolean' }).notNull(),
   durationMs: integer('duration_ms').notNull(),
   timestamp: integer('timestamp').notNull(),
+  // NOTE (v0.4 design): no `status` column. Orphaned tool calls from crashes
+  // never produce a tool_calls row (middleware's onAfterToolExec did not run).
+  // The audit trail for orphans lives in:
+  //   - turns.orphanedToolCount / turns.recoveredFromCrash (summary)
+  //   - agent_events[kind='crash_recovered'].detail (verbatim)
+  //   - the append-only event log (source of truth)
+  // Adding a status column here would be dead weight.
 });
 
 // ----- guard_decisions -----

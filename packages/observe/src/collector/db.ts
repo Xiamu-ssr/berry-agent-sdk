@@ -40,7 +40,10 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     llm_call_count INTEGER NOT NULL DEFAULT 0,
     tool_call_count INTEGER NOT NULL DEFAULT 0,
     total_cost REAL NOT NULL DEFAULT 0,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    recovered_from_crash INTEGER NOT NULL DEFAULT 0,
+    orphaned_tool_count INTEGER NOT NULL DEFAULT 0,
+    previous_turn_id TEXT
   )`);
 
   db.run(sql`CREATE TABLE IF NOT EXISTS llm_calls (
@@ -139,6 +142,10 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     'ALTER TABLE llm_calls ADD COLUMN provider_response TEXT',
     'ALTER TABLE tool_calls ADD COLUMN turn_id TEXT',
     'ALTER TABLE guard_decisions ADD COLUMN turn_id TEXT',
+    // v0.4: crash recovery metadata on turns
+    'ALTER TABLE turns ADD COLUMN recovered_from_crash INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE turns ADD COLUMN orphaned_tool_count INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE turns ADD COLUMN previous_turn_id TEXT',
   ];
   for (const stmt of migrations) {
     try { db.run(sql.raw(stmt)); } catch { /* column already exists */ }

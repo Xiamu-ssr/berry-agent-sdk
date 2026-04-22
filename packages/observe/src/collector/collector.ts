@@ -72,6 +72,13 @@ export function createCollector(config: CollectorConfig): {
   let currentSessionId: string | undefined;
   let currentTurnId: string | undefined;
   let lastLlmCallId: string | undefined;
+  /** Crash-recovery metadata buffered from crash_recovered AgentEvent, consumed
+   *  by the NEXT query_start to stamp the new turn. Cleared after each use. */
+  let pendingCrashRecovery: {
+    orphanedToolCount: number;
+    previousTurnId?: string;
+    orphanedToolUseIds: string[];
+  } | undefined;
 
   // ===== Middleware-internal state =====
   const pendingApiCalls = new Map<string, PendingApiCall>();
@@ -246,9 +253,13 @@ export function createCollector(config: CollectorConfig): {
           }).run();
         }
 
-        // Create a new turn for this query
+        // Create a new turn for this query. If a crash_recovered event just
+        // arrived (emitted by resolveSession before query_start), stamp the
+        // recovery metadata onto this new turn.
         const turnId = nanoid();
         currentTurnId = turnId;
+        const recovery = pendingCrashRecovery;
+        pendingCrashRecovery = undefined;
         db.db.insert(turns).values({
           id: turnId,
           sessionId: event.sessionId,
@@ -260,7 +271,16 @@ export function createCollector(config: CollectorConfig): {
           toolCallCount: 0,
           totalCost: 0,
           status: 'active',
+          recoveredFromCrash: !!recovery,
+          orphanedToolCount: recovery?.orphanedToolCount ?? 0,
+          previousTurnId: recovery?.previousTurnId ?? null,
         }).run();
+
+        // Note: orphaned tool rows are NOT flipped here because the
+        // middleware-written tool_calls row never had a tool_use_id column
+        // (the crash happened BEFORE onAfterToolExec ran, so no row exists).
+        // The crash_recovered agent_events row carries the full audit trail
+        // of orphanedTools. Turn-level counts live in turns.orphanedToolCount.
 
         db.db.insert(agentEvents).values({
           id: nanoid(),
@@ -370,6 +390,44 @@ export function createCollector(config: CollectorConfig): {
           .run();
 
         currentSessionId = sessionId; // keep for reference
+        break;
+      }
+
+      case 'crash_recovered': {
+        // Ensure the session row exists before writing the audit event —
+        // crash_recovered arrives BEFORE query_start, so the session may not
+        // have been inserted yet. FK constraint requires it.
+        const existsSession = db.db.select().from(sessions)
+          .where(eq(sessions.id, event.sessionId)).get();
+        if (!existsSession) {
+          db.db.insert(sessions).values({
+            id: event.sessionId,
+            agentId: config.agentId ?? null,
+            startTime: Date.now(),
+            endTime: null,
+            totalCost: 0,
+            status: 'active',
+          }).run();
+        }
+
+        // Buffer the recovery metadata for the next query_start. Also write a
+        // verbatim audit row so the UI can query it independently of turns.
+        pendingCrashRecovery = {
+          orphanedToolCount: event.artifactCount,
+          previousTurnId: event.crashedTurnId,
+          orphanedToolUseIds: event.orphanedTools.map(o => o.toolUseId),
+        };
+        db.db.insert(agentEvents).values({
+          id: nanoid(),
+          sessionId: event.sessionId,
+          kind: 'crash_recovered',
+          detail: safeJsonStringify({
+            artifactCount: event.artifactCount,
+            orphanedTools: event.orphanedTools,
+            crashedTurnId: event.crashedTurnId,
+          }) ?? '{}',
+          timestamp: Date.now(),
+        }).run();
         break;
       }
 

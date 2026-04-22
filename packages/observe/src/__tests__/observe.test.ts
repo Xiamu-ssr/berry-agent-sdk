@@ -779,4 +779,66 @@ describe('createObserver', () => {
 
     observer.close();
   });
+
+  it('records crash_recovered events and stamps the recovered turn', async () => {
+    const { createObserver } = await import('../observer.js');
+    const observer = createObserver({
+      dbPath: ':memory:',
+      agentId: 'agent_crash_test',
+    });
+
+    const sessionId = 'ses_crash_001';
+
+    // Fire crash_recovered BEFORE query_start (mimics resolveSession emit order)
+    observer.onEvent({
+      type: 'crash_recovered',
+      sessionId,
+      artifactCount: 2,
+      orphanedTools: [
+        { toolUseId: 'tu_a', name: 'bash', input: { cmd: 'ls' }, startedAt: 1, startEventId: 'ev_a' },
+        { toolUseId: 'tu_b', name: 'read', input: { path: '/x' }, startedAt: 2, startEventId: 'ev_b' },
+      ],
+      crashedTurnId: 'turn_prev',
+    });
+
+    observer.onEvent({
+      type: 'query_start',
+      prompt: 'continue after crash',
+      sessionId,
+    });
+
+    observer.onEvent({
+      type: 'query_end',
+      result: {
+        text: 'ok',
+        sessionId,
+        usage: { inputTokens: 10, outputTokens: 5 },
+        totalUsage: { inputTokens: 10, outputTokens: 5 },
+        toolCalls: 0,
+        compacted: false,
+      },
+    });
+
+    // The turn created by query_start must carry the recovery flags.
+    const rows = observer.db.db.all<{ recovered: number; count: number; prev: string | null }>(
+      `SELECT recovered_from_crash as recovered, orphaned_tool_count as count, previous_turn_id as prev
+       FROM turns WHERE session_id = '${sessionId}'` as unknown as never,
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].recovered).toBe(1);
+    expect(rows[0].count).toBe(2);
+    expect(rows[0].prev).toBe('turn_prev');
+
+    // StabilityMetrics should reflect the recovery.
+    const { MetricsCalculator } = await import('../analyzer/metrics.js');
+    const metrics = new MetricsCalculator(observer.analyzer, observer.db);
+    const stability = metrics.stabilityMetrics('agent_crash_test');
+    expect(stability.totalTurns).toBe(1);
+    expect(stability.recoveredTurns).toBe(1);
+    expect(stability.crashRate).toBe(1);
+    expect(stability.totalOrphanedTools).toBe(2);
+    expect(stability.topOrphanedTools.map(t => t.name).sort()).toEqual(['bash', 'read']);
+
+    observer.close();
+  });
 });

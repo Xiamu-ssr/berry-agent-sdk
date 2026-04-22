@@ -9,6 +9,22 @@ import type { Analyzer } from './analyzer.js';
 import type { ObserveDB } from '../collector/db.js';
 import { llmCalls, toolCalls, guardDecisions, turns, sessions, compactionEvents } from '../collector/schema.js';
 
+// ----- Stability Metrics (v0.4 crash recovery) -----
+
+/** Crash / stability metrics for an agent or session. */
+export interface StabilityMetrics {
+  /** Total turns observed. */
+  totalTurns: number;
+  /** Turns that started with a crash_recovered event. */
+  recoveredTurns: number;
+  /** Ratio recoveredTurns / totalTurns (0..1). */
+  crashRate: number;
+  /** Sum of orphaned_tool_count across all recovered turns. */
+  totalOrphanedTools: number;
+  /** Top N tools by orphan frequency (most likely to crash). */
+  topOrphanedTools: Array<{ name: string; count: number }>;
+}
+
 // ----- Turn Metrics -----
 
 /** Derived metrics for a single turn */
@@ -278,6 +294,52 @@ export class MetricsCalculator {
       avgSessionCost: sessionCount > 0 ? totalCost / sessionCount : 0,
       topTools,
       modelUsage,
+    };
+  }
+
+  /**
+   * Stability metrics — crash rate and top orphaned tools.
+   * Pass `agentId` to scope by agent, or omit for all data.
+   */
+  stabilityMetrics(agentId?: string): StabilityMetrics {
+    const turnFilter = agentId
+      ? sql`WHERE ${turns.agentId} = ${agentId}`
+      : sql``;
+
+    const totalsRow = this.db.db.get<{ total: number; recovered: number; orphans: number }>(
+      sql`SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN ${turns.recoveredFromCrash} = 1 THEN 1 ELSE 0 END) as recovered,
+        COALESCE(SUM(${turns.orphanedToolCount}), 0) as orphans
+      FROM ${turns} ${turnFilter}`,
+    );
+
+    const totalTurns = totalsRow?.total ?? 0;
+    const recoveredTurns = totalsRow?.recovered ?? 0;
+    const totalOrphanedTools = totalsRow?.orphans ?? 0;
+
+    // Top orphaned tools: parsed out of agent_events[kind='crash_recovered'].detail.
+    // Each crash_recovered row has detail.orphanedTools[].name.
+    // We use json_each to unnest and count by name.
+    const orphanFilter = agentId
+      ? sql`AND EXISTS (SELECT 1 FROM ${turns} t WHERE t.session_id = agent_events.session_id AND t.agent_id = ${agentId})`
+      : sql``;
+
+    const orphanRows = this.db.db.all<{ name: string; count: number }>(
+      sql`SELECT t.value->>'name' as name, COUNT(*) as count
+      FROM agent_events, json_each(json_extract(agent_events.detail, '$.orphanedTools')) t
+      WHERE agent_events.kind = 'crash_recovered' ${orphanFilter}
+      GROUP BY name
+      ORDER BY count DESC
+      LIMIT 10`,
+    );
+
+    return {
+      totalTurns,
+      recoveredTurns,
+      crashRate: totalTurns > 0 ? recoveredTurns / totalTurns : 0,
+      totalOrphanedTools,
+      topOrphanedTools: (orphanRows ?? []).filter(r => r.name).map(r => ({ name: r.name, count: r.count })),
     };
   }
 }
