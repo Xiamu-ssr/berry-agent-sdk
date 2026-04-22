@@ -588,6 +588,18 @@ export class Agent {
         tools: allowedTools.length,
       });
 
+      // Event log: api_request (full body) + api_response (full body)
+      const requestId = generateEventId();
+      await appendEvent({
+        ...makeBase(),
+        type: 'api_request',
+        requestId,
+        model: this.providerConfig.model,
+        messages: messagesForProvider,
+        tools: allowedTools.map(t => ({ name: t.definition.name, description: t.definition.description })),
+        params: { maxTokens: this.providerConfig.maxTokens, thinkingBudget: this.providerConfig.thinkingBudget },
+      });
+
       let response: import('./types.js').ProviderResponse;
       let ptlRetries = 0;
 
@@ -662,7 +674,23 @@ export class Agent {
         }
       }
 
-      // Event log: api_call metadata
+      // Event log: api_response with full response body
+      await appendEvent({
+        ...makeBase(),
+        type: 'api_response',
+        requestId,
+        model: this.providerConfig.model,
+        content: response.content,
+        stopReason: response.stopReason,
+        usage: {
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+          cacheReadTokens: response.usage.cacheReadTokens,
+          cacheWriteTokens: response.usage.cacheWriteTokens,
+        },
+      });
+
+      // Legacy api_call event — keep for backward compatibility with existing analyzers
       await appendEvent({
         ...makeBase(),
         type: 'api_call',
@@ -779,6 +807,18 @@ export class Agent {
 
     // Event log: query_end
     await appendEvent({ ...makeBase(), type: 'query_end', result });
+
+    // DURABILITY: messages_snapshot — checkpoint the complete messages[]
+    // after every successful turn so crash recovery can resume from here
+    // instead of replaying all events from the beginning.
+    if (log) {
+      await appendEvent({
+        ...makeBase(),
+        type: 'messages_snapshot',
+        messages: session.messages,
+        reason: 'turn_end',
+      });
+    }
 
     this._lastSessionId = session.id;
     emit({ type: 'query_end', result });
@@ -1299,7 +1339,7 @@ export class Agent {
       };
     }
     // New session
-    return {
+    const newSession: Session = {
       id: generateId(),
       messages: [],
       systemPrompt: this.systemPrompt,
@@ -1307,6 +1347,29 @@ export class Agent {
       lastAccessedAt: Date.now(),
       metadata: createEmptySessionMetadata(this.cwd, this.providerConfig.model),
     };
+    // DURABILITY: write session_start event with complete initial state
+    if (this.eventLogStore) {
+      const projectCtx = this._projectContext
+        ? await this._projectContext.loadContext().catch(() => undefined)
+        : undefined;
+      await this.eventLogStore.append(newSession.id, {
+        id: generateEventId(),
+        timestamp: Date.now(),
+        sessionId: newSession.id,
+        turnId: 'start',
+        type: 'session_start',
+        systemPrompt: newSession.systemPrompt,
+        projectContextSnapshot: projectCtx,
+        toolsAvailable: Array.from(this.tools.values()).map(t => t.definition.name),
+        guardEnabled: !!this.toolGuard,
+        providerType: this.providerConfig.type,
+        model: this.providerConfig.model,
+        compactionConfig: this.compactionConfig
+          ? { ...this.compactionConfig, enabledLayers: this.compactionConfig.enabledLayers }
+          : undefined,
+      });
+    }
+    return newSession;
   }
 
   private resolveAllowedTools(allowed?: string[], session?: Session): ToolRegistration[] {

@@ -24,30 +24,59 @@ const CONVERSATION_EVENT_TYPES = new Set([
 ]);
 
 /**
+ * Events that can be appended to an existing messages[] baseline.
+ * After a messages_snapshot, only these events produce new messages.
+ */
+const REPLAY_EVENT_TYPES = new Set([
+  'user_message',
+  'assistant_message',
+  'tool_result',
+]);
+
+/**
  * Default context strategy: replays conversation events from the event log,
  * skipping everything before the last compaction_marker.
  */
 export class DefaultContextStrategy implements ContextStrategy {
   /** Convert session events into messages suitable for the provider. */
   buildMessages(events: SessionEvent[]): Message[] {
-    // 1. Find last compaction_marker
-    let startIndex = 0;
+    // DURABILITY: find the most recent messages_snapshot — this is our
+    // checkpoint. All events before it can be skipped; we start from the
+    // snapshot's messages[] and replay only events after it.
+    let snapshotIndex = -1;
+    let snapshotMessages: Message[] | undefined;
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].type === 'compaction_marker') {
-        startIndex = i + 1;
+      if (events[i].type === 'messages_snapshot') {
+        snapshotIndex = i;
+        snapshotMessages = (events[i] as import('./types.js').MessagesSnapshotEvent).messages;
         break;
       }
     }
 
-    // 2. Filter to conversation events only
-    const conversationEvents = events
+    // Fallback: no snapshot found — use legacy compaction_marker logic
+    let startIndex = 0;
+    if (snapshotIndex < 0) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].type === 'compaction_marker') {
+          startIndex = i + 1;
+          break;
+        }
+      }
+    } else {
+      startIndex = snapshotIndex + 1;
+    }
+
+    // 2. Filter to replayable conversation events after the snapshot/marker
+    const replayEvents = events
       .slice(startIndex)
-      .filter(e => CONVERSATION_EVENT_TYPES.has(e.type));
+      .filter(e => REPLAY_EVENT_TYPES.has(e.type));
 
-    // 3. Convert events to messages
-    const rawMessages: Message[] = [];
+    // 3. Start from snapshot messages (if any) or empty
+    const rawMessages: Message[] = snapshotMessages
+      ? snapshotMessages.map(m => ({ ...m })) // shallow clone
+      : [];
 
-    for (const event of conversationEvents) {
+    for (const event of replayEvents) {
       switch (event.type) {
         case 'user_message':
           rawMessages.push({
@@ -66,7 +95,6 @@ export class DefaultContextStrategy implements ContextStrategy {
           break;
 
         case 'tool_result': {
-          // tool_result is a user message containing tool_result blocks
           const resultBlock: ToolResultContent = {
             type: 'tool_result',
             toolUseId: event.toolUseId,
@@ -75,7 +103,6 @@ export class DefaultContextStrategy implements ContextStrategy {
           };
           const lastMsg = rawMessages[rawMessages.length - 1];
           if (lastMsg && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
-            // Check if it's already a tool_result message (same batch)
             const blocks = lastMsg.content as ContentBlock[];
             if (blocks.length > 0 && blocks[0].type === 'tool_result') {
               blocks.push(resultBlock);
@@ -99,9 +126,6 @@ export class DefaultContextStrategy implements ContextStrategy {
     }
 
     // 4. Repair orphan tool_use blocks.
-    //    If the last assistant message contains tool_use blocks but there's
-    //    no matching tool_result (e.g. maxTurns reached, abort, crash),
-    //    append synthetic tool_result blocks so the provider doesn't reject.
     repairOrphanToolUse(rawMessages);
 
     // 5. Merge adjacent same-role messages

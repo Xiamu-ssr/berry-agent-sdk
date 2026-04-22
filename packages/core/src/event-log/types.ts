@@ -11,6 +11,7 @@ import type {
   ToolGuardDecision,
   DelegateResult,
   CompactionLayer,
+  Message,
 } from '../types.js';
 
 // ----- Base Event -----
@@ -116,7 +117,65 @@ export interface DelegateEndEvent extends BaseEvent {
   result: DelegateResult;
 }
 
-/** API call metadata (token usage). */
+/** Start of a session — records the complete initial state. */
+export interface SessionStartEvent extends BaseEvent {
+  type: 'session_start';
+  systemPrompt: string | string[];
+  projectContextSnapshot?: string;
+  toolsAvailable: string[];
+  guardEnabled: boolean;
+  providerType: string;
+  model: string;
+  compactionConfig?: Record<string, unknown>;
+}
+
+/** Snapshot of the complete messages[] array after a turn or compaction.
+ *  This is the checkpoint for crash recovery — on restart, load the latest
+ *  snapshot and replay events after it instead of replaying everything.
+ */
+export interface MessagesSnapshotEvent extends BaseEvent {
+  type: 'messages_snapshot';
+  messages: Message[];
+  reason: 'turn_end' | 'manual_compact' | 'auto_compact' | 'fork';
+}
+
+/** Full API request body sent to the LLM provider. */
+export interface ApiRequestEvent extends BaseEvent {
+  type: 'api_request';
+  requestId: string;
+  model: string;
+  messages: Message[];
+  tools: { name: string; description: string }[];
+  params: Record<string, unknown>;
+}
+
+/** Full API response received from the LLM provider. */
+export interface ApiResponseEvent extends BaseEvent {
+  type: 'api_response';
+  requestId: string;
+  model: string;
+  content: ContentBlock[];
+  stopReason: string;
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+}
+
+/** Start of a tool call — written before invoking the tool. */
+export interface ToolUseStartEvent extends BaseEvent {
+  type: 'tool_use_start';
+  toolUseId: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** End of a tool call — written after the tool returns. */
+export interface ToolUseEndEvent extends BaseEvent {
+  type: 'tool_use_end';
+  toolUseId: string;
+  output: string;
+  isError: boolean;
+}
+
+/** API call metadata (token usage). Deprecated: use api_request + api_response. */
 export interface ApiCallEvent extends BaseEvent {
   type: 'api_call';
   model: string;
@@ -156,7 +215,13 @@ export type SessionEvent =
   | DelegateEndEvent
   | ApiCallEvent
   | MemoryFlushEvent
-  | MetadataEvent;
+  | MetadataEvent
+  | SessionStartEvent
+  | MessagesSnapshotEvent
+  | ApiRequestEvent
+  | ApiResponseEvent
+  | ToolUseStartEvent
+  | ToolUseEndEvent;
 
 /** All session event type discriminators. */
 export type SessionEventType = SessionEvent['type'];
@@ -197,8 +262,6 @@ export interface EventLogStore {
 }
 
 // ----- Context Strategy Interface -----
-
-import type { Message } from '../types.js';
 
 /**
  * Strategy for building a provider-ready Message[] from the event log.

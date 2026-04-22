@@ -75,7 +75,16 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
         };
       }
 
-      // Event log: tool_use
+      // Event log: tool_use_start (before execution)
+      await appendEvent({
+        ...makeBase(),
+        type: 'tool_use_start',
+        name: toolUse.name,
+        toolUseId: toolUse.id,
+        input: toolUse.input,
+      });
+
+      // Event log: legacy tool_use (keep for backward compat)
       await appendEvent({
         ...makeBase(),
         type: 'tool_use',
@@ -119,12 +128,19 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
 
         if (decision.action === 'deny') {
           const denyContent = `Permission denied: ${decision.reason}`;
-          // Event log: tool_result (denied)
+          // Event log: tool_result (denied) + tool_use_end
           await appendEvent({
             ...makeBase(),
             type: 'tool_result',
             toolUseId: toolUse.id,
             content: denyContent,
+            isError: true,
+          });
+          await appendEvent({
+            ...makeBase(),
+            type: 'tool_use_end',
+            toolUseId: toolUse.id,
+            output: denyContent,
             isError: true,
           });
           emit({ type: 'tool_result', name: toolUse.name, isError: true });
@@ -161,12 +177,19 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
         }
 
         const resultContent = result.forLLM ?? result.content;
-        // Event log: tool_result
+        // Event log: tool_result + tool_use_end
         await appendEvent({
           ...makeBase(),
           type: 'tool_result',
           toolUseId: toolUse.id,
           content: resultContent,
+          isError: result.isError ?? false,
+        });
+        await appendEvent({
+          ...makeBase(),
+          type: 'tool_use_end',
+          toolUseId: toolUse.id,
+          output: resultContent,
           isError: result.isError ?? false,
         });
 
@@ -179,12 +202,19 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
         };
       } catch (err) {
         const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
-        // Event log: tool_result (error)
+        // Event log: tool_result (error) + tool_use_end
         await appendEvent({
           ...makeBase(),
           type: 'tool_result',
           toolUseId: toolUse.id,
           content: errContent,
+          isError: true,
+        });
+        await appendEvent({
+          ...makeBase(),
+          type: 'tool_use_end',
+          toolUseId: toolUse.id,
+          output: errContent,
           isError: true,
         });
 
