@@ -4,6 +4,15 @@
 
 export { FileEventLogStore } from './jsonl-store.js';
 export { DefaultContextStrategy } from './context-builder.js';
+export { detectCrashArtifacts, formatCrashInterject } from './crash-detector.js';
+export type { OrphanedToolInfo, CrashDetectionResult } from './crash-detector.js';
+export {
+  TOOL_CALL_STATUS,
+  TOOL_CALL_STATUS_VALUES,
+  CRASH_KIND,
+  SDK_SYSTEM_WARNING_PREFIX,
+} from './constants.js';
+export type { ToolCallStatus, CrashKind } from './constants.js';
 
 export type {
   BaseEvent,
@@ -24,6 +33,13 @@ export type {
   ApiCallEvent,
   MemoryFlushEvent,
   MetadataEvent,
+  SessionStartEvent,
+  MessagesSnapshotEvent,
+  ApiRequestEvent,
+  ApiResponseEvent,
+  ToolUseStartEvent,
+  ToolUseEndEvent,
+  CrashRecoveredEvent,
   GetEventsOptions,
   EventLogStore,
   ContextStrategy,

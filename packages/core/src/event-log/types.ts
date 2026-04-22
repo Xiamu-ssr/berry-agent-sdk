@@ -202,6 +202,36 @@ export interface MetadataEvent extends BaseEvent {
 }
 
 /**
+ * Recorded when the SDK detects that a previous run crashed and the current
+ * session is being resumed from an event log that contains crash artifacts
+ * (e.g. orphaned tool_use_start events). Written at the start of the
+ * recovery turn so auditors and observability tooling can correlate the
+ * next actions with the crash.
+ *
+ * This event is the audit-grade counterpart to the automatic interject
+ * message that is also queued for the LLM.
+ */
+export interface CrashRecoveredEvent extends BaseEvent {
+  type: 'crash_recovered';
+  /** Total number of crash artifacts detected. */
+  artifactCount: number;
+  /** Orphaned tool calls (tool_use_start without tool_use_end). */
+  orphanedTools: Array<{
+    toolUseId: string;
+    name: string;
+    input: Record<string, unknown>;
+    /** Timestamp of the orphaned tool_use_start event. */
+    startedAt: number;
+    /** Event ID of the orphaned tool_use_start for audit linkage. */
+    startEventId: string;
+  }>;
+  /** True iff a system interject was successfully queued for the next query. */
+  interjected: boolean;
+  /** Which prior turn (if known) the crash happened in. Optional. */
+  crashedTurnId?: string;
+}
+
+/**
  * All possible session event types. This is an append-only log:
  * events are never modified or deleted after being written.
  */
@@ -225,7 +255,8 @@ export type SessionEvent =
   | ApiRequestEvent
   | ApiResponseEvent
   | ToolUseStartEvent
-  | ToolUseEndEvent;
+  | ToolUseEndEvent
+  | CrashRecoveredEvent;
 
 /** All session event type discriminators. */
 export type SessionEventType = SessionEvent['type'];

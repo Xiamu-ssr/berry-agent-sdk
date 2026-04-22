@@ -37,6 +37,7 @@ import { toProviderResolver } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
+import { detectCrashArtifacts, formatCrashInterject } from './event-log/crash-detector.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import type { AgentMemory, ProjectContext } from './workspace/types.js';
@@ -113,11 +114,14 @@ export class Agent {
   private _querying = false;
   private _status: import('./types.js').AgentStatus = 'idle';
   private _statusDetail?: string;
-
   // Interject mechanism — see interject() + sleep tool wiring
   private _pendingInterjects: string[] = [];
   private _interjectWakers: Array<() => void> = [];
   private _sleepDepth = 0;
+  /** Session IDs for which crash detection has already run this process lifetime.
+   *  Prevents re-detecting (and re-appending crash_recovered) on every resume
+   *  of the same session. */
+  private _crashCheckedSessions = new Set<string>();
 
   // Hot-reload: instance-level tool allow-list. Intersects with per-query allowedTools.
   private _instanceAllowedTools?: Set<string>;
@@ -401,111 +405,6 @@ export class Agent {
   }
 
   /**
-   * Rehydrate an Agent from an existing event log — crash recovery entry point.
-   *
-   * Reads the session's event log, finds the `session_start` event (written
-   * when the session was first created), and rebuilds the Agent with:
-   *   - original systemPrompt (from session_start, NOT current config)
-   *   - original model (from session_start)
-   *   - caller-provided provider credentials + tools + sessionStore
-   *
-   * The returned Agent has its `_lastSessionId` pre-bound so the first
-   * `query()` will automatically resume the session via `options.resume`.
-   *
-   * Tool crash detection: if the last events show a `tool_use_start` without
-   * a matching `tool_use_end`, a system message is prepared to inform the
-   * agent that a tool execution was interrupted. This message will be
-   * injected as an interject on the next query.
-   */
-  static async fromLog(params: {
-    sessionId: string;
-    eventLogStore: EventLogStore;
-    /** Provider credentials (not persisted in log for security). */
-    provider: ProviderInput;
-    /** Tool registrations. Only tools listed in session_start.toolsAvailable will be active. */
-    tools?: ToolRegistration[];
-    sessionStore?: SessionStore;
-    cwd?: string;
-    toolGuard?: ToolGuard;
-    middleware?: Middleware[];
-    onEvent?: (event: AgentEvent) => void;
-    compaction?: AgentConfig['compaction'];
-  }): Promise<Agent> {
-    const events = await params.eventLogStore.getEvents(params.sessionId);
-    if (events.length === 0) {
-      throw new Error(`fromLog: no events found for session ${params.sessionId}`);
-    }
-
-    // Find session_start event
-    const startEvent = events.find(e => e.type === 'session_start') as
-      | import('./event-log/types.js').SessionStartEvent
-      | undefined;
-    if (!startEvent) {
-      throw new Error(
-        `fromLog: session ${params.sessionId} has no session_start event (pre-v1.4 log, use new Agent + query({resume}) instead)`,
-      );
-    }
-
-    // Filter tools to only those that were available at session start
-    const originalToolNames = new Set(startEvent.toolsAvailable);
-    const filteredTools = (params.tools ?? []).filter(t =>
-      originalToolNames.has(t.definition.name),
-    );
-
-    // Detect tool crash: unmatched tool_use_start without tool_use_end
-    const crashedTools: Array<{ name: string; toolUseId: string; input: unknown }> = [];
-    const toolStarts = new Map<string, { name: string; input: unknown }>();
-    const toolEnds = new Set<string>();
-    for (const ev of events) {
-      if (ev.type === 'tool_use_start') {
-        toolStarts.set(ev.toolUseId, { name: ev.name, input: ev.input });
-      } else if (ev.type === 'tool_use_end') {
-        toolEnds.add(ev.toolUseId);
-      }
-    }
-    for (const [id, info] of toolStarts) {
-      if (!toolEnds.has(id)) {
-        crashedTools.push({ name: info.name, toolUseId: id, input: info.input });
-      }
-    }
-
-    // Construct Agent with the original session's config
-    const agent = new Agent({
-      provider: params.provider,
-      systemPrompt: startEvent.systemPrompt,
-      tools: filteredTools,
-      sessionStore: params.sessionStore,
-      eventLogStore: params.eventLogStore,
-      cwd: params.cwd,
-      toolGuard: params.toolGuard,
-      middleware: params.middleware,
-      onEvent: params.onEvent,
-      compaction: params.compaction,
-    });
-
-    // Pre-bind the session ID so query() will auto-resume
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (agent as any)._lastSessionId = params.sessionId;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (agent as any)._pendingResumeSessionId = params.sessionId;
-
-    // If crashed tools detected, queue an interject for the next query
-    if (crashedTools.length > 0) {
-      const descriptions = crashedTools
-        .map(t => `• ${t.name}(id=${t.toolUseId}, input=${JSON.stringify(t.input).slice(0, 120)})`)
-        .join('\n');
-      const message =
-        `⚠️ [Berry SDK] Tool crash recovery: the following tool call(s) were interrupted ` +
-        `during execution on the previous run. Their side effects are UNKNOWN (may have ` +
-        `partially completed). Please assess whether to retry, verify state, or proceed:\n\n` +
-        descriptions;
-      agent.interject(message);
-    }
-
-    return agent;
-  }
-
-  /**
    * Send a message to the agent and get a response.
    * Handles: tool loop, compaction, cache, session persistence.
    * When eventLogStore is configured, appends events for every action
@@ -514,15 +413,6 @@ export class Agent {
   async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
     // Ensure workspace is initialized before first query
     if (this._workspaceReady) await this._workspaceReady;
-
-    // DURABILITY: auto-resume for Agents rehydrated via Agent.fromLog()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pending = (this as any)._pendingResumeSessionId as string | undefined;
-    if (pending && !options?.resume && !options?.fork) {
-      options = { ...options, resume: pending };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (this as any)._pendingResumeSessionId = undefined;
-    }
 
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
@@ -1413,6 +1303,53 @@ export class Agent {
           }
           return session;
         }
+
+        // Crash recovery: detect and record crash artifacts (orphaned tool calls).
+        // Only runs once per session per process, so repeated query() on a resumed
+        // session does not re-detect. Emits a `crash_recovered` event for audit
+        // and queues an interject to warn the LLM.
+        if (!this._crashCheckedSessions.has(options.resume)) {
+          this._crashCheckedSessions.add(options.resume);
+          const detection = detectCrashArtifacts(events);
+          if (detection.crashed) {
+            const interject = formatCrashInterject(detection.artifacts);
+            this.interject(interject);
+
+            // Audit record in event log (source of truth)
+            const lastEvent = events[events.length - 1];
+            const crashEvent = {
+              id: generateEventId(),
+              timestamp: Date.now(),
+              sessionId: options.resume,
+              turnId: lastEvent.turnId,
+              type: 'crash_recovered' as const,
+              artifactCount: detection.artifacts.length,
+              orphanedTools: detection.artifacts.map(a => ({
+                toolUseId: a.toolUseId,
+                name: a.name,
+                input: a.input,
+                startedAt: a.startedAt,
+                startEventId: a.startEventId,
+              })),
+              interjected: true,
+              crashedTurnId: lastEvent.turnId,
+            };
+            await this.eventLogStore.append(options.resume, crashEvent);
+
+            // Also emit as AgentEvent so collectors/observers can record it live.
+            this.emit(
+              {
+                type: 'crash_recovered',
+                sessionId: options.resume,
+                artifactCount: detection.artifacts.length,
+                orphanedTools: crashEvent.orphanedTools,
+                crashedTurnId: lastEvent.turnId,
+              },
+              options?.onEvent,
+            );
+          }
+        }
+
         // Rebuild messages from event log
         const messages = this.contextStrategy.buildMessages(events);
         const session: Session = {

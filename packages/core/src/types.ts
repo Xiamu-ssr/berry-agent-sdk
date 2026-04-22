@@ -579,6 +579,7 @@ export const AGENT_EVENT_TYPES = [
   'query_end', 'delegate_start', 'delegate_end',
   'child_spawned', 'child_destroyed',
   'status_change', 'todo_updated', 'retry',
+  'crash_recovered',
 ] as const;
 
 /**
@@ -635,4 +636,7 @@ export type AgentEvent =
   | { type: 'child_destroyed'; childId: string }
   | { type: 'status_change'; status: AgentStatus; detail?: string }
   | { type: 'todo_updated'; sessionId: string; todos: TodoItem[]; timestamp: number }
-  | { type: 'retry'; scope: 'stream' | 'chat'; attempt: number; maxAttempts: number; reason: RetryReason; errorMessage: string; delayMs: number };
+  | { type: 'retry'; scope: 'stream' | 'chat'; attempt: number; maxAttempts: number; reason: RetryReason; errorMessage: string; delayMs: number }
+  | { type: 'crash_recovered'; sessionId: string; artifactCount: number;
+      orphanedTools: Array<{ toolUseId: string; name: string; input: Record<string, unknown>; startedAt: number; startEventId: string }>;
+      crashedTurnId?: string };
