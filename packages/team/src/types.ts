@@ -38,6 +38,44 @@ export interface TeamState {
   createdAt: number;
 }
 
+/**
+ * Worklist task state. The state machine is enforced in WorklistStore on
+ * every mutation — bad transitions throw instead of silently passing.
+ *
+ *   unclaimed → claimed → in_progress → done
+ *                                       ↓
+ *                                     failed
+ *
+ * Leaders can force any state (including re-opening a done/failed task) via
+ * the `update` action. Teammates are bound by the state machine.
+ */
+export type WorklistTaskStatus = 'unclaimed' | 'claimed' | 'in_progress' | 'done' | 'failed';
+
+export interface WorklistTask {
+  id: string;              // short stable id, e.g. 'T-0001'
+  title: string;
+  description?: string;    // longer body; markdown allowed
+  status: WorklistTaskStatus;
+  assignee?: TeammateId | '@leader';  // who owns this task (empty = unclaimed)
+  createdBy: TeammateId | '@leader';
+  createdAt: number;
+  updatedAt: number;
+  /** Set when status=done. */
+  completedAt?: number;
+  /** Set when status=failed. */
+  failureReason?: string;
+  /** Optional free-form tags/labels for the UI. */
+  tags?: string[];
+}
+
+/** Persisted worklist. Lives at project/.berry/worklist.json. */
+export interface WorklistState {
+  tasks: WorklistTask[];
+  /** Monotonic counter for next task id (so ids don't collide after deletion). */
+  nextId: number;
+  updatedAt: number;
+}
+
 /** An entry in the shared message log under project/.berry/messages.jsonl. */
 export interface TeamMessage {
   id: string;         // ULID-like / nanoid; monotonic within a team

@@ -17,9 +17,14 @@
 export { Team } from './team.js';
 export type { CreateTeamOptions } from './team.js';
 export { TeamStore } from './store.js';
+export { WorklistStore, WorklistError } from './worklist.js';
+export type { WorklistActor } from './worklist.js';
 export type {
   TeammateId,
   TeammateRecord,
   TeamState,
   TeamMessage,
+  WorklistTask,
+  WorklistTaskStatus,
+  WorklistState,
 } from './types.js';

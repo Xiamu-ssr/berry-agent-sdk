@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import type { Agent, ToolRegistration } from '@berry-agent/core';
 import type { TeamState, TeammateId, TeammateRecord, TeamMessage } from './types.js';
 import { TeamStore } from './store.js';
+import { WorklistStore, WorklistError, type WorklistActor } from './worklist.js';
 
 /** Internal mapping teammate id → live Agent instance (not persisted). */
 type TeammateAgents = Map<TeammateId, Agent>;
@@ -33,6 +34,7 @@ export interface CreateTeamOptions {
 
 export class Team {
   readonly store: TeamStore;
+  readonly worklist: WorklistStore;
   private _state: TeamState;
   private _leader: Agent;
   private _teammateAgents: TeammateAgents = new Map();
@@ -41,6 +43,7 @@ export class Team {
     this._state = state;
     this._leader = leader;
     this.store = store;
+    this.worklist = new WorklistStore(state.project);
   }
 
   /**
@@ -124,6 +127,57 @@ export class Team {
     this._teammateAgents.set(input.id, childAgent);
     await this.store.save(this._state);
     return record;
+  }
+
+  /**
+   * Rehydrate a teammate's live Agent from its persisted record.
+   *
+   * Used after a host restart: team.json survives (teammate roster +
+   * systemPrompt + model), but live Agent objects don't — they live in
+   * `_teammateAgents`, a plain in-memory Map. Call this for each entry in
+   * `state.teammates` on startup to bring the live instances back.
+   *
+   * Idempotent: if the teammate is already live, this is a no-op and
+   * returns the existing Agent. If the teammate record doesn't exist,
+   * throws — caller should have iterated `state.teammates`.
+   *
+   * IMPORTANT: the teammate's session log (conversation history) is
+   * loaded automatically by the SDK's SessionStore from disk, so the
+   * rehydrated Agent picks up where it left off. Only runtime plumbing
+   * (tools, guards, provider binding) gets rebuilt here.
+   */
+  rehydrateTeammate(id: TeammateId, opts?: { inheritTools?: boolean }): Agent {
+    const existing = this._teammateAgents.get(id);
+    if (existing) return existing;
+
+    const record = this._state.teammates.find((t) => t.id === id);
+    if (!record) {
+      throw new Error(`Cannot rehydrate teammate "${id}": no record in team.json.`);
+    }
+
+    const childAgent = this._leader.spawn({
+      id: record.id,
+      systemPrompt: record.systemPrompt,
+      model: record.model,
+      inheritTools: opts?.inheritTools !== false,
+    });
+    for (const tool of this.teammateTools(record.id)) {
+      childAgent.addTool(tool);
+    }
+    this._teammateAgents.set(record.id, childAgent);
+    return childAgent;
+  }
+
+  /** Rehydrate every teammate in the roster. Returns ids that were revived. */
+  rehydrateAll(opts?: { inheritTools?: boolean }): TeammateId[] {
+    const revived: TeammateId[] = [];
+    for (const record of this._state.teammates) {
+      if (!this._teammateAgents.has(record.id)) {
+        this.rehydrateTeammate(record.id, opts);
+        revived.push(record.id);
+      }
+    }
+    return revived;
   }
 
   /** Remove a teammate. Does NOT delete its session log (kept for audit). */
@@ -323,6 +377,7 @@ export class Team {
           }
         },
       },
+      this.worklistTool('@leader'),
       {
         definition: {
           name: 'read_team_inbox',
@@ -385,6 +440,147 @@ export class Team {
           }
         },
       },
+      this.worklistTool(ownId),
     ];
+  }
+
+  /**
+   * Worklist tool factory — one tool, many actions. Scoped to the caller's
+   * identity (actor) so the state machine can enforce permissions. Leader
+   * gets `@leader`, teammates get their own id.
+   *
+   * Why single-tool: token budget in the system prompt, and LLMs handle
+   * multi-action tools well (cf. Anthropic's `bash` / `str_replace_editor`).
+   */
+  private worklistTool(actor: WorklistActor): ToolRegistration {
+    const isLeader = actor === '@leader';
+    const actions = isLeader
+      ? 'list, view, create, update, delete, claim, start, complete, fail'
+      : 'list, view, create, claim, start, complete, fail';
+    return {
+      definition: {
+        name: 'worklist',
+        description:
+          `Shared team task board at <project>/.berry/worklist.json. Use this to coordinate ` +
+          `work between team members. The state machine is enforced:\n` +
+          `  unclaimed → claimed → in_progress → done | failed\n\n` +
+          `Available actions (${actor}): ${actions}.\n\n` +
+          (isLeader
+            ? 'As leader you can also force any status via `update`, and delete tasks. '
+              + 'Creating a task without `assignee` leaves it unclaimed for the team to pick up.'
+            : 'Create captures your own follow-ups (self-assigned). '
+              + 'Claim grabs an unclaimed task. Use start/complete/fail to drive your own tasks through the state machine.'),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: isLeader
+                ? ['list', 'view', 'create', 'update', 'delete', 'claim', 'start', 'complete', 'fail']
+                : ['list', 'view', 'create', 'claim', 'start', 'complete', 'fail'],
+              description: 'Which worklist operation to perform.',
+            },
+            id: { type: 'string', description: 'Task id (required for view/update/delete/claim/start/complete/fail).' },
+            title: { type: 'string', description: 'Task title (create/update).' },
+            description: { type: 'string', description: 'Task description / body (create/update).' },
+            assignee: {
+              type: 'string',
+              description: 'Teammate id or "@leader" to assign to (create/update).',
+            },
+            status: {
+              type: 'string',
+              enum: ['unclaimed', 'claimed', 'in_progress', 'done', 'failed'],
+              description: 'Force a status (leader update only — bypasses state machine).',
+            },
+            reason: {
+              type: 'string',
+              description: 'Failure reason (required for fail).',
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tags/labels (create/update).',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      execute: async (input) => {
+        const action = input.action as string;
+        try {
+          switch (action) {
+            case 'list': {
+              const tasks = await this.worklist.list();
+              if (tasks.length === 0) return { content: 'Worklist empty.' };
+              return {
+                content: tasks
+                  .map((t) => `- ${t.id} [${t.status}] ${t.title}${t.assignee ? ` (@${t.assignee})` : ''}`)
+                  .join('\n'),
+              };
+            }
+            case 'view': {
+              const id = input.id as string;
+              if (!id) throw new WorklistError('`id` is required for view.');
+              const task = await this.worklist.get(id);
+              if (!task) return { content: `Task ${id} not found.`, isError: true };
+              return { content: JSON.stringify(task, null, 2) };
+            }
+            case 'create': {
+              const task = await this.worklist.create(actor, {
+                title: input.title as string,
+                description: input.description as string | undefined,
+                assignee: input.assignee as WorklistActor | undefined,
+                tags: input.tags as string[] | undefined,
+              });
+              return { content: `Created ${task.id}: ${task.title} [${task.status}]` };
+            }
+            case 'update': {
+              const id = input.id as string;
+              if (!id) throw new WorklistError('`id` is required for update.');
+              const task = await this.worklist.update(actor, id, {
+                title: input.title as string | undefined,
+                description: input.description as string | undefined,
+                assignee: input.assignee as WorklistActor | undefined,
+                status: input.status as any,
+                tags: input.tags as string[] | undefined,
+                failureReason: input.reason as string | undefined,
+              });
+              return { content: `Updated ${task.id} → [${task.status}]` };
+            }
+            case 'delete': {
+              const id = input.id as string;
+              if (!id) throw new WorklistError('`id` is required for delete.');
+              await this.worklist.remove(actor, id);
+              return { content: `Deleted ${id}.` };
+            }
+            case 'claim': {
+              const task = await this.worklist.claim(actor, input.id as string);
+              return { content: `Claimed ${task.id}.` };
+            }
+            case 'start': {
+              const task = await this.worklist.start(actor, input.id as string);
+              return { content: `Started ${task.id} (now in_progress).` };
+            }
+            case 'complete': {
+              const task = await this.worklist.complete(actor, input.id as string);
+              return { content: `Completed ${task.id}.` };
+            }
+            case 'fail': {
+              const task = await this.worklist.fail(
+                actor,
+                input.id as string,
+                (input.reason as string) ?? '',
+              );
+              return { content: `Failed ${task.id}: ${task.failureReason}` };
+            }
+            default:
+              return { content: `Unknown action: ${action}`, isError: true };
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: `worklist ${action} failed: ${msg}`, isError: true };
+        }
+      },
+    };
   }
 }
