@@ -44,7 +44,7 @@ import type { MemoryProvider } from './memory/provider.js';
 import { FileAgentMemory } from './workspace/file-memory.js';
 import { FileProjectContext } from './workspace/file-project.js';
 import { initWorkspace } from './workspace/initializer.js';
-import { estimateTokens, type ForkContext } from './compaction/compactor.js';
+import { estimateTokens, type CompactionResult, type ForkContext } from './compaction/compactor.js';
 import type { CompactionStrategy } from './compaction/types.js';
 import { DefaultCompactionStrategy } from './compaction/compactor.js';
 import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
@@ -1353,6 +1353,84 @@ export class Agent {
     const session = await this.sessionStore.load(sessionId);
     if (!session) return [];
     return session.metadata.todo?.items ?? [];
+  }
+
+  /**
+   * Manually compact a session's message history.
+   *
+   * Hosts that enforce "1 agent 1 session" use this as the equivalent of
+   * OpenClaw's `/new` — it collapses old messages into a summary, keeping
+   * the session alive with a smaller context window. Does NOT create a
+   * new session.
+   */
+  async compactSession(sessionId: string, options?: { reason?: string }): Promise<CompactionResult> {
+    const session = await this.sessionStore.load(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    const compactLevel = shouldCompact({
+      session,
+      compactionConfig: this.compactionConfig,
+      contextWindow: ctxWindow,
+    });
+
+    if (compactLevel === 'none') {
+      return { messages: session.messages, layersApplied: [], tokensFreed: 0 };
+    }
+
+    const fullSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
+    const allowedTools = Array.from(this.tools.values());
+
+    if (compactLevel === 'hard' && this._memory) {
+      const makeBase = () => ({
+        id: generateId(), timestamp: Date.now(), sessionId, turnId: 'compact',
+      });
+      await preCompactMemoryFlush({
+        session,
+        memory: this._memory,
+        provider: this.provider,
+        systemPrompt: fullSystemPrompt,
+        emit: () => {},
+        appendEvent: async (event: SessionEvent) => {
+          if (this.eventLogStore) await this.eventLogStore.append(sessionId, event);
+        },
+        makeBase,
+      });
+    }
+
+    const { result: compactResult } = await runCompaction({
+      compactionStrategy: this.compactionStrategy,
+      session,
+      compactionConfig: this.compactionConfig,
+      compactLevel,
+      provider: this.provider,
+      systemPrompt: fullSystemPrompt,
+      allowedTools,
+      emit: () => {},
+      appendEvent: async (event: SessionEvent) => {
+        if (this.eventLogStore) await this.eventLogStore.append(sessionId, event);
+      },
+      makeBase: () => ({
+        id: generateId(), timestamp: Date.now(), sessionId, turnId: 'compact',
+      }),
+    });
+
+    await this.sessionStore.save(session);
+
+    if (this.eventLogStore) {
+      const snapshot: any = {
+        id: generateId(),
+        timestamp: Date.now(),
+        sessionId,
+        turnId: 'compact',
+        type: 'messages_snapshot',
+        messages: session.messages,
+        reason: options?.reason ?? 'manual_compact',
+      };
+      await this.eventLogStore.append(sessionId, snapshot);
+    }
+
+    return compactResult;
   }
 
   private async buildSystemPrompt(basePrompt: string[], override?: string | string[]): Promise<string[]> {

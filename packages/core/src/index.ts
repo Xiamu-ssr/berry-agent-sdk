@@ -4,6 +4,7 @@
 
 // Core
 export { Agent } from './agent.js';
+export type { CompactionResult } from './compaction/compactor.js';
 export { toProviderResolver } from './types.js';
 
 // Provider Registry
