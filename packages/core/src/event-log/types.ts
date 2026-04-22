@@ -42,7 +42,9 @@ export interface AssistantMessageEvent extends BaseEvent {
   content: ContentBlock[];
 }
 
-/** A tool invocation (before execution). */
+/** A tool invocation (before execution). 
+ *  @deprecated Removed in v1.6. Use ToolUseStartEvent.
+ *  Type kept as a narrow alias for log-reading backward compatibility. */
 export interface ToolUseEvent extends BaseEvent {
   type: 'tool_use';
   name: string;
@@ -175,7 +177,9 @@ export interface ToolUseEndEvent extends BaseEvent {
   isError: boolean;
 }
 
-/** API call metadata (token usage). Deprecated: use api_request + api_response. */
+/** API call metadata (token usage). 
+ *  @deprecated Removed in v1.6. Use ApiRequestEvent + ApiResponseEvent.
+ *  Type kept as a narrow alias for log-reading backward compatibility. */
 export interface ApiCallEvent extends BaseEvent {
   type: 'api_call';
   model: string;

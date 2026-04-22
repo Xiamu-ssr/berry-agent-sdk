@@ -805,15 +805,6 @@ export class Agent {
         },
       });
 
-      // Legacy api_call event — keep for backward compatibility with existing analyzers
-      await appendEvent({
-        ...makeBase(),
-        type: 'api_call',
-        model: this.providerConfig.model,
-        inputTokens: response.usage.inputTokens,
-        outputTokens: response.usage.outputTokens,
-      });
-
       emit({
         type: 'api_response',
         usage: response.usage,

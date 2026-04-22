@@ -84,15 +84,6 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
         input: toolUse.input,
       });
 
-      // Event log: legacy tool_use (keep for backward compat)
-      await appendEvent({
-        ...makeBase(),
-        type: 'tool_use',
-        name: toolUse.name,
-        toolUseId: toolUse.id,
-        input: toolUse.input,
-      });
-
       // Tool guard check
       let guardedInput = toolUse.input;
       if (toolGuard) {
