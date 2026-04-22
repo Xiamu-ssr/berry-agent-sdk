@@ -12,7 +12,12 @@ export const TOOL_LOAD_SKILL = 'load_skill' as const;
 /** Delegate sub-task tool (auto-registered unless disabled). */
 export const TOOL_DELEGATE = 'delegate' as const;
 
-/** Spawn persistent sub-agent tool (auto-registered unless disabled). */
+/**
+ * Spawn persistent sub-agent tool.
+ * @deprecated Removed in v0.4. Persistent sub-agent creation now belongs to
+ * `@berry-agent/team` (leader-only `spawn_teammate`). The constant is kept
+ * so old consumer allowlists that reference 'spawn_agent' still type-check.
+ */
 export const TOOL_SPAWN = 'spawn_agent' as const;
 
 /** Per-session todo read tool (auto-registered). */
@@ -46,7 +51,6 @@ export const TOOL_BROWSER = 'browser' as const;
 export const CORE_TOOL_NAMES = [
   TOOL_LOAD_SKILL,
   TOOL_DELEGATE,
-  TOOL_SPAWN,
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
   TOOL_SLEEP,

@@ -269,7 +269,13 @@ export interface AgentConfig {
   project?: string;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
   enableDelegate?: boolean;
-  /** Enable built-in spawn_agent tool (default: true for top-level agents, always false for sub-agents) */
+  /**
+   * Enable built-in spawn_agent tool.
+   * @deprecated No longer has any effect. spawn_agent was removed from core;
+   * persistent sub-agent creation moved to @berry-agent/team as
+   * `spawn_teammate` (leader-only). The field is kept for backward-compat
+   * typing; pass `false` or omit — either is a no-op now.
+   */
   enableSpawn?: boolean;
   /** Custom compaction strategy (overrides the default 7-layer pipeline). */
   compactionStrategy?: import('./compaction/types.js').CompactionStrategy;

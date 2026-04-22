@@ -61,7 +61,7 @@ import {
   MAX_RETRIES,
   REQUEST_TIMEOUT_MS,
 } from './constants.js';
-import { TOOL_LOAD_SKILL, TOOL_DELEGATE, TOOL_SPAWN } from './tool-names.js';
+import { TOOL_LOAD_SKILL, TOOL_DELEGATE } from './tool-names.js';
 import { executeTools } from './tool-executor.js';
 import {
   shouldCompact,
@@ -334,61 +334,11 @@ export class Agent {
       });
     }
 
-    // Register built-in spawn_agent tool (unless disabled or this is a sub-agent).
-    // Allows the LLM to create persistent sub-agents for ongoing work.
-    if (!this._isSubAgent && config.enableSpawn !== false && !this.tools.has(TOOL_SPAWN)) {
-      this.tools.set(TOOL_SPAWN, {
-        definition: {
-          name: TOOL_SPAWN,
-          description: 'Create a persistent sub-agent with its own system prompt and conversation history. ' +
-            'Unlike delegate (one-shot), a spawned agent persists and can be queried multiple times. ' +
-            'Use for long-running specialist roles (e.g., a code reviewer, a researcher).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-                description: 'Unique ID for this sub-agent (e.g., "reviewer", "researcher").',
-              },
-              systemPrompt: {
-                type: 'string',
-                description: 'System prompt defining the sub-agent\'s role and behavior.',
-              },
-              task: {
-                type: 'string',
-                description: 'Initial task/message to send to the sub-agent.',
-              },
-              inheritTools: {
-                type: 'boolean',
-                description: 'Whether to inherit parent tools (default: true).',
-              },
-            },
-            required: ['id', 'systemPrompt', 'task'],
-          },
-        },
-        execute: async (input) => {
-          try {
-            const childId = input.id as string;
-            // Check if already exists
-            let child = this._children.get(childId);
-            if (!child) {
-              child = this.spawn({
-                id: childId,
-                systemPrompt: input.systemPrompt as string,
-                inheritTools: input.inheritTools !== false,
-              });
-            }
-            const result = await child.query(input.task as string);
-            return {
-              content: result.text,
-              forUser: `[Sub-agent "${childId}": ${result.toolCalls} tool calls, ${result.usage.inputTokens + result.usage.outputTokens} tokens]`,
-            };
-          } catch (err) {
-            return { content: `Spawn failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
-          }
-        },
-      });
-    }
+    // The built-in `spawn_agent` tool was removed in v0.4: persistent sub-agent
+    // creation now belongs to @berry-agent/team (leader-only `spawn_teammate`).
+    // The underlying `agent.spawn()` method stays public and is used by the
+    // team package to create teammates. Any consumer still wanting raw spawn
+    // can build their own tool wrapper on top of `agent.spawn()`.
 
     // Register tools from MemoryProvider (if provided).
     if (this._memoryProvider) {
