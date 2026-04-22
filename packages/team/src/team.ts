@@ -21,15 +21,73 @@ import { WorklistStore, WorklistError, type WorklistActor } from './worklist.js'
 /** Internal mapping teammate id → live Agent instance (not persisted). */
 type TeammateAgents = Map<TeammateId, Agent>;
 
+/**
+ * Host-provided factory that turns a teammate spec into a first-class Agent.
+ *
+ * Moved out of Team in v1.2 (2026-04-22): teammates are now *regular* agents
+ * registered in the host's agent registry (so they show up in berry-claw's
+ * Agents tab, have their own session store under `<agents_dir>/<id>/`, etc),
+ * not ephemeral sub-agents living only in Team's memory. Team delegates to
+ * the host and just keeps the relationship (who leads whom).
+ *
+ * Implementations MUST persist the teammate as a regular agent before
+ * returning — a crash between this call and the subsequent team.json save
+ * is tolerable (orphan agent row, fixable), but a crash that loses the
+ * agent record entirely would break rehydration.
+ */
+export type TeammateAgentFactory = (spec: SpawnTeammateSpec) => Promise<Agent>;
+
+/** Host-facing callback when a teammate is removed from a team. */
+export type TeammateDisbandCallback = (id: TeammateId) => Promise<void>;
+
+export interface SpawnTeammateSpec {
+  id: TeammateId;
+  role: string;
+  systemPrompt: string;
+  /** Tier in the host's model tier system ('strong' | 'balanced' | 'fast' | custom). Preferred over raw model id. */
+  tier?: string;
+  /** Explicit model id override. Leave undefined to use leader's tier or leader's model. */
+  model?: string;
+  inheritTools?: boolean;
+  /** Absolute project path (matches team.project). Host may use it for cwd. */
+  project: string;
+  /** Agent id of the leader — hosts stamp this onto the teammate record so teammates can find their team. */
+  leaderId: string;
+}
+
 export interface CreateTeamOptions {
   /** Host-assigned id for the leader agent (shown in UI + messages). */
   leaderId: string;
-  /** Leader Agent instance — the one we'll spawn teammates off. */
+  /** Leader Agent instance — the one we'll message from. */
   leader: Agent;
   /** Absolute path to the project root. Must exist. */
   project: string;
   /** Display name for the team. */
   name?: string;
+  /**
+   * Host factory for creating teammates as first-class agents. If omitted,
+   * spawn_teammate will fail — there is no longer a fallback to
+   * `leader.spawn()`, because that would create an off-registry agent.
+   */
+  agentFactory?: TeammateAgentFactory;
+  /**
+   * Host callback invoked when a teammate is disbanded — the host should
+   * delete the teammate's AgentEntry from the registry (and optionally
+   * archive its session logs).
+   */
+  onDisband?: TeammateDisbandCallback;
+  /**
+   * Host-provided live Agent lookup. Team asks the host when it needs to
+   * message a teammate; hosts typically point this at AgentManager.getAgent.
+   * If omitted, Team can only message teammates it spawned this session.
+   */
+  agentLookup?: (id: TeammateId) => Agent | undefined;
+  /**
+   * Function that returns the valid tier names (e.g. ['strong', 'balanced',
+   * 'fast']) for this host. Used to populate the `tier` enum on spawn_teammate
+   * tool schema so the leader picks from a meaningful list.
+   */
+  availableTiers?: () => string[];
 }
 
 export class Team {
@@ -38,12 +96,25 @@ export class Team {
   private _state: TeamState;
   private _leader: Agent;
   private _teammateAgents: TeammateAgents = new Map();
+  private _agentFactory?: TeammateAgentFactory;
+  private _onDisband?: TeammateDisbandCallback;
+  private _agentLookup?: (id: TeammateId) => Agent | undefined;
+  private _availableTiers?: () => string[];
 
-  private constructor(state: TeamState, leader: Agent, store: TeamStore) {
+  private constructor(
+    state: TeamState,
+    leader: Agent,
+    store: TeamStore,
+    hooks: Pick<CreateTeamOptions, 'agentFactory' | 'onDisband' | 'agentLookup' | 'availableTiers'> = {},
+  ) {
     this._state = state;
     this._leader = leader;
     this.store = store;
     this.worklist = new WorklistStore(state.project);
+    this._agentFactory = hooks.agentFactory;
+    this._onDisband = hooks.onDisband;
+    this._agentLookup = hooks.agentLookup;
+    this._availableTiers = hooks.availableTiers;
   }
 
   /**
@@ -55,6 +126,12 @@ export class Team {
   static async open(opts: CreateTeamOptions): Promise<Team> {
     const store = new TeamStore(opts.project);
     const existing = await store.load();
+    const hooks = {
+      agentFactory: opts.agentFactory,
+      onDisband: opts.onDisband,
+      agentLookup: opts.agentLookup,
+      availableTiers: opts.availableTiers,
+    };
     if (existing) {
       // Sanity: leader id drift would silently break messaging. Surface it.
       if (existing.leaderId !== opts.leaderId) {
@@ -63,7 +140,7 @@ export class Team {
           `A project hosts at most one team in v1; disband the existing team or pick the right leader.`,
         );
       }
-      return new Team(existing, opts.leader, store);
+      return new Team(existing, opts.leader, store, hooks);
     }
     const fresh: TeamState = {
       name: opts.name ?? 'team',
@@ -73,7 +150,7 @@ export class Team {
       createdAt: Date.now(),
     };
     await store.save(fresh);
-    return new Team(fresh, opts.leader, store);
+    return new Team(fresh, opts.leader, store, hooks);
   }
 
   get state(): TeamState {
@@ -90,28 +167,46 @@ export class Team {
   }
 
   /**
-   * Create a new teammate — spawns a child Agent off the leader and registers
-   * it in team state. Throws if id is already taken.
+   * Create a new teammate as a first-class host agent.
+   *
+   * Delegates to the host's `agentFactory` (supplied at Team.open time) to
+   * register the teammate in the host registry. Throws if no factory was
+   * provided — there is no longer a leader.spawn() fallback because that
+   * would create an off-registry agent (violates v1.2 "all agents are real
+   * agents" invariant).
+   *
+   * After the host returns a live Agent, Team mounts the teammate-side
+   * tools (message_leader, worklist) and stores the record in team.json.
    */
   async spawnTeammate(input: {
     id: TeammateId;
     role: string;
     systemPrompt: string;
+    tier?: string;
     model?: string;
     inheritTools?: boolean;
   }): Promise<TeammateRecord> {
     if (this._state.teammates.some((t) => t.id === input.id)) {
       throw new Error(`Teammate "${input.id}" already exists in this team.`);
     }
+    if (!this._agentFactory) {
+      throw new Error(
+        'Team has no agentFactory; the host must supply one so teammates can be registered as first-class agents.',
+      );
+    }
 
-    const childAgent = this._leader.spawn({
+    const childAgent = await this._agentFactory({
       id: input.id,
+      role: input.role,
       systemPrompt: input.systemPrompt,
+      tier: input.tier,
       model: input.model,
       inheritTools: input.inheritTools !== false,
+      project: this._state.project,
+      leaderId: this._state.leaderId,
     });
 
-    // Mount the teammate-side tools so the child can call message_leader.
+    // Mount the teammate-side tools so the child can call message_leader / worklist.
     for (const tool of this.teammateTools(input.id)) {
       childAgent.addTool(tool);
     }
@@ -120,6 +215,7 @@ export class Team {
       id: input.id,
       role: input.role,
       systemPrompt: input.systemPrompt,
+      tier: input.tier,
       model: input.model,
       createdAt: Date.now(),
     };
@@ -146,7 +242,7 @@ export class Team {
    * rehydrated Agent picks up where it left off. Only runtime plumbing
    * (tools, guards, provider binding) gets rebuilt here.
    */
-  rehydrateTeammate(id: TeammateId, opts?: { inheritTools?: boolean }): Agent {
+  rehydrateTeammate(id: TeammateId): Agent {
     const existing = this._teammateAgents.get(id);
     if (existing) return existing;
 
@@ -155,12 +251,23 @@ export class Team {
       throw new Error(`Cannot rehydrate teammate "${id}": no record in team.json.`);
     }
 
-    const childAgent = this._leader.spawn({
-      id: record.id,
-      systemPrompt: record.systemPrompt,
-      model: record.model,
-      inheritTools: opts?.inheritTools !== false,
-    });
+    // v1.2: teammates are regular agents in the host registry. On a host
+    // restart the host re-instantiates them via its normal agent lifecycle,
+    // then calls team.rehydrateAll() — we just look them up and (re)mount
+    // the teammate-side tools. If the host can't find the agent, something
+    // bigger is wrong (orphan record); surface rather than auto-heal.
+    if (!this._agentLookup) {
+      throw new Error(
+        `Cannot rehydrate teammate "${id}": no agentLookup supplied. Host must pass one to Team.open.`,
+      );
+    }
+    const childAgent = this._agentLookup(id);
+    if (!childAgent) {
+      throw new Error(
+        `Cannot rehydrate teammate "${id}": host registry has no agent with that id. ` +
+        `This likely means the teammate agent config was deleted without disbanding the team first.`,
+      );
+    }
     for (const tool of this.teammateTools(record.id)) {
       childAgent.addTool(tool);
     }
@@ -169,12 +276,17 @@ export class Team {
   }
 
   /** Rehydrate every teammate in the roster. Returns ids that were revived. */
-  rehydrateAll(opts?: { inheritTools?: boolean }): TeammateId[] {
+  rehydrateAll(): TeammateId[] {
     const revived: TeammateId[] = [];
     for (const record of this._state.teammates) {
       if (!this._teammateAgents.has(record.id)) {
-        this.rehydrateTeammate(record.id, opts);
-        revived.push(record.id);
+        try {
+          this.rehydrateTeammate(record.id);
+          revived.push(record.id);
+        } catch (err) {
+          // Log but don't fail the whole rehydrate; the host can reconcile.
+          console.warn(`[team] teammate rehydrate skipped for ${record.id}:`, err);
+        }
       }
     }
     return revived;
@@ -187,6 +299,14 @@ export class Team {
     this._state.teammates.splice(idx, 1);
     this._teammateAgents.delete(id);
     await this.store.save(this._state);
+    // Let the host know so it can delete the teammate's AgentEntry from its
+    // registry. We save team.json first so a crash between save and callback
+    // leaves an orphan agent (fixable) rather than a ghost team entry.
+    if (this._onDisband) {
+      try { await this._onDisband(id); } catch (err) {
+        console.warn(`[team] onDisband callback failed for ${id}:`, err);
+      }
+    }
   }
 
   /**
@@ -195,11 +315,22 @@ export class Team {
    * reply text. Both the outbound message and the reply are logged.
    */
   async messageTeammate(teammateId: TeammateId, content: string): Promise<string> {
-    const agent = this._teammateAgents.get(teammateId);
+    // First check our local cache, then fall back to the host's registry.
+    // This handles the cold-start case where the host has just revived the
+    // teammate agent but rehydrateTeammate hasn't been invoked yet.
+    let agent = this._teammateAgents.get(teammateId);
+    if (!agent && this._agentLookup) {
+      agent = this._agentLookup(teammateId);
+      if (agent) {
+        // Opportunistically rehydrate so subsequent calls are fast and the
+        // teammate tools are mounted.
+        try { this.rehydrateTeammate(teammateId); } catch { /* ignore — we got an agent anyway */ }
+      }
+    }
     if (!agent) {
       throw new Error(
         `Teammate "${teammateId}" has no live Agent instance. ` +
-        `Teammates must be respawned after a restart (host responsibility).`,
+        `The host must register it before the leader can message it.`,
       );
     }
     const requestId = randomUUID();
@@ -251,62 +382,7 @@ export class Team {
    */
   leaderTools(): ToolRegistration[] {
     return [
-      {
-        definition: {
-          name: 'spawn_teammate',
-          description:
-            'Recruit a new teammate into your team. Creates a persistent sub-agent with its own ' +
-            'role and conversation history. Only the leader can call this. After spawning, use ' +
-            '`message_teammate` to delegate work. Use for long-running specialist roles ' +
-            '(e.g., a code reviewer, a researcher, a test runner).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-                description: 'Unique id for this teammate, e.g. "reviewer", "researcher". Used in message routing.',
-              },
-              role: {
-                type: 'string',
-                description: 'Short display name / role description for UI (e.g. "Security Reviewer").',
-              },
-              systemPrompt: {
-                type: 'string',
-                description: "System prompt defining the teammate's role and behavior.",
-              },
-              model: {
-                type: 'string',
-                description: 'Optional model override (e.g. "claude-opus-4.7"). Inherits leader provider otherwise.',
-              },
-              inheritTools: {
-                type: 'boolean',
-                description: 'Whether to inherit leader tools (default: true).',
-              },
-            },
-            required: ['id', 'role', 'systemPrompt'],
-          },
-        },
-        execute: async (input) => {
-          try {
-            const rec = await this.spawnTeammate({
-              id: input.id as string,
-              role: input.role as string,
-              systemPrompt: input.systemPrompt as string,
-              model: input.model as string | undefined,
-              inheritTools: input.inheritTools as boolean | undefined,
-            });
-            return {
-              content: `Teammate "${rec.id}" (${rec.role}) is ready. Use message_teammate to delegate.`,
-              forUser: `[Team] Spawned teammate "${rec.id}" — ${rec.role}`,
-            };
-          } catch (err) {
-            return {
-              content: `spawn_teammate failed: ${err instanceof Error ? err.message : String(err)}`,
-              isError: true,
-            };
-          }
-        },
-      },
+      this.spawnTeammateToolDefinition(),
       {
         definition: {
           name: 'message_teammate',
@@ -347,9 +423,10 @@ export class Team {
           if (this._state.teammates.length === 0) {
             return { content: 'No teammates yet. Use spawn_teammate to recruit.' };
           }
-          const lines = this._state.teammates.map(
-            (t) => `- ${t.id} — ${t.role}${t.model ? ` (${t.model})` : ''}`,
-          );
+          const lines = this._state.teammates.map((t) => {
+            const modelInfo = t.tier ? ` [tier:${t.tier}]` : t.model ? ` (${t.model})` : '';
+            return `- ${t.id} — ${t.role}${modelInfo}`;
+          });
           return { content: `Team "${this._state.name}":\n${lines.join('\n')}` };
         },
       },
@@ -411,7 +488,84 @@ export class Team {
   }
 
   /**
-   * Teammate-facing tools: just message_leader in v1. Mounted automatically
+   * Build the spawn_teammate tool. Extracted so the tier enum can be
+   * populated dynamically from the host's tier config at mount time.
+   */
+  private spawnTeammateToolDefinition(): ToolRegistration {
+    const tiers = this._availableTiers?.() ?? [];
+    const tierSchema = tiers.length > 0
+      ? {
+          type: 'string' as const,
+          enum: tiers,
+          description:
+            `Model tier for the teammate. Tiers map to concrete models at the host; they're the ` +
+            `preferred way to pick a model (stable across model swaps). Available: ${tiers.join(', ')}. ` +
+            `Omit to inherit the leader's model.`,
+        }
+      : {
+          type: 'string' as const,
+          description:
+            `Model tier for the teammate (host-defined). Omit to inherit the leader's model.`,
+        };
+    return {
+      definition: {
+        name: 'spawn_teammate',
+        description:
+          'Recruit a new teammate into your team. Creates a *first-class agent* in the host ' +
+          'registry (visible in the Agents tab, with its own session log and working dir) and ' +
+          'marks it as a teammate of yours. Only the leader can call this.\n\n' +
+          'Pick a model tier (not a raw model id) so the choice stays stable when models are ' +
+          "swapped. Use for long-running specialist roles (e.g. a code reviewer, a researcher, " +
+          "a test runner) where persistent conversation history matters.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Unique id for this teammate, e.g. "reviewer", "researcher". Used in message routing and as the host agent id.',
+            },
+            role: {
+              type: 'string',
+              description: 'Short display name / role description for UI (e.g. "Security Reviewer").',
+            },
+            systemPrompt: {
+              type: 'string',
+              description: "System prompt defining the teammate's role and behavior.",
+            },
+            tier: tierSchema,
+            inheritTools: {
+              type: 'boolean',
+              description: 'Whether to inherit leader tools (default: true).',
+            },
+          },
+          required: ['id', 'role', 'systemPrompt'],
+        },
+      },
+      execute: async (input) => {
+        try {
+          const rec = await this.spawnTeammate({
+            id: input.id as string,
+            role: input.role as string,
+            systemPrompt: input.systemPrompt as string,
+            tier: input.tier as string | undefined,
+            inheritTools: input.inheritTools as boolean | undefined,
+          });
+          return {
+            content: `Teammate "${rec.id}" (${rec.role}) is ready. Use message_teammate to delegate.`,
+            forUser: `[Team] Spawned teammate "${rec.id}" — ${rec.role}`,
+          };
+        } catch (err) {
+          return {
+            content: `spawn_teammate failed: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+          };
+        }
+      },
+    };
+  }
+
+  /**
+   * Teammate-facing tools: message_leader + worklist. Mounted automatically
    * when spawnTeammate creates a child Agent.
    */
   teammateTools(ownId: TeammateId): ToolRegistration[] {

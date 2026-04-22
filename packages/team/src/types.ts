@@ -15,12 +15,19 @@
 /** Unique identifier for a teammate within a team. Stable, used in message routing. */
 export type TeammateId = string;
 
-/** A member of the team. Metadata only — the actual Agent instance lives in TeamRuntime. */
+/**
+ * A member of the team. Metadata only — the actual Agent instance lives in
+ * the host's agent registry (v1.2+: teammates are regular agents, not
+ * team-scoped ephemerals).
+ */
 export interface TeammateRecord {
   id: TeammateId;
   role: string;          // display name / short role description
   systemPrompt: string;  // baked-in role prompt
-  model?: string;        // optional model override; inherits leader's provider otherwise
+  /** Tier reference ('strong' / 'balanced' / 'fast' / host-defined). Preferred. */
+  tier?: string;
+  /** Explicit model id (fallback when tier isn't appropriate). */
+  model?: string;
   createdAt: number;
 }
 
