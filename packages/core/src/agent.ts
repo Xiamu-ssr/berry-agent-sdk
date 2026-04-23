@@ -925,13 +925,13 @@ export class Agent {
     const registered = [...this.tools.values()];
     // Use a lightweight signal here — this path only needs definitions.
     const runtime = getRuntimeToolDefinitions({
-      
-      
       sleepSignal: {
         onEnter: () => {},
         onExit: () => {},
         interjectWaker: () => new Promise(() => {}),
       },
+      memory: this._memory,
+      projectContext: this._projectContext,
     }).map((definition) => ({
       definition,
       execute: async () => ({ content: '' }),
@@ -1419,8 +1419,6 @@ export class Agent {
   private resolveAllowedTools(allowed?: string[], session?: Session): ToolRegistration[] {
     const registered = [...this.tools.values()];
     const runtime = createRuntimeTools({
-      
-      
       session,
       sleepSignal: this.createSleepSignal(),
       onTodoChange: (s, state) => {
@@ -1431,6 +1429,8 @@ export class Agent {
           timestamp: state.updatedAt,
         });
       },
+      memory: this._memory,
+      projectContext: this._projectContext,
     });
     const merged = mergeToolsByName(registered, runtime);
 

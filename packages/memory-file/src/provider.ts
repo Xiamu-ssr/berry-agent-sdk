@@ -18,6 +18,14 @@ import { ChunkStore, type SearchHit } from './store.js';
 export interface FileMemoryProviderOptions {
   /** Workspace root. MEMORY.md and memory/ are looked up here. */
   workspaceDir: string;
+  /**
+   * Optional project root. When set, the provider also indexes shared
+   * knowledge files (`AGENTS.md`, `PROJECT.md`, `.berry-discoveries.md`)
+   * under this directory. Results surface with paths prefixed `project/`
+   * so consumers can distinguish them from personal memory. Intended use
+   * case: teammates searching for shared team knowledge.
+   */
+  projectDir?: string;
   /** Where the sqlite index lives. Defaults to `<workspaceDir>/.berry/memory.sqlite`. */
   indexPath?: string;
   /** Override chunking. Defaults match OpenClaw (400 / 80). */
@@ -27,6 +35,9 @@ export interface FileMemoryProviderOptions {
   /** Default min score (normalized 0..1) to keep a result. */
   minScore?: number;
 }
+
+/** Virtual prefix for project-rooted files in the index. */
+const PROJECT_PREFIX = 'project/';
 
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
@@ -69,6 +80,7 @@ export interface MemoryGetResult {
 
 export function createFileMemoryProvider(options: FileMemoryProviderOptions): FileMemoryProvider {
   const workspaceDir = path.resolve(options.workspaceDir);
+  const projectDir = options.projectDir ? path.resolve(options.projectDir) : undefined;
   const indexPath = options.indexPath
     ? path.resolve(options.indexPath)
     : path.join(workspaceDir, '.berry', 'memory.sqlite');
@@ -81,12 +93,21 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
 
   const store = new ChunkStore(indexPath);
 
+  /** Resolve a relative (possibly project-prefixed) path to an absolute file. */
+  function resolveRel(rel: string): string {
+    if (rel.startsWith(PROJECT_PREFIX)) {
+      if (!projectDir) throw new Error('Project path requested but projectDir not configured');
+      return path.join(projectDir, rel.slice(PROJECT_PREFIX.length));
+    }
+    return path.join(workspaceDir, rel);
+  }
+
   async function sync(): Promise<void> {
-    const files = listMemoryFiles(workspaceDir);
+    const files = listMemoryFiles(workspaceDir, projectDir);
     const seen = new Set<string>();
 
     for (const rel of files) {
-      const abs = path.join(workspaceDir, rel);
+      const abs = resolveRel(rel);
       let stat: fs.Stats;
       try {
         stat = fs.statSync(abs);
@@ -156,7 +177,7 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
 
   async function getExcerpt(params: { path: string; from?: number; lines?: number }): Promise<MemoryGetResult> {
     const rel = normalizeRel(params.path);
-    const abs = path.join(workspaceDir, rel);
+    const abs = resolveRel(rel);
     const raw = fs.readFileSync(abs, 'utf8');
     const allLines = raw.split('\n');
     const total = allLines.length;
@@ -268,8 +289,9 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
   };
 }
 
-function listMemoryFiles(workspaceDir: string): string[] {
+function listMemoryFiles(workspaceDir: string, projectDir?: string): string[] {
   const results: string[] = [];
+  // ----- Personal memory (agent workspace) -----
   const memoryRoot = path.join(workspaceDir, 'MEMORY.md');
   if (fs.existsSync(memoryRoot) && fs.statSync(memoryRoot).isFile()) {
     results.push('MEMORY.md');
@@ -280,6 +302,18 @@ function listMemoryFiles(workspaceDir: string): string[] {
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith('.md')) continue;
       results.push(path.posix.join('memory', entry.name));
+    }
+  }
+  // ----- Project knowledge (team-shared) -----
+  // These files live in the project root, not the workspace. Prefix them
+  // with `project/` in the virtual index path so search results make it
+  // obvious they're shared, and so consumers can filter by source.
+  if (projectDir) {
+    for (const name of ['AGENTS.md', 'PROJECT.md', '.berry-discoveries.md']) {
+      const abs = path.join(projectDir, name);
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        results.push(PROJECT_PREFIX + name);
+      }
     }
   }
   return results;

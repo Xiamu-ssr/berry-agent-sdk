@@ -136,4 +136,36 @@ describe('FileMemoryProvider', () => {
     expect(Array.isArray(parsed.results)).toBe(true);
     expect(parsed.results.length).toBeGreaterThan(0);
   });
+
+  it('indexes project knowledge files under a separate projectDir', async () => {
+    write(ws, 'MEMORY.md', 'Personal note about dark roast coffee.');
+
+    // Separate project directory — simulates teammates pointing at a shared
+    // project path while each having their own workspace.
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'berry-mem-proj-'));
+    try {
+      fs.writeFileSync(path.join(proj, '.berry-discoveries.md'), 'TEAM DISCOVERY: use rayon for parallelism.');
+      fs.writeFileSync(path.join(proj, 'AGENTS.md'), 'Project spec lives here. No secrets in logs.');
+
+      provider = createFileMemoryProvider({ workspaceDir: ws, projectDir: proj });
+
+      // Personal memory still searchable.
+      const personal = await provider.search('dark roast coffee');
+      expect(personal.some((r) => r.path === 'MEMORY.md')).toBe(true);
+
+      // Project discoveries surface with a project/ prefix so consumers can
+      // distinguish shared knowledge from personal notes.
+      const shared = await provider.search('rayon parallelism');
+      expect(shared.some((r) => r.path === 'project/.berry-discoveries.md')).toBe(true);
+
+      const spec = await provider.search('no secrets in logs');
+      expect(spec.some((r) => r.path === 'project/AGENTS.md')).toBe(true);
+
+      // Excerpt reads resolve via project/ prefix too.
+      const excerpt = await provider.get({ path: 'project/.berry-discoveries.md' });
+      expect(excerpt.text).toContain('rayon');
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
 });

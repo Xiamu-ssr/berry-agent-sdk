@@ -9,10 +9,13 @@ import type {
   ToolDefinition,
   ToolRegistration,
 } from './types.js';
+import type { AgentMemory, ProjectContext } from './workspace/types.js';
 import {
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
   TOOL_SLEEP,
+  TOOL_SAVE_MEMORY,
+  TOOL_SAVE_DISCOVERY,
 } from './tool-names.js';
 
 /** Hard upper bound on a single sleep call, to stop agents sleeping forever. */
@@ -44,6 +47,17 @@ interface RuntimeToolOptions {
    * registered and can be interrupted by interject().
    */
   sleepSignal?: SleepSignal;
+  /**
+   * Agent's personal memory (writes go to `{workspace}/MEMORY.md`).
+   * When set, the `save_memory` tool is registered.
+   */
+  memory?: AgentMemory;
+  /**
+   * Project-shared context (writes go to `{project}/.berry-discoveries.md`).
+   * When set, the `save_discovery` tool is registered so the agent can
+   * deliberately persist knowledge visible to every teammate.
+   */
+  projectContext?: ProjectContext;
 }
 
 const TODO_READ_DEFINITION: ToolDefinition = {
@@ -94,10 +108,45 @@ const SLEEP_DEFINITION: ToolDefinition = {
   },
 };
 
+const SAVE_MEMORY_DEFINITION: ToolDefinition = {
+  name: TOOL_SAVE_MEMORY,
+  description:
+    'Append an entry to your personal MEMORY.md. Use this to save ' +
+    'decisions, preferences, context, or lessons that you want to recall in ' +
+    'future sessions. Private to you — teammates cannot read it. Keep ' +
+    'entries concise and self-contained (no dangling references to "above").',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Markdown to append.' },
+    },
+    required: ['content'],
+  },
+};
+
+const SAVE_DISCOVERY_DEFINITION: ToolDefinition = {
+  name: TOOL_SAVE_DISCOVERY,
+  description:
+    'Append a discovery to the shared project knowledge base ' +
+    '(`.berry-discoveries.md` in the project root). Use this to record ' +
+    'findings, conventions, gotchas, or context that EVERY teammate on ' +
+    'this project will benefit from reading. Keep each discovery focused ' +
+    'and evergreen — transient task state belongs on the worklist instead.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Markdown to append.' },
+    },
+    required: ['content'],
+  },
+};
+
 export function getRuntimeToolDefinitions(options: Omit<RuntimeToolOptions, 'session'>): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
   definitions.push(TODO_READ_DEFINITION, TODO_WRITE_DEFINITION);
   if (options.sleepSignal) definitions.push(SLEEP_DEFINITION);
+  if (options.memory) definitions.push(SAVE_MEMORY_DEFINITION);
+  if (options.projectContext) definitions.push(SAVE_DISCOVERY_DEFINITION);
   return definitions;
 }
 
@@ -139,6 +188,44 @@ export function createRuntimeTools(options: RuntimeToolOptions): ToolRegistratio
       };
     },
   });
+
+  if (options.memory) {
+    const mem = options.memory;
+    tools.push({
+      definition: SAVE_MEMORY_DEFINITION,
+      execute: async (input) => {
+        const content = typeof input.content === 'string' ? input.content.trim() : '';
+        if (!content) {
+          return { content: 'Error: content must be a non-empty string', isError: true };
+        }
+        try {
+          await mem.append(content);
+          return { content: `Saved ${content.length} chars to MEMORY.md` };
+        } catch (err) {
+          return { content: `Error saving to memory: ${(err as Error).message}`, isError: true };
+        }
+      },
+    });
+  }
+
+  if (options.projectContext) {
+    const pc = options.projectContext;
+    tools.push({
+      definition: SAVE_DISCOVERY_DEFINITION,
+      execute: async (input) => {
+        const content = typeof input.content === 'string' ? input.content.trim() : '';
+        if (!content) {
+          return { content: 'Error: content must be a non-empty string', isError: true };
+        }
+        try {
+          await pc.appendDiscovery(content);
+          return { content: `Saved ${content.length} chars to .berry-discoveries.md (visible to every teammate on this project)` };
+        } catch (err) {
+          return { content: `Error saving discovery: ${(err as Error).message}`, isError: true };
+        }
+      },
+    });
+  }
 
   if (options.sleepSignal) {
     const sig = options.sleepSignal;
