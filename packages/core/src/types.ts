@@ -280,7 +280,7 @@ export interface AgentConfig {
   /** Custom compaction strategy (overrides the default 7-layer pipeline). */
   compactionStrategy?: import('./compaction/types.js').CompactionStrategy;
   /** Called at the start of each query (after session resolution). */
-  onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
+  onQueryStart?: (session: Session, prompt: string | ContentBlock[]) => void | Promise<void>;
   /** Called at the end of each query (before return). */
   onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
 }
@@ -615,7 +615,7 @@ export const GUARD_EVENT_KINDS = ['guard_allow', 'guard_deny', 'guard_modify'] a
 export type GuardEventKind = (typeof GUARD_EVENT_KINDS)[number];
 
 export type AgentEvent =
-  | { type: 'query_start'; prompt: string; sessionId: string }
+  | { type: 'query_start'; prompt: string | ContentBlock[]; sessionId: string }
   | { type: 'api_call'; messages: number; tools: number }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; thinking: string }

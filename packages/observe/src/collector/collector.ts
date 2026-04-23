@@ -264,7 +264,13 @@ export function createCollector(config: CollectorConfig): {
           id: turnId,
           sessionId: event.sessionId,
           agentId: config.agentId ?? null,
-          prompt: event.prompt ? event.prompt.slice(0, 500) : null,
+          prompt: event.prompt
+            ? (typeof event.prompt === 'string'
+                // Text turn: save the full user text (truncated to 500).
+                ? event.prompt.slice(0, 500)
+                // Multimodal turn: extract joined text blocks, then note any media.
+                : event.prompt.map(b => b.type === 'text' ? b.text : `[${b.type}]`).join(' ').slice(0, 500))
+            : null,
           startTime: Date.now(),
           endTime: null,
           llmCallCount: 0,

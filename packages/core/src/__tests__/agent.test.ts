@@ -223,6 +223,40 @@ describe('Agent', () => {
     ]);
   });
 
+  it('accepts multimodal user turns (text + image blocks)', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'got it' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: provider,
+      systemPrompt: ['base prompt'],
+    });
+
+    const prompt = [
+      { type: 'image' as const, data: 'ZmFrZS1pbWFnZS1iYXNlNjQ=', mediaType: 'image/png' },
+      { type: 'text' as const, text: 'Describe this image in one sentence.' },
+    ];
+
+    const result = await agent.query(prompt);
+    const session = await agent.getSession(result.sessionId);
+
+    expect(result.text).toBe('got it');
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]!.messages).toHaveLength(1);
+    expect(provider.requests[0]!.messages[0]!.content).toEqual(prompt);
+    expect((session as Session).messages[0]!.content).toEqual(prompt);
+  });
+
   it('supports resume and fork', async () => {
     const provider = new SequenceProvider([
       {

@@ -128,7 +128,7 @@ export class Agent {
   private _instanceAllowedTools?: Set<string>;
 
   // Lifecycle hooks
-  private _onQueryStart?: (session: Session, prompt: string) => void | Promise<void>;
+  private _onQueryStart?: (session: Session, prompt: string | ContentBlock[]) => void | Promise<void>;
   private _onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
 
   /** Update agent status and emit status_change event. */
@@ -411,7 +411,13 @@ export class Agent {
    * When eventLogStore is configured, appends events for every action
    * and rebuilds context from the event log via ContextStrategy.
    */
-  async query(prompt: string, options?: QueryOptions): Promise<QueryResult> {
+  /**
+   * Send a turn to the agent. `prompt` accepts either a plain string
+   * (text-only, the common path) or a ContentBlock[] for multimodal turns
+   * (mix text + image blocks). Images travel through provider adapters
+   * unchanged until compaction, which strips them before summarization.
+   */
+  async query(prompt: string | ContentBlock[], options?: QueryOptions): Promise<QueryResult> {
     // Ensure workspace is initialized before first query
     if (this._workspaceReady) await this._workspaceReady;
 
@@ -506,7 +512,7 @@ export class Agent {
   /** Internal: the actual agent loop, extracted for try-catch in query(). */
   private async _queryLoop(
     session: Session,
-    prompt: string,
+    prompt: string | ContentBlock[],
     options: QueryOptions | undefined,
     emit: (event: AgentEvent) => void,
     appendEvent: (event: SessionEvent) => Promise<void>,

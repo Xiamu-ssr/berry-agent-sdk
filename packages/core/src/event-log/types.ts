@@ -69,7 +69,7 @@ export interface ThinkingEvent extends BaseEvent {
 /** Start of a query() call. */
 export interface QueryStartEvent extends BaseEvent {
   type: 'query_start';
-  prompt: string;
+  prompt: string | ContentBlock[];
 }
 
 /** End of a query() call. */
