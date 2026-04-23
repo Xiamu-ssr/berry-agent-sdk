@@ -70,3 +70,24 @@ export const SUMMARIZE_RECENT_RATIO = 0.3;
 
 /** Max retries when API returns prompt-too-long (PTL) error. */
 export const MAX_PTL_RETRIES = 3;
+
+// ----- Compaction Trigger Reasons -----
+
+/** Why a compaction pass was triggered. Single source of truth. */
+export const COMPACTION_TRIGGER_REASON = {
+  /** Estimated tokens crossed the soft threshold (lightweight trims). */
+  SOFT_THRESHOLD: 'soft_threshold',
+  /** Estimated tokens crossed the hard threshold (full pipeline). */
+  THRESHOLD: 'threshold',
+  /** API rejected the request as prompt-too-long; retry after compaction. */
+  OVERFLOW_RETRY: 'overflow_retry',
+} as const;
+
+export type CompactionTriggerReason =
+  typeof COMPACTION_TRIGGER_REASON[keyof typeof COMPACTION_TRIGGER_REASON];
+
+export const COMPACTION_TRIGGER_REASON_VALUES: readonly CompactionTriggerReason[] = Object.freeze([
+  COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD,
+  COMPACTION_TRIGGER_REASON.THRESHOLD,
+  COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
+]);

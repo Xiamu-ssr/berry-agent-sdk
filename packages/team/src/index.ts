@@ -28,3 +28,4 @@ export type {
   WorklistTaskStatus,
   WorklistState,
 } from './types.js';
+export { WORKLIST_STATUS, WORKLIST_STATUS_VALUES } from './types.js';

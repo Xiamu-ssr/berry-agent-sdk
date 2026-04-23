@@ -56,7 +56,24 @@ export interface TeamState {
  * Leaders can force any state (including re-opening a done/failed task) via
  * the `update` action. Teammates are bound by the state machine.
  */
-export type WorklistTaskStatus = 'unclaimed' | 'claimed' | 'in_progress' | 'done' | 'failed';
+export const WORKLIST_STATUS = {
+  UNCLAIMED: 'unclaimed',
+  CLAIMED: 'claimed',
+  IN_PROGRESS: 'in_progress',
+  DONE: 'done',
+  FAILED: 'failed',
+} as const;
+
+export type WorklistTaskStatus = typeof WORKLIST_STATUS[keyof typeof WORKLIST_STATUS];
+
+/** Array of all worklist status values (single source for JSON schemas etc). */
+export const WORKLIST_STATUS_VALUES: readonly WorklistTaskStatus[] = Object.freeze([
+  WORKLIST_STATUS.UNCLAIMED,
+  WORKLIST_STATUS.CLAIMED,
+  WORKLIST_STATUS.IN_PROGRESS,
+  WORKLIST_STATUS.DONE,
+  WORKLIST_STATUS.FAILED,
+]);
 
 export interface WorklistTask {
   id: string;              // short stable id, e.g. 'T-0001'

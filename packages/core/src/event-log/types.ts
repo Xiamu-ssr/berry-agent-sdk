@@ -78,8 +78,9 @@ export interface QueryEndEvent extends BaseEvent {
   result: QueryResult;
 }
 
-/** Structured reason for why compaction ran. */
-export type CompactionTriggerReason = 'soft_threshold' | 'threshold' | 'overflow_retry';
+// CompactionTriggerReason is defined in core/constants.ts — single source of truth.
+import type { CompactionTriggerReason } from '../constants.js';
+export type { CompactionTriggerReason };
 
 /** Marker inserted when compaction occurs. Events before the last marker can be skipped for context building. */
 export interface CompactionMarkerEvent extends BaseEvent {

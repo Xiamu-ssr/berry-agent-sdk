@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, ToolRegistration } from '@berry-agent/core';
 import type { TeamState, TeammateId, TeammateRecord, TeamMessage } from './types.js';
+import { WORKLIST_STATUS_VALUES } from './types.js';
 import { TeamStore } from './store.js';
 import { WorklistStore, WorklistError, type WorklistActor } from './worklist.js';
 
@@ -643,7 +644,7 @@ export class Team {
             },
             status: {
               type: 'string',
-              enum: ['unclaimed', 'claimed', 'in_progress', 'done', 'failed'],
+              enum: [...WORKLIST_STATUS_VALUES],
               description: 'Force a status (leader update only — bypasses state machine).',
             },
             reason: {

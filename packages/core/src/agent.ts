@@ -61,6 +61,7 @@ import {
   MAX_PTL_RETRIES,
   MAX_RETRIES,
   REQUEST_TIMEOUT_MS,
+  COMPACTION_TRIGGER_REASON,
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE } from './tool-names.js';
 import { executeTools } from './tool-executor.js';
@@ -640,7 +641,7 @@ export class Agent {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
             // Force compaction to shrink context, then retry
-            this.setStatus('compacting', 'overflow_retry');
+            this.setStatus('compacting', COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY);
             await runCompaction({
           compactionStrategy: this.compactionStrategy,
               session,
@@ -652,7 +653,7 @@ export class Agent {
               emit: (event: AgentEvent) => {
                 // Override triggerReason for PTL recovery events
                 if (event.type === 'compaction') {
-                  emit({ ...event, triggerReason: 'overflow_retry' });
+                  emit({ ...event, triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY });
                   return;
                 }
                 emit(event);
@@ -662,8 +663,8 @@ export class Agent {
                 if ('type' in event && event.type === 'compaction_marker') {
                   await appendEvent({
                     ...event,
-                    strategy: 'overflow_retry',
-                    triggerReason: 'overflow_retry',
+                    strategy: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
+                    triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
                   } as SessionEvent);
                   return;
                 }

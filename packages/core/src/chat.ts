@@ -15,8 +15,12 @@ import type {
 import type {
   SessionEvent,
   CompactionMarkerEvent,
-  CompactionTriggerReason,
 } from './event-log/types.js';
+import type { CompactionTriggerReason } from './constants.js';
+import {
+  COMPACTION_TRIGGER_REASON,
+  COMPACTION_TRIGGER_REASON_VALUES,
+} from './constants.js';
 
 export interface ChatToolCall {
   name: string;
@@ -239,9 +243,9 @@ function toCompactionMarkerItem(event: CompactionMarkerEvent, id: string): ChatC
 
 function formatCompactionMarkerContent(event: CompactionMarkerEvent): string {
   const reason = event.triggerReason ?? normalizeTriggerReason(event.strategy);
-  const label = reason === 'soft_threshold'
+  const label = reason === COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD
     ? 'Soft compaction'
-    : reason === 'overflow_retry'
+    : reason === COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY
       ? 'Overflow recovery compaction'
       : 'Context compaction';
 
@@ -259,10 +263,9 @@ function formatCompactionMarkerContent(event: CompactionMarkerEvent): string {
 }
 
 function normalizeTriggerReason(value: string): CompactionTriggerReason | undefined {
-  if (value === 'soft_threshold' || value === 'threshold' || value === 'overflow_retry') {
-    return value;
-  }
-  return undefined;
+  return (COMPACTION_TRIGGER_REASON_VALUES as readonly string[]).includes(value)
+    ? (value as CompactionTriggerReason)
+    : undefined;
 }
 
 function formatNumber(value: number): string {

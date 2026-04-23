@@ -21,6 +21,7 @@ import {
   DEFAULT_COMPACTION_RATIO,
   DEFAULT_SOFT_COMPACTION_RATIO,
   DEFAULT_SOFT_LAYERS,
+  COMPACTION_TRIGGER_REASON,
 } from './constants.js';
 
 /**
@@ -122,7 +123,9 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
   session.messages = result.messages;
   session.metadata.compactionCount++;
 
-  const triggerReason = compactLevel === 'soft' ? 'soft_threshold' : 'threshold';
+  const triggerReason = compactLevel === 'soft'
+    ? COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD
+    : COMPACTION_TRIGGER_REASON.THRESHOLD;
 
   // Event log: compaction_marker
   await appendEvent({
