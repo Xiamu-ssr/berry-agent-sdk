@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
+import { normalizeSystemPrompt } from '../types.js';
 import type {
   Provider,
   ProviderRequest,
@@ -163,7 +164,9 @@ describe('delegate', () => {
     });
 
     const request = provider.chatSpy.mock.calls[0]![0] as ProviderRequest;
-    expect(request.systemPrompt).toEqual(['Base prompt.', 'Extra skill instructions here.']);
+    expect(request.systemPrompt).toEqual(
+      normalizeSystemPrompt(['Base prompt.', 'Extra skill instructions here.']),
+    );
   });
 
   it('applies toolGuard override for delegate', async () => {

@@ -11,6 +11,7 @@ import type {
   Provider,
   ToolRegistration,
   AgentEvent,
+  SystemPromptBlock,
 } from './types.js';
 import type { SessionEvent } from './event-log/types.js';
 import type { AgentMemory } from './workspace/types.js';
@@ -63,7 +64,7 @@ export interface RunCompactionParams {
   compactionConfig?: CompactionConfig;
   compactLevel: 'soft' | 'hard';
   provider: Provider;
-  systemPrompt: string[];
+  systemPrompt: SystemPromptBlock[];
   allowedTools: ToolRegistration[];
   emit: (event: AgentEvent) => void;
   appendEvent: (event: SessionEvent) => Promise<void>;
@@ -161,7 +162,7 @@ export interface PreCompactMemoryFlushParams {
   session: Session;
   memory: AgentMemory;
   provider: Provider;
-  systemPrompt: string[];
+  systemPrompt: SystemPromptBlock[];
   emit: (event: AgentEvent) => void;
   appendEvent: (event: SessionEvent) => Promise<void>;
   makeBase: () => { id: string; timestamp: number; sessionId: string; turnId?: string };
@@ -217,6 +218,6 @@ export async function preCompactMemoryFlush(params: PreCompactMemoryFlushParams)
 
 // ===== Internal Helpers =====
 
-function estimateTokens_system(blocks: string[]): number {
-  return blocks.reduce((sum, b) => sum + Math.ceil(b.length / 4), 0);
+function estimateTokens_system(blocks: SystemPromptBlock[]): number {
+  return blocks.reduce((sum, block) => sum + Math.ceil(block.text.length / 4), 0);
 }

@@ -5,7 +5,7 @@
 // Core
 export { Agent } from './agent.js';
 export type { CompactionResult } from './compaction/compactor.js';
-export { toProviderResolver } from './types.js';
+export { flattenSystemPrompt, normalizeSystemPrompt, toProviderResolver } from './types.js';
 
 // Provider Registry
 export { ProviderRegistry } from './registry.js';
@@ -92,6 +92,7 @@ export type {
   // Agent config
   AgentConfig,
   QueryOptions,
+  CreateSessionOptions,
   QueryResult,
   AgentEvent,
   AgentStatus,
@@ -103,6 +104,9 @@ export type {
   ToolUseContent,
   ToolResultContent,
   ThinkingContent,
+  SystemPromptBlock,
+  SystemPromptCacheScope,
+  SystemPromptInput,
   Role,
 
   // Tools

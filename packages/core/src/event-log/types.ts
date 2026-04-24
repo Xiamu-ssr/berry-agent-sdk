@@ -12,6 +12,7 @@ import type {
   DelegateResult,
   CompactionLayer,
   Message,
+  SystemPromptInput,
 } from '../types.js';
 
 // ----- Base Event -----
@@ -123,7 +124,7 @@ export interface DelegateEndEvent extends BaseEvent {
 /** Start of a session — records the complete initial state. */
 export interface SessionStartEvent extends BaseEvent {
   type: 'session_start';
-  systemPrompt: string | string[];
+  systemPrompt: SystemPromptInput;
   projectContextSnapshot?: string;
   toolsAvailable: string[];
   guardEnabled: boolean;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
+import { normalizeSystemPrompt } from '../types.js';
 import type {
   Provider,
   ProviderRequest,
@@ -57,7 +58,7 @@ describe('middleware', () => {
 
     expect(capturedRequests).toHaveLength(1);
     // The original didn't have the injected text
-    expect(capturedRequests[0]!.systemPrompt).toEqual(['Base prompt.']);
+    expect(capturedRequests[0]!.systemPrompt).toEqual(normalizeSystemPrompt('Base prompt.'));
   });
 
   it('onAfterApiCall observes the response', async () => {

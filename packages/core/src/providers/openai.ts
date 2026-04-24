@@ -34,6 +34,7 @@ import type {
   ToolResultContent,
   ImageContent,
 } from '../types.js';
+import { flattenSystemPrompt } from '../types.js';
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
 
@@ -197,6 +198,12 @@ export class OpenAIProvider implements Provider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
+    // Reasoning effort (OpenAI GPT-5.x / o-series, and compatible gateways)
+    const reasoningEffort = this.resolveReasoningEffort();
+    if (reasoningEffort) {
+      ((params as unknown) as Record<string, unknown>).reasoning_effort = reasoningEffort;
+    }
+
     // Structured output (JSON schema)
     if (request.responseFormat) {
       params.response_format = {
@@ -226,6 +233,11 @@ export class OpenAIProvider implements Provider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
+    const reasoningEffort = this.resolveReasoningEffort();
+    if (reasoningEffort) {
+      ((params as unknown) as Record<string, unknown>).reasoning_effort = reasoningEffort;
+    }
+
     if (request.responseFormat) {
       params.response_format = {
         type: 'json_schema',
@@ -241,15 +253,27 @@ export class OpenAIProvider implements Provider {
     return params;
   }
 
+  private resolveReasoningEffort(): string | undefined {
+    const effort = this.config.reasoningEffort;
+    if (!effort || effort === 'none') return undefined;
+    const map: Record<string, string> = {
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'high', // OpenAI SDK 5.x defines up to 'high'; 'xhigh' may come later
+    };
+    return map[effort];
+  }
+
   // ===== Message Building =====
 
   buildMessages(
-    systemPrompt: string[],
+    systemPrompt: ProviderRequest['systemPrompt'],
     messages: Message[],
   ): ChatCompletionMessageParam[] {
     const result: ChatCompletionMessageParam[] = [];
 
-    const systemText = systemPrompt.filter(Boolean).join('\n\n');
+    const systemText = flattenSystemPrompt(systemPrompt).filter(Boolean).join('\n\n');
     if (systemText) {
       result.push({ role: 'system', content: systemText });
     }

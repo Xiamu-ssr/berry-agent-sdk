@@ -4,7 +4,18 @@
 // 7-layer compaction pipeline. Runs as ONE batch operation.
 // KEY: all changes happen at once to preserve cache prefixes.
 
-import type { Message, CompactionConfig, CompactionLayer, ContentBlock, Provider, ToolUseContent, ToolResultContent, ToolDefinition } from '../types.js';
+import type {
+  Message,
+  CompactionConfig,
+  CompactionLayer,
+  ContentBlock,
+  Provider,
+  ToolUseContent,
+  ToolResultContent,
+  ToolDefinition,
+  SystemPromptBlock,
+} from '../types.js';
+import { normalizeSystemPrompt } from '../types.js';
 import type { CompactionStrategy, CompactionStrategyResult } from './types.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
@@ -43,7 +54,7 @@ const LAYER_ORDER: CompactionLayer[] = [
  * provider's prompt cache is reused (~96% cache hit on Anthropic).
  */
 export interface ForkContext {
-  systemPrompt: string[];
+  systemPrompt: SystemPromptBlock[];
   tools?: ToolDefinition[];
 }
 
@@ -371,7 +382,7 @@ async function summarizeOldMessages(
   //
   // Without forkContext, we use the standalone COMPACT_SYSTEM_PROMPT
   // (cheaper but no cache sharing).
-  const systemPrompt = forkContext?.systemPrompt ?? [COMPACT_SYSTEM_PROMPT];
+  const systemPrompt = normalizeSystemPrompt(forkContext?.systemPrompt ?? [COMPACT_SYSTEM_PROMPT]);
 
   try {
     const summaryResponse = await provider.chat({

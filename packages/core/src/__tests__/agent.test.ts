@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { Agent } from '../agent.js';
+import { flattenSystemPrompt, normalizeSystemPrompt } from '../types.js';
 import type {
   Provider,
   ProviderRequest,
@@ -11,6 +12,17 @@ import type {
   AgentEvent,
 } from '../types.js';
 
+function cloneProviderRequest(request: ProviderRequest): ProviderRequest {
+  return {
+    ...request,
+    systemPrompt: structuredClone(request.systemPrompt),
+    messages: structuredClone(request.messages),
+    tools: request.tools ? structuredClone(request.tools) : undefined,
+    responseFormat: request.responseFormat ? structuredClone(request.responseFormat) : undefined,
+    signal: undefined,
+  };
+}
+
 class SequenceProvider implements Provider {
   readonly type = 'anthropic' as const;
   readonly requests: ProviderRequest[] = [];
@@ -18,7 +30,7 @@ class SequenceProvider implements Provider {
   constructor(private readonly responses: ProviderResponse[]) {}
 
   async chat(request: ProviderRequest): Promise<ProviderResponse> {
-    this.requests.push(structuredClone(request));
+    this.requests.push(cloneProviderRequest(request));
     const response = this.responses.shift();
     if (!response) {
       throw new Error('No fake response left');
@@ -36,7 +48,7 @@ class StreamingProvider implements Provider {
   }
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    this.requests.push(structuredClone(request));
+    this.requests.push(cloneProviderRequest(request));
     yield { type: 'text_delta', text: 'hel' };
     yield { type: 'text_delta', text: 'lo' };
     yield { type: 'thinking_delta', thinking: 'internal' };
@@ -61,7 +73,7 @@ class RetryThenStreamProvider implements Provider {
   }
 
   async *stream(request: ProviderRequest): AsyncIterable<ProviderStreamEvent> {
-    this.requests.push(structuredClone(request));
+    this.requests.push(cloneProviderRequest(request));
     this.attempts++;
 
     if (this.attempts === 1) {
@@ -257,6 +269,40 @@ describe('Agent', () => {
     expect((session as Session).messages[0]!.content).toEqual(prompt);
   });
 
+  it('can create and persist an empty session before the first turn', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'hello after precreate' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+    ]);
+
+    const agent = new Agent({
+      provider: {
+        type: 'anthropic',
+        apiKey: 'test',
+        model: 'fake-model',
+      },
+      providerInstance: provider,
+      systemPrompt: ['base prompt'],
+    });
+
+    const created = await agent.createSession();
+    const storedBeforeTurn = await agent.getSession(created.id);
+    const idsBeforeTurn = await agent.listSessions();
+    const result = await agent.query('first turn', { resume: created.id });
+    const storedAfterTurn = await agent.getSession(created.id);
+
+    expect(result.sessionId).toBe(created.id);
+    expect(storedBeforeTurn?.messages).toEqual([]);
+    expect(storedBeforeTurn?.systemPrompt).toEqual(normalizeSystemPrompt(['base prompt']));
+    expect(idsBeforeTurn).toContain(created.id);
+    expect(storedAfterTurn?.messages).toHaveLength(2);
+    expect(storedAfterTurn?.messages[0]?.content).toBe('first turn');
+    expect(storedAfterTurn?.messages[1]?.content).toEqual([{ type: 'text', text: 'hello after precreate' }]);
+  });
+
   it('supports resume and fork', async () => {
     const provider = new SequenceProvider([
       {
@@ -298,7 +344,7 @@ describe('Agent', () => {
 
     expect(resumed.sessionId).toBe(first.sessionId);
     expect(forked.sessionId).not.toBe(first.sessionId);
-    expect(originalSession?.systemPrompt).toEqual(['override prompt']);
+    expect(originalSession?.systemPrompt).toEqual(normalizeSystemPrompt(['override prompt']));
     expect(originalSession?.messages).toHaveLength(4);
     expect(forkedSession?.messages).toHaveLength(6);
     expect(forkedSession?.messages[0].content).toBe('first');
@@ -784,7 +830,7 @@ describe('runtime memory/todo tools', () => {
     const toolResults = resumed ? getToolResultContents(resumed) : [];
 
     expect(toolResults.some((content) => content.includes('Plan minimal feature'))).toBe(true);
-    expect(provider.requests[0].systemPrompt.join('\n')).not.toContain('Plan minimal feature');
+    expect(flattenSystemPrompt(provider.requests[0].systemPrompt).join('\n')).not.toContain('Plan minimal feature');
   });
 
   it('persists memory via workspace FileAgentMemory (compaction uses this)', async () => {
@@ -1022,7 +1068,7 @@ Review the code thoroughly. Check for:
     await agent.query('hello');
 
     const req = provider.requests[0]!;
-    const fullSystemPrompt = req.systemPrompt.join('\n');
+    const fullSystemPrompt = flattenSystemPrompt(req.systemPrompt).join('\n');
     expect(fullSystemPrompt).toContain('code-review');
     expect(fullSystemPrompt).toContain('Reviews code for bugs and style');
   });

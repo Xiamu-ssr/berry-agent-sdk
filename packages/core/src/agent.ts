@@ -8,6 +8,7 @@ import type {
   AgentConfig,
   AgentCreateConfig,
   QueryOptions,
+  CreateSessionOptions,
   QueryResult,
   Message,
   Provider,
@@ -32,8 +33,10 @@ import type {
   MiddlewareContext,
   ToolDefinition,
   TodoItem,
+  SystemPromptBlock,
+  SystemPromptInput,
 } from './types.js';
-import { toProviderResolver } from './types.js';
+import { normalizeSystemPrompt, toProviderResolver } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
@@ -90,7 +93,7 @@ export class Agent {
    * fields unchanged (original behavior — backward compatible).
    */
   private providerResolver: ProviderResolver | null;
-  private systemPrompt: string[];
+  private systemPrompt: SystemPromptBlock[];
   private tools: Map<string, ToolRegistration>;
   private legacySkills: string[];  // deprecated: raw .md paths
   private skillDirs: string[];
@@ -210,9 +213,7 @@ export class Agent {
 
   constructor(config: AgentConfig) {
     // Normalize system prompt to array of blocks
-    this.systemPrompt = Array.isArray(config.systemPrompt)
-      ? config.systemPrompt
-      : [config.systemPrompt];
+    this.systemPrompt = normalizeSystemPrompt(config.systemPrompt);
 
     this.tools = new Map();
     this.legacySkills = [];
@@ -233,6 +234,10 @@ export class Agent {
     } else {
       this.providerResolver = null;
       this.providerConfig = config.provider as ProviderConfig;
+    }
+    // Inject top-level reasoningEffort into provider config
+    if (config.reasoningEffort) {
+      this.providerConfig = { ...this.providerConfig, reasoningEffort: config.reasoningEffort };
     }
     this.contextStrategy = new DefaultContextStrategy();
     this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
@@ -379,6 +384,7 @@ export class Agent {
         model: config.model!,
         maxTokens: config.maxTokens,
         thinkingBudget: config.thinkingBudget,
+        reasoningEffort: config.reasoningEffort,
       };
     }
 
@@ -830,22 +836,30 @@ export class Agent {
 
   // ===== Public API =====
 
+  /** Create and persist an empty session before the first query turn. */
+  async createSession(options?: CreateSessionOptions): Promise<Session> {
+    if (this._workspaceReady) await this._workspaceReady;
+    const session = await this.createFreshSession(options?.systemPrompt);
+    await this.sessionStore.save(session);
+    return session;
+  }
+
   /** Get a session by ID. When event log is configured, rebuilds from log. */
   async getSession(id: string): Promise<Session | null> {
     if (this.eventLogStore) {
       const events = await this.eventLogStore.getEvents(id);
       const stored = await this.sessionStore.load(id);
-      if (events.length === 0) return stored; // fallback
+      if (events.length === 0) return normalizeLoadedSession(stored);
       return {
         id,
         messages: this.contextStrategy.buildMessages(events),
-        systemPrompt: stored?.systemPrompt ?? this.systemPrompt,
+        systemPrompt: normalizeSystemPrompt(stored?.systemPrompt ?? this.systemPrompt),
         createdAt: stored?.createdAt ?? events[0].timestamp,
         lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
         metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
       };
     }
-    return this.sessionStore.load(id);
+    return normalizeLoadedSession(await this.sessionStore.load(id));
   }
 
   /** List all session IDs. When event log is configured, lists from log. */
@@ -889,8 +903,8 @@ export class Agent {
   // interjects survive. Changes take effect on the next LLM inference.
 
   /** Replace the user-facing system prompt blocks. */
-  setSystemPrompt(blocks: string | string[]): void {
-    this.systemPrompt = Array.isArray(blocks) ? [...blocks] : [blocks];
+  setSystemPrompt(blocks: SystemPromptInput): void {
+    this.systemPrompt = normalizeSystemPrompt(blocks);
   }
 
   /** Register (or replace by name) a single tool. */
@@ -922,8 +936,8 @@ export class Agent {
   // ===== Introspection =====
 
   /** Get current system prompt blocks */
-  getSystemPrompt(): readonly string[] {
-    return [...this.systemPrompt];
+  getSystemPrompt(): readonly SystemPromptBlock[] {
+    return normalizeSystemPrompt(this.systemPrompt);
   }
 
   /** Get all registered tool definitions */
@@ -964,7 +978,7 @@ export class Agent {
   /** Full introspection snapshot */
   inspect(): {
     provider: Readonly<ProviderConfig>;
-    systemPrompt: string[];
+    systemPrompt: SystemPromptBlock[];
     tools: ToolDefinition[];
     skills: Array<{ name: string; description: string; dir: string }>;
     cwd: string;
@@ -987,7 +1001,7 @@ export class Agent {
     const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     return {
       provider: this.currentProvider,
-      systemPrompt: [...this.systemPrompt],
+      systemPrompt: normalizeSystemPrompt(this.systemPrompt),
       tools: this.getTools(),
       skills: this.getSkillMetas(),
       cwd: this.cwd,
@@ -1040,13 +1054,13 @@ export class Agent {
     emit({ type: 'delegate_start', message });
 
     // Build system prompt for the delegate
-    let delegateSystemPrompt: string[];
-    if (config?.overrideSystemPrompt) {
+    let delegateSystemPrompt: SystemPromptBlock[];
+    if (config?.overrideSystemPrompt !== undefined) {
       delegateSystemPrompt = normalizeSystemPrompt(config.overrideSystemPrompt);
     } else {
       // Start with main agent's system prompt (cache sharing)
       delegateSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
-      if (config?.appendSystemPrompt) {
+      if (config?.appendSystemPrompt !== undefined) {
         const extra = normalizeSystemPrompt(config.appendSystemPrompt);
         delegateSystemPrompt = [...delegateSystemPrompt, ...extra];
       }
@@ -1303,9 +1317,9 @@ export class Agent {
         const stored = await this.sessionStore.load(options.resume);
         if (events.length === 0) {
           // No events — maybe a legacy session, fall back to session store
-          const session = stored;
+          const session = normalizeLoadedSession(stored);
           if (!session) throw new Error(`Session not found: ${options.resume}`);
-          if (options.systemPrompt) {
+          if (options.systemPrompt !== undefined) {
             session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
           }
           return session;
@@ -1362,24 +1376,24 @@ export class Agent {
         const session: Session = {
           id: options.resume,
           messages,
-          systemPrompt: options.systemPrompt
+          systemPrompt: options.systemPrompt !== undefined
             ? normalizeSystemPrompt(options.systemPrompt)
-            : stored?.systemPrompt ?? this.systemPrompt,
+            : normalizeSystemPrompt(stored?.systemPrompt ?? this.systemPrompt),
           createdAt: stored?.createdAt ?? events[0].timestamp,
           lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
           metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
         };
         return session;
       }
-      const session = await this.sessionStore.load(options.resume);
+      const session = normalizeLoadedSession(await this.sessionStore.load(options.resume));
       if (!session) throw new Error(`Session not found: ${options.resume}`);
-      if (options.systemPrompt) {
+      if (options.systemPrompt !== undefined) {
         session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
       }
       return session;
     }
     if (options?.fork) {
-      const source = await this.sessionStore.load(options.fork);
+      const source = normalizeLoadedSession(await this.sessionStore.load(options.fork));
       if (!source) throw new Error(`Session not found: ${options.fork}`);
       return {
         ...structuredClone(source),
@@ -1388,15 +1402,21 @@ export class Agent {
         lastAccessedAt: Date.now(),
       };
     }
-    // New session
+    return this.createFreshSession(options?.systemPrompt);
+  }
+
+  private async createFreshSession(systemPromptOverride?: SystemPromptInput): Promise<Session> {
     const newSession: Session = {
       id: generateId(),
       messages: [],
-      systemPrompt: this.systemPrompt,
+      systemPrompt: systemPromptOverride !== undefined
+        ? normalizeSystemPrompt(systemPromptOverride)
+        : normalizeSystemPrompt(this.systemPrompt),
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
       metadata: createEmptySessionMetadata(this.cwd, this.providerConfig.model),
     };
+
     // DURABILITY: write session_start event with complete initial state
     if (this.eventLogStore) {
       const projectCtx = this._projectContext
@@ -1419,6 +1439,7 @@ export class Agent {
           : undefined,
       });
     }
+
     return newSession;
   }
 
@@ -1546,15 +1567,18 @@ export class Agent {
     return compactResult;
   }
 
-  private async buildSystemPrompt(basePrompt: string[], override?: string | string[]): Promise<string[]> {
-    if (override) return normalizeSystemPrompt(override);
+  private async buildSystemPrompt(
+    basePrompt: SystemPromptBlock[],
+    override?: SystemPromptInput,
+  ): Promise<SystemPromptBlock[]> {
+    if (override !== undefined) return normalizeSystemPrompt(override);
 
-    const base = [...basePrompt];
+    const base = normalizeSystemPrompt(basePrompt);
 
     // Prepend project context if available
     if (this._projectContext) {
       const ctx = await this._projectContext.loadContext();
-      if (ctx) base.unshift(ctx);
+      if (ctx) base.unshift({ text: ctx, cache: 'stable' });
     }
 
     // Append AGENT.md from workspace (if exists)
@@ -1563,7 +1587,7 @@ export class Agent {
         const { readFile } = await import('node:fs/promises');
         const { join } = await import('node:path');
         const agentMd = await readFile(join(this._workspaceRoot, 'AGENT.md'), 'utf-8');
-        if (agentMd.trim()) base.push(agentMd);
+        if (agentMd.trim()) base.push({ text: agentMd, cache: 'stable' });
       } catch {
         // AGENT.md doesn't exist or is empty — skip
       }
@@ -1572,7 +1596,7 @@ export class Agent {
     // Legacy skill loading (deprecated: injects full content)
     if (this.legacySkills.length > 0) {
       const skillContent = await this.loadLegacySkills();
-      if (skillContent) base.push(skillContent);
+      if (skillContent) base.push({ text: skillContent, cache: 'stable' });
     }
 
     // New skill system: inject lightweight index (name + description + whenToUse)
@@ -1580,7 +1604,7 @@ export class Agent {
     if (this.skillDirs.length > 0) {
       const skills = await this.getLoadedSkills();
       const index = buildSkillIndex(skills);
-      if (index) base.push(index);
+      if (index) base.push({ text: index, cache: 'stable' });
     }
 
     return base;
@@ -1833,8 +1857,12 @@ function generateId(): string {
   return `ses_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function normalizeSystemPrompt(prompt: string | string[]): string[] {
-  return Array.isArray(prompt) ? prompt : [prompt];
+function normalizeLoadedSession(session: Session | null): Session | null {
+  if (!session) return null;
+  return {
+    ...session,
+    systemPrompt: normalizeSystemPrompt(session.systemPrompt),
+  };
 }
 
 function extractText(message: Message): string {

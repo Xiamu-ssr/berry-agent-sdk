@@ -31,6 +31,7 @@ import type {
   ThinkingContent,
   ImageContent,
 } from '../types.js';
+import { normalizeSystemPrompt } from '../types.js';
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
 
@@ -39,6 +40,9 @@ interface ThinkingDelta { type: 'thinking_delta'; thinking: string }
 interface ThinkingBlock { type: 'thinking'; thinking: string }
 // Image block must satisfy ContentBlockParam union (ImageBlockParam)
 interface AnthropicImageBlock { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; [k: string]: unknown }
+
+const ANTHROPIC_CACHE_BREAKPOINT_BUDGET = 4;
+const ANTHROPIC_MAX_MESSAGE_CACHE_BREAKPOINTS = 2;
 
 export class AnthropicProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -198,7 +202,14 @@ export class AnthropicProvider implements Provider {
 
   private buildParams(request: ProviderRequest): Record<string, unknown> {
     const system = this.buildSystemBlocks(request.systemPrompt);
-    const messages = this.buildMessages(request.messages);
+    const remainingCacheBreakpoints = Math.max(
+      0,
+      ANTHROPIC_CACHE_BREAKPOINT_BUDGET - countCacheBreakpoints(system),
+    );
+    const messages = this.buildMessages(
+      request.messages,
+      Math.min(ANTHROPIC_MAX_MESSAGE_CACHE_BREAKPOINTS, remainingCacheBreakpoints),
+    );
     const tools = (request.tools || request.responseFormat)
       ? this.buildTools(request.tools ?? [], request.responseFormat)
       : undefined;
@@ -213,15 +224,33 @@ export class AnthropicProvider implements Provider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
-    if (this.config.thinkingBudget && this.config.thinkingBudget > 0) {
+    const thinkingBudget = this.resolveThinkingBudget(maxTokens);
+    if (thinkingBudget && thinkingBudget > 0) {
       params.thinking = {
         type: 'enabled',
-        budget_tokens: this.config.thinkingBudget,
+        budget_tokens: thinkingBudget,
       };
-      params.max_tokens = Math.max(maxTokens, this.config.thinkingBudget + 1);
+      params.max_tokens = Math.max(maxTokens, thinkingBudget + 1);
     }
 
     return params;
+  }
+
+  private resolveThinkingBudget(maxTokens: number): number | undefined {
+    if (this.config.thinkingBudget !== undefined) {
+      return this.config.thinkingBudget > 0 ? this.config.thinkingBudget : undefined;
+    }
+    const effort = this.config.reasoningEffort;
+    if (!effort || effort === 'none') return undefined;
+    const map: Record<string, number> = {
+      low: 4096,
+      medium: 16000,
+      high: 32000,
+      max: 64000,
+    };
+    const budget = map[effort] ?? 16000;
+    // Cap at maxTokens - 1 so there's room for output
+    return Math.min(budget, maxTokens - 1);
   }
 
   private buildStreamParams(request: ProviderRequest): Record<string, unknown> {
@@ -232,18 +261,28 @@ export class AnthropicProvider implements Provider {
   }
 
   // ===== System Prompt =====
-  // Split into blocks, each with cache_control: ephemeral.
-  // This maximizes cache hits — stable prefix stays cached.
+  // Cache the last stable system block plus the final system block boundary.
+  // This lets Anthropic reuse the stable prefix while still separating any
+  // dynamic tail content from the full prompt boundary.
 
-  buildSystemBlocks(systemPrompt: string[]): TextBlockParam[] {
-    const blocks = systemPrompt.filter(Boolean);
-    // Only place cache_control on the LAST system block.
-    // Anthropic limits total cache_control breakpoints to 4.
-    // We use: 1 on system (here) + up to 2 on recent turns = 3 max.
-    return blocks.map((text, idx) => ({
+  buildSystemBlocks(systemPrompt: ProviderRequest['systemPrompt']): TextBlockParam[] {
+    const blocks = normalizeSystemPrompt(systemPrompt).filter(block => block.text);
+    let lastStableIndex = -1;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i]!.cache !== 'dynamic') {
+        lastStableIndex = i;
+        break;
+      }
+    }
+
+    const cacheBreakpointIndexes = new Set<number>();
+    if (lastStableIndex >= 0) cacheBreakpointIndexes.add(lastStableIndex);
+    if (blocks.length > 0) cacheBreakpointIndexes.add(blocks.length - 1);
+
+    return blocks.map((block, idx) => ({
       type: 'text' as const,
-      text,
-      ...(idx === blocks.length - 1
+      text: block.text,
+      ...(cacheBreakpointIndexes.has(idx)
         ? { cache_control: { type: 'ephemeral' as const } }
         : {}),
     }));
@@ -251,15 +290,19 @@ export class AnthropicProvider implements Provider {
 
   // ===== Messages =====
   // Convert Berry internal format → Anthropic MessageParam[].
-  // Place cache_control on the last 2 user/assistant turn boundaries
-  // (same strategy as CC source: `index > messages.length - 3`).
+  // Place cache_control on the most recent user/assistant message boundaries
+  // without exceeding Anthropic's total breakpoint budget.
 
-  buildMessages(messages: Message[]): MessageParam[] {
+  buildMessages(
+    messages: Message[],
+    cacheBudget: number = ANTHROPIC_MAX_MESSAGE_CACHE_BREAKPOINTS,
+  ): MessageParam[] {
     const result: MessageParam[] = [];
+    const cacheStartIndex = Math.max(messages.length - cacheBudget, 0);
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      const isRecentTurn = i > messages.length - 3;
+      const isRecentTurn = cacheBudget > 0 && i >= cacheStartIndex;
 
       if (msg.role === 'user') {
         result.push(this.buildUserMessage(msg, isRecentTurn));
@@ -452,4 +495,8 @@ export class AnthropicProvider implements Provider {
       cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
     };
   }
+}
+
+function countCacheBreakpoints(blocks: Array<{ cache_control?: unknown }>): number {
+  return blocks.reduce((count, block) => count + (block.cache_control ? 1 : 0), 0);
 }

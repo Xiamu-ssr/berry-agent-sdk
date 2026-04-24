@@ -51,6 +51,53 @@ export interface Message {
   createdAt?: number;
 }
 
+// ----- System Prompt -----
+
+export type SystemPromptCacheScope = 'stable' | 'dynamic';
+
+/**
+ * Structured system prompt block.
+ *
+ * `stable` blocks are expected to remain reusable across requests and are good
+ * Anthropic cache breakpoint candidates. `dynamic` blocks are request-specific
+ * tail content that should remain ordered after stable prompt prefix blocks.
+ */
+export interface SystemPromptBlock {
+  text: string;
+  cache?: SystemPromptCacheScope;
+}
+
+export type SystemPromptInput = string | SystemPromptBlock | Array<string | SystemPromptBlock>;
+
+/**
+ * Normalize legacy string/string[] inputs into structured prompt blocks while
+ * preserving order. String inputs default to `stable`.
+ */
+export function normalizeSystemPrompt(
+  prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
+  defaultCache: SystemPromptCacheScope = 'stable',
+): SystemPromptBlock[] {
+  const blocks = (Array.isArray(prompt) ? prompt : [prompt]) as ReadonlyArray<string | SystemPromptBlock>;
+
+  return blocks.map((block) => {
+    if (typeof block === 'string') {
+      return { text: block, cache: defaultCache };
+    }
+
+    return {
+      text: block.text,
+      cache: block.cache ?? defaultCache,
+    };
+  });
+}
+
+/** Flatten structured/legacy prompt blocks down to text only, preserving order. */
+export function flattenSystemPrompt(
+  prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
+): string[] {
+  return normalizeSystemPrompt(prompt).map(block => block.text);
+}
+
 // ----- Tools -----
 
 export interface ToolDefinition {
@@ -92,8 +139,13 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   maxTokens?: number;
-  /** Anthropic extended thinking budget (0 = disabled) */
+  /** Anthropic extended thinking budget (0 = disabled). Takes precedence over reasoningEffort. */
   thinkingBudget?: number;
+  /** Unified reasoning effort level. Provider-specific mapping:
+   * - Anthropic: mapped to thinking budget_tokens
+   * - OpenAI: mapped to reasoning_effort
+   * - Others (via OpenAI compat): passed as reasoning_effort if supported */
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
 }
 
 /**
@@ -151,7 +203,7 @@ export function toProviderResolver(input: ProviderInput): ProviderResolver {
 
 export interface ProviderRequest {
   /** System prompt blocks (split for cache optimization) */
-  systemPrompt: string[];
+  systemPrompt: Array<string | SystemPromptBlock>;
   messages: Message[];
   tools?: ToolDefinition[];
   /** Abort signal */
@@ -183,7 +235,7 @@ export interface TokenUsage {
 export interface Session {
   id: string;
   messages: Message[];
-  systemPrompt: string[];
+  systemPrompt: SystemPromptBlock[];
   createdAt: number;
   lastAccessedAt: number;
   metadata: SessionMetadata;
@@ -221,10 +273,12 @@ export interface AgentConfig {
    * failover implementation). Static configs still work unchanged.
    */
   provider: ProviderInput;
+  /** Unified reasoning effort level (injected into provider config). */
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
   /** Optional injected provider instance (useful for tests/custom providers) */
   providerInstance?: Provider;
-  /** System prompt — string or array of blocks (for cache optimization) */
-  systemPrompt: string | string[];
+  /** System prompt — string, structured block, or ordered array of either. */
+  systemPrompt: SystemPromptInput;
   tools?: ToolRegistration[];
   /** Directories containing skills (each subdirectory has a SKILL.md). */
   skillDirs?: string[];
@@ -312,12 +366,14 @@ export interface AgentCreateConfig {
   model?: string;
   /** Max tokens override. */
   maxTokens?: number;
-  /** Thinking budget (Anthropic). */
+  /** Thinking budget (Anthropic). Takes precedence over reasoningEffort. */
   thinkingBudget?: number;
+  /** Unified reasoning effort level (provider-mapped). */
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
 
   // --- Agent config ---
   /** System prompt (default: generic helpful assistant). */
-  systemPrompt?: string | string[];
+  systemPrompt?: SystemPromptInput;
   /** Tools to register. */
   tools?: ToolRegistration[];
   /** Skill directories. */
@@ -407,7 +463,7 @@ export interface QueryOptions {
   /** Fork from a previous session */
   fork?: string;
   /** Override system prompt */
-  systemPrompt?: string | string[];
+  systemPrompt?: SystemPromptInput;
   /** Max tool-calling iterations (default: 25) */
   maxTurns?: number;
   /** Stream model deltas when the provider supports it */
@@ -423,6 +479,12 @@ export interface QueryOptions {
   responseFormat?: JsonSchema;
 }
 
+/** Create an empty durable session before the first user turn arrives. */
+export interface CreateSessionOptions {
+  /** Optional initial system prompt override for the new session. */
+  systemPrompt?: SystemPromptInput;
+}
+
 /** JSON Schema for structured output */
 export interface JsonSchema {
   name: string;
@@ -434,9 +496,9 @@ export interface JsonSchema {
 
 export interface DelegateConfig {
   /** System prompt to append after the main agent's prompt (e.g., skill body) */
-  appendSystemPrompt?: string | string[];
+  appendSystemPrompt?: SystemPromptInput;
   /** Override system prompt entirely (disables cache sharing for system prompt prefix) */
-  overrideSystemPrompt?: string | string[];
+  overrideSystemPrompt?: SystemPromptInput;
   /** Whitelist tools by name (from the main agent's registered tools) */
   allowedTools?: string[];
   /** Additional tools only for the delegate */
@@ -476,7 +538,7 @@ export interface SpawnConfig {
   /** Custom sub-agent ID */
   id?: string;
   /** System prompt (required for spawn, since sub-agent is independent) */
-  systemPrompt: string | string[];
+  systemPrompt: SystemPromptInput;
   /** Tools — if not set, inherits all from parent */
   tools?: ToolRegistration[];
   /** Inherit parent's tools in addition to any specified */

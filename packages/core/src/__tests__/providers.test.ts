@@ -13,15 +13,16 @@ describe('AnthropicProvider adapters', () => {
     });
 
     const systemBlocks = (provider as any).buildSystemBlocks([
-      'static rules',
-      'dynamic context',
+      { text: 'static rules', cache: 'stable' },
+      { text: 'dynamic context', cache: 'dynamic' },
     ]);
 
-    // Only the LAST system block gets cache_control (to stay within 4-block limit)
+    // Anthropic should cache both the stable boundary and the full prompt boundary.
     expect(systemBlocks).toEqual([
       {
         type: 'text',
         text: 'static rules',
+        cache_control: { type: 'ephemeral' },
       },
       {
         type: 'text',
@@ -133,6 +134,31 @@ describe('AnthropicProvider adapters', () => {
       { type: 'thinking', thinking: 'considering' },
     ]);
   });
+
+  it('deduplicates Anthropic system cache breakpoints when the final block is stable', () => {
+    const provider = new AnthropicProvider({
+      type: 'anthropic',
+      apiKey: 'test',
+      model: 'claude-sonnet-4-20250514',
+    });
+
+    const systemBlocks = (provider as any).buildSystemBlocks([
+      { text: 'shared rules', cache: 'stable' },
+      { text: 'more shared rules', cache: 'stable' },
+    ]);
+
+    expect(systemBlocks).toEqual([
+      {
+        type: 'text',
+        text: 'shared rules',
+      },
+      {
+        type: 'text',
+        text: 'more shared rules',
+        cache_control: { type: 'ephemeral' },
+      },
+    ]);
+  });
 });
 
 describe('OpenAIProvider adapters', () => {
@@ -172,7 +198,10 @@ describe('OpenAIProvider adapters', () => {
       },
     ];
 
-    const wireMessages = (provider as any).buildMessages(['rules', 'context'], messages);
+    const wireMessages = (provider as any).buildMessages([
+      { text: 'rules', cache: 'stable' },
+      { text: 'context', cache: 'dynamic' },
+    ], messages);
 
     expect(wireMessages[0]).toEqual({
       role: 'system',

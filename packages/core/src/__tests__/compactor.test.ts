@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { compact, estimateTokens } from '../compaction/compactor.js';
+import { normalizeSystemPrompt } from '../types.js';
 import type { Message, Provider, ProviderRequest, ProviderResponse, ContentBlock } from '../types.js';
 
 class FakeProvider implements Provider {
@@ -306,7 +307,9 @@ describe('compact', () => {
 
     // Verify forked compact used main system prompt instead of COMPACT_SYSTEM_PROMPT
     expect(capturedRequest).not.toBeNull();
-    expect(capturedRequest!.systemPrompt).toEqual(['You are a coding assistant.', 'Be concise.']);
+    expect(capturedRequest!.systemPrompt).toEqual(
+      normalizeSystemPrompt(['You are a coding assistant.', 'Be concise.']),
+    );
     // Verify tools were passed through
     expect(capturedRequest!.tools).toEqual(forkContext.tools);
     // Summary still works correctly
@@ -344,7 +347,7 @@ describe('compact', () => {
     // Without fork, should use COMPACT_SYSTEM_PROMPT (a single string)
     expect(capturedRequest).not.toBeNull();
     expect(capturedRequest!.systemPrompt).toHaveLength(1);
-    expect(capturedRequest!.systemPrompt[0]).toContain('summarizing conversation');
+    expect(capturedRequest!.systemPrompt[0]!.text).toContain('summarizing conversation');
     // No tools passed
     expect(capturedRequest!.tools).toBeUndefined();
   });
