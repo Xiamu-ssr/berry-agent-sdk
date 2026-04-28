@@ -69,6 +69,8 @@ export const llmCalls = sqliteTable('llm_calls', {
   responseContent: text('response_content'),  // JSON: response content blocks
   providerRequest: text('provider_request'),  // JSON: wire-format request (Anthropic/OpenAI)
   providerResponse: text('provider_response'), // JSON: wire-format response
+  /** Error message when the API call fails (null on success). */
+  errorMessage: text('error_message'),
   timestamp: integer('timestamp').notNull(),
 });
 

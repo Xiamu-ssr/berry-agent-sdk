@@ -36,7 +36,7 @@ import type {
   SystemPromptBlock,
   SystemPromptInput,
 } from './types.js';
-import { normalizeSystemPrompt, toProviderResolver } from './types.js';
+import { normalizeSystemPrompt, toProviderResolver, ToolGroup } from './types.js';
 import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
 import { DefaultContextStrategy } from './event-log/context-builder.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
@@ -69,7 +69,8 @@ import {
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE } from './tool-names.js';
 import { executeTools } from './tool-executor.js';
 import {
-  shouldCompact,
+  shouldSoftCompact,
+  shouldHardCompact,
   runCompaction,
   preCompactMemoryFlush,
 } from './compaction-runner.js';
@@ -115,6 +116,11 @@ export class Agent {
   private _children = new Map<string, Agent>();
   private _isSubAgent = false;
   private _lastSessionId?: string;
+
+  /** The session id used by the most recent query(), or undefined if no query has been made yet. */
+  get lastSessionId(): string | undefined {
+    return this._lastSessionId;
+  }
   private _querying = false;
   private _status: import('./types.js').AgentStatus = 'idle';
   private _statusDetail?: string;
@@ -280,6 +286,7 @@ export class Agent {
       this.tools.set(TOOL_LOAD_SKILL, {
         definition: {
           name: TOOL_LOAD_SKILL,
+          group: ToolGroup.Agent,
           description: 'Load the full content of a skill by name. Only use when a task matches a skill from the available skills index in the system prompt.',
           inputSchema: {
             type: 'object',
@@ -309,6 +316,7 @@ export class Agent {
       this.tools.set(TOOL_DELEGATE, {
         definition: {
           name: TOOL_DELEGATE,
+          group: ToolGroup.Agent,
           description: 'Fork a temporary sub-agent to handle a complex sub-task. ' +
             'The sub-agent inherits your context and tools, executes independently, and returns the result. ' +
             'Use when a task is self-contained and can be done in isolation without further interaction.',
@@ -427,6 +435,10 @@ export class Agent {
     // Ensure workspace is initialized before first query
     if (this._workspaceReady) await this._workspaceReady;
 
+    // Reset provider resolver so that transient errors from a previous query
+    // don't permanently brick the model. Each query starts with a clean slate.
+    this.providerResolver?.resetForSession?.();
+
     // 1. Resolve session (new / resume / fork)
     const session = await this.resolveSession(options);
 
@@ -530,27 +542,18 @@ export class Agent {
     const allowedTools = this.resolveAllowedTools(options?.allowedTools, session);
 
     // 4. Build system prompt (static blocks + dynamic skills)
-    const fullSystemPrompt = await this.buildSystemPrompt(session.systemPrompt, options?.systemPrompt);
-
-    // 5. Agent loop (tool calling)
-    let turns = 0;
-    const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
-    let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+    const fullSystemPrompt = await this.buildSystemPrompt(this.systemPrompt, options?.systemPrompt);
     let compacted = false;
-    let toolCallCount = 0;
 
-    while (turns < maxTurns) {
-      turns++;
+    // 4b. Soft compaction at turn entry (before entering the agent loop).
+    //     Soft compaction runs cheap layers that may modify messages and break
+    //     the prompt cache prefix — so it must NOT be checked inside the
+    //     per-inference loop, where it would destroy cache hits every iteration.
+    const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    if (shouldSoftCompact({ session, systemPrompt: this.systemPrompt, compactionConfig: this.compactionConfig, contextWindow: ctxWindow })) {
+      // If hard threshold is also crossed, prefer hard (it includes all soft layers + more)
+      const compactLevel: 'soft' | 'hard' = shouldHardCompact({ session, systemPrompt: this.systemPrompt, compactionConfig: this.compactionConfig, contextWindow: ctxWindow }) ? 'hard' : 'soft';
 
-      // 5a. Two-tier compaction BEFORE API call
-      const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-      const compactLevel = shouldCompact({
-        session,
-        compactionConfig: this.compactionConfig,
-        contextWindow: ctxWindow,
-      });
-
-      // Pre-compact memory flush: save important context to memory before hard compact
       if (compactLevel === 'hard' && this._memory) {
         this.setStatus('memory_flushing');
         await preCompactMemoryFlush({
@@ -564,13 +567,55 @@ export class Agent {
         });
       }
 
-      if (compactLevel !== 'none') {
-        this.setStatus('compacting', compactLevel);
+      this.setStatus('compacting', compactLevel);
+      await runCompaction({
+        compactionStrategy: this.compactionStrategy,
+        session,
+        compactionConfig: this.compactionConfig,
+        compactLevel,
+        provider: this.provider,
+        systemPrompt: fullSystemPrompt,
+        allowedTools,
+        emit,
+        appendEvent,
+        makeBase,
+      });
+      compacted = true;
+    }
+
+    // 5. Agent loop (tool calling)
+    let turns = 0;
+    const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
+    let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+    let toolCallCount = 0;
+
+    while (turns < maxTurns) {
+      turns++;
+
+      // 5a. Hard compaction check before each LLM inference.
+      //     After the previous turn's tool execution, token count may have
+      //     spiked past the hard threshold. A hard compact here prevents
+      //     prompt-too-long errors on the next API call.
+      if (shouldHardCompact({ session, systemPrompt: this.systemPrompt, compactionConfig: this.compactionConfig, contextWindow: ctxWindow })) {
+        if (this._memory) {
+          this.setStatus('memory_flushing');
+          await preCompactMemoryFlush({
+            session,
+            memory: this._memory!,
+            provider: this.provider,
+            systemPrompt: fullSystemPrompt,
+            emit,
+            appendEvent,
+            makeBase,
+          });
+        }
+
+        this.setStatus('compacting', 'hard');
         await runCompaction({
           compactionStrategy: this.compactionStrategy,
           session,
           compactionConfig: this.compactionConfig,
-          compactLevel,
+          compactLevel: 'hard',
           provider: this.provider,
           systemPrompt: fullSystemPrompt,
           allowedTools,
@@ -629,10 +674,10 @@ export class Agent {
           signal: options?.abortSignal,
           responseFormat: options?.responseFormat,
         };
+        const mwCtx = this.getMiddlewareContext(session);
 
         try {
           // Middleware: onBeforeApiCall
-          const mwCtx = this.getMiddlewareContext(session);
           for (const mw of this.middleware) {
             if (mw.onBeforeApiCall) {
               providerRequest = await mw.onBeforeApiCall(providerRequest, mwCtx);
@@ -687,6 +732,12 @@ export class Agent {
             compacted = true;
             // Retry with compacted messages
             continue;
+          }
+          // Final failure — notify middleware so observe can record the failed call
+          for (const mw of this.middleware) {
+            if (mw.onApiCallError) {
+              try { await mw.onApiCallError(providerRequest, err, mwCtx); } catch { /* ignore */ }
+            }
           }
           throw err; // Non-PTL error or retries exhausted
         }
@@ -773,6 +824,7 @@ export class Agent {
         makeBase,
         middlewareContext: mwCtx,
         cwd: this.cwd,
+        model: this.providerConfig.model,
         abortSignal: options?.abortSignal,
       });
 
@@ -837,9 +889,9 @@ export class Agent {
   // ===== Public API =====
 
   /** Create and persist an empty session before the first query turn. */
-  async createSession(options?: CreateSessionOptions): Promise<Session> {
+  async createSession(_options?: CreateSessionOptions): Promise<Session> {
     if (this._workspaceReady) await this._workspaceReady;
-    const session = await this.createFreshSession(options?.systemPrompt);
+    const session = await this.createFreshSession();
     await this.sessionStore.save(session);
     return session;
   }
@@ -853,10 +905,9 @@ export class Agent {
       return {
         id,
         messages: this.contextStrategy.buildMessages(events),
-        systemPrompt: normalizeSystemPrompt(stored?.systemPrompt ?? this.systemPrompt),
         createdAt: stored?.createdAt ?? events[0].timestamp,
         lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
-        metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
+        metadata: stored?.metadata ?? createEmptySessionMetadata(),
       };
     }
     return normalizeLoadedSession(await this.sessionStore.load(id));
@@ -870,25 +921,50 @@ export class Agent {
     return this.sessionStore.list();
   }
 
+  /**
+   * Clear all messages and event log for a session, effectively resetting it
+   * to a blank state while keeping the same session ID. This is what "clear
+   * chat" should mean: the next query on this session starts fresh.
+   */
+  async clearSession(id: string): Promise<void> {
+    // 1. Clear the event log so resolveSession won't rebuild old messages
+    if (this.eventLogStore) {
+      await this.eventLogStore.clear(id);
+    }
+    // 2. Save an empty session to the session store
+    const existing = await this.sessionStore.load(id);
+    const cleared: Session = {
+      id,
+      messages: [],
+      createdAt: existing?.createdAt ?? Date.now(),
+      lastAccessedAt: Date.now(),
+      metadata: existing?.metadata ?? createEmptySessionMetadata(),
+    };
+    await this.sessionStore.save(cleared);
+  }
+
   /** Register an additional tool at runtime */
   addTool(tool: ToolRegistration): void {
     this.tools.set(tool.definition.name, tool);
   }
 
   /**
-   * Switch provider and/or model at runtime. Sessions are preserved.
-   * Accepts a full ProviderConfig or a partial override (model-only switch).
+   * Switch the model used by this agent. Keeps the same provider type/key/baseUrl,
+   * only changes the model identifier sent to the API.
    */
-  switchProvider(config: ProviderConfig | { model: string }): void {
-    if ('type' in config) {
-      // Full provider switch
-      this.providerConfig = config;
-      this.provider = createProvider(config);
-    } else {
-      // Model-only switch (same provider type/key/baseUrl)
-      this.providerConfig = { ...this.providerConfig, model: config.model };
-      this.provider = createProvider(this.providerConfig);
-    }
+  switchModel(model: string): void {
+    this.providerConfig = { ...this.providerConfig, model };
+    this.provider = createProvider(this.providerConfig);
+  }
+
+  /**
+   * Switch the entire provider (type/key/baseUrl/model) at runtime.
+   * Sessions are preserved. This is the low-level method — prefer
+   * switchModel() for simple model changes.
+   */
+  switchProvider(config: ProviderConfig): void {
+    this.providerConfig = config;
+    this.provider = createProvider(config);
   }
 
   /** Get current provider config (read-only) */
@@ -1085,10 +1161,9 @@ export class Agent {
     const delegateSession: Session = {
       id: delegateSessionId,
       messages,
-      systemPrompt: delegateSystemPrompt,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
-      metadata: createEmptySessionMetadata(this.cwd, config?.model ?? this.providerConfig.model),
+      metadata: createEmptySessionMetadata(),
     };
 
     // Resolve tools
@@ -1303,9 +1378,9 @@ export class Agent {
   private getMiddlewareContext(session: Session): MiddlewareContext {
     return {
       sessionId: session.id,
-      model: session.metadata.model,
+      model: this.providerConfig.model,
       provider: this.providerConfig.type,
-      cwd: session.metadata.cwd,
+      cwd: this.cwd,
     };
   }
 
@@ -1319,9 +1394,6 @@ export class Agent {
           // No events — maybe a legacy session, fall back to session store
           const session = normalizeLoadedSession(stored);
           if (!session) throw new Error(`Session not found: ${options.resume}`);
-          if (options.systemPrompt !== undefined) {
-            session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
-          }
           return session;
         }
 
@@ -1376,20 +1448,14 @@ export class Agent {
         const session: Session = {
           id: options.resume,
           messages,
-          systemPrompt: options.systemPrompt !== undefined
-            ? normalizeSystemPrompt(options.systemPrompt)
-            : normalizeSystemPrompt(stored?.systemPrompt ?? this.systemPrompt),
           createdAt: stored?.createdAt ?? events[0].timestamp,
           lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
-          metadata: stored?.metadata ?? createEmptySessionMetadata(this.cwd, this.providerConfig.model),
+          metadata: stored?.metadata ?? createEmptySessionMetadata(),
         };
         return session;
       }
       const session = normalizeLoadedSession(await this.sessionStore.load(options.resume));
       if (!session) throw new Error(`Session not found: ${options.resume}`);
-      if (options.systemPrompt !== undefined) {
-        session.systemPrompt = normalizeSystemPrompt(options.systemPrompt);
-      }
       return session;
     }
     if (options?.fork) {
@@ -1402,19 +1468,16 @@ export class Agent {
         lastAccessedAt: Date.now(),
       };
     }
-    return this.createFreshSession(options?.systemPrompt);
+    return this.createFreshSession();
   }
 
-  private async createFreshSession(systemPromptOverride?: SystemPromptInput): Promise<Session> {
+  private async createFreshSession(): Promise<Session> {
     const newSession: Session = {
       id: generateId(),
       messages: [],
-      systemPrompt: systemPromptOverride !== undefined
-        ? normalizeSystemPrompt(systemPromptOverride)
-        : normalizeSystemPrompt(this.systemPrompt),
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
-      metadata: createEmptySessionMetadata(this.cwd, this.providerConfig.model),
+      metadata: createEmptySessionMetadata(),
     };
 
     // DURABILITY: write session_start event with complete initial state
@@ -1428,7 +1491,7 @@ export class Agent {
         sessionId: newSession.id,
         turnId: 'start',
         type: 'session_start',
-        systemPrompt: newSession.systemPrompt,
+        systemPrompt: normalizeSystemPrompt(this.systemPrompt),
         projectContextSnapshot: projectCtx,
         toolsAvailable: Array.from(this.tools.values()).map(t => t.definition.name),
         guardEnabled: !!this.toolGuard,
@@ -1501,21 +1564,13 @@ export class Agent {
     const session = await this.sessionStore.load(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-    const compactLevel = shouldCompact({
-      session,
-      compactionConfig: this.compactionConfig,
-      contextWindow: ctxWindow,
-    });
-
-    if (compactLevel === 'none') {
-      return { messages: session.messages, layersApplied: [], tokensFreed: 0 };
-    }
+    // Manual compact always runs hard (user explicitly requested it)
+    const compactLevel: 'hard' = 'hard';
 
     const fullSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
     const allowedTools = Array.from(this.tools.values());
 
-    if (compactLevel === 'hard' && this._memory) {
+    if (this._memory) {
       const makeBase = () => ({
         id: generateId(), timestamp: Date.now(), sessionId, turnId: 'compact',
       });
@@ -1859,10 +1914,11 @@ function generateId(): string {
 
 function normalizeLoadedSession(session: Session | null): Session | null {
   if (!session) return null;
-  return {
-    ...session,
-    systemPrompt: normalizeSystemPrompt(session.systemPrompt),
-  };
+  // Strip legacy fields that may have been persisted but are no longer part of Session
+  const { systemPrompt: _sp, ...rest } = session as Session & { systemPrompt?: unknown };
+  // Also strip cwd/model from metadata if present in legacy data
+  const { cwd: _cwd, model: _model, ...cleanMeta } = rest.metadata as SessionMetadata & { cwd?: unknown; model?: unknown };
+  return { ...rest, metadata: cleanMeta as SessionMetadata };
 }
 
 function extractText(message: Message): string {
@@ -1904,10 +1960,8 @@ function createInMemoryStore(): SessionStore {
   };
 }
 
-function createEmptySessionMetadata(cwd: string, model: string): SessionMetadata {
+function createEmptySessionMetadata(): SessionMetadata {
   return {
-    cwd,
-    model,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalCacheReadTokens: 0,

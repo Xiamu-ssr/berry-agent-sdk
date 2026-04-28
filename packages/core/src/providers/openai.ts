@@ -347,6 +347,7 @@ export class OpenAIProvider implements Provider {
 
     const textParts: string[] = [];
     const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const reasoningParts: string[] = [];
 
     for (const block of msg.content) {
       if (block.type === 'text') {
@@ -361,14 +362,28 @@ export class OpenAIProvider implements Provider {
             arguments: JSON.stringify(tu.input),
           },
         });
+      } else if (block.type === 'thinking') {
+        // Some OpenAI-compatible providers (e.g. Moonshot/kimi) require
+        // reasoning_content to be preserved in the assistant message for
+        // multi-turn conversations when thinking is enabled. Without this
+        // the API rejects the request with:
+        //   "thinking is enabled but reasoning_content is missing ..."
+        reasoningParts.push((block as { thinking: string }).thinking ?? '');
       }
     }
 
-    const assistantMsg: ChatCompletionAssistantMessageParam = {
+    const assistantMsg: ChatCompletionAssistantMessageParam & {
+      reasoning_content?: string;
+    } = {
       role: 'assistant',
       content: textParts.join('\n') || null,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
     };
+
+    // Moonshot/kimi requires reasoning_content on EVERY assistant message when
+    // thinking is enabled, even if empty. Omitting it causes:
+    //   "thinking is enabled but reasoning_content is missing ..."
+    assistantMsg.reasoning_content = reasoningParts.join('\n');
 
     return [assistantMsg];
   }

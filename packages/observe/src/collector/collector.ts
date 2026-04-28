@@ -177,6 +177,71 @@ export function createCollector(config: CollectorConfig): {
       }
     },
 
+    onApiCallError(request: ProviderRequest, error: unknown, context: MiddlewareContext): void {
+      const pending = pendingApiCalls.get(context.sessionId);
+      pendingApiCalls.delete(context.sessionId);
+      const startTime = pending?.startTime ?? Date.now();
+      const latencyMs = Date.now() - startTime;
+
+      const errorMessage =
+        typeof error === 'object' && error !== null && 'message' in error
+          ? String((error as any).message)
+          : String(error);
+
+      // Detect images in messages
+      const hasImages = request.messages.some(
+        (m) =>
+          Array.isArray(m.content) &&
+          m.content.some((b: any) => b.type === 'image'),
+      );
+
+      const id = nanoid();
+      lastLlmCallId = id;
+
+      db.db.insert(llmCalls).values({
+        id,
+        sessionId: context.sessionId,
+        agentId: config.agentId ?? null,
+        turnId: currentTurnId ?? null,
+        provider: context.provider,
+        model: context.model,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheSavings: 0,
+        totalCost: 0,
+        latencyMs,
+        ttftMs: null,
+        stopReason: 'error',
+        messageCount: request.messages.length,
+        toolDefCount: request.tools?.length ?? 0,
+        systemBlockCount: request.systemPrompt.length,
+        hasImages,
+        skillsLoaded: null,
+        providerDetail: null,
+        // Full content fields
+        requestSystem: storeFull ? safeJsonStringify(request.systemPrompt) : null,
+        requestMessages: storeFull ? safeJsonStringify(request.messages) : null,
+        requestTools: storeFull ? safeJsonStringify(request.tools) : null,
+        responseContent: null,
+        providerRequest: null,
+        providerResponse: null,
+        errorMessage,
+        timestamp: Date.now(),
+      }).run();
+
+      // Update turn llm call count (no cost increment for failed calls)
+      if (currentTurnId) {
+        db.db.update(turns)
+          .set({ llmCallCount: sql`${turns.llmCallCount} + 1` })
+          .where(eq(turns.id, currentTurnId))
+          .run();
+      }
+    },
+
     onBeforeToolExec(
       toolName: string,
       input: Record<string, unknown>,

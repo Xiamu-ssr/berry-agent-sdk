@@ -1,8 +1,12 @@
 // ============================================================
 // Berry Agent SDK — Common Tools: Shell Execution
 // ============================================================
+//
+// Shell tools execute commands through the CommandExecutor interface.
+// By default this is NodeExecutor (bare child_process, no sandbox).
+// Inject a SandboxedExecutor from @berry-agent/safe to add OS-level
+// isolation — tools are completely unaware of the difference.
 
-import { exec, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { ToolRegistration } from '@berry-agent/core';
 import {
   TOOL_PROCESS_KILL,
@@ -11,7 +15,10 @@ import {
   TOOL_PROCESS_POLL,
   TOOL_PROCESS_WRITE,
   TOOL_SHELL,
+  ToolGroup,
 } from '@berry-agent/core';
+import type { CommandExecutor, ProcessHandle } from '@berry-agent/core';
+import { NodeExecutor } from './executor.js';
 
 const DEFAULT_TIMEOUT = 30_000;
 const MAX_OUTPUT = 10_000;
@@ -24,6 +31,8 @@ export interface ShellToolOptions {
   maxOutput?: number;
   /** Blocked commands (will be denied) */
   blockedCommands?: string[];
+  /** Command executor. Defaults to NodeExecutor (no sandbox). */
+  executor?: CommandExecutor;
 }
 
 type ProcessStatus = 'running' | 'exited';
@@ -32,7 +41,7 @@ interface ProcessSession {
   id: string;
   command: string;
   cwd: string;
-  child: ChildProcessWithoutNullStreams;
+  handle: ProcessHandle;
   startedAt: number;
   endedAt?: number;
   pid: number | undefined;
@@ -56,14 +65,15 @@ interface ProcessSummary {
 }
 
 /**
- * Create shell tools scoped to a working directory.
+ * Create shell tools scoped to a project directory.
  * Includes the foreground/background shell tool plus first-stage process tools.
  */
-export function createShellTools(cwd: string, options?: ShellToolOptions): ToolRegistration[] {
+export function createShellTools(projectRoot: string, options?: ShellToolOptions): ToolRegistration[] {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
   const maxOutput = options?.maxOutput ?? MAX_OUTPUT;
   const blocked = new Set(options?.blockedCommands ?? []);
-  const manager = new ProcessSessionManager(cwd, maxOutput);
+  const executor = options?.executor ?? new NodeExecutor();
+  const manager = new ProcessSessionManager(projectRoot, maxOutput, executor);
 
   const ensureAllowedCommand = (command: string): string | null => {
     const baseCmd = command.trim().split(/\s+/)[0] ?? '';
@@ -73,28 +83,29 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     return null;
   };
 
-  const runForeground = async (command: string) => new Promise<{ content: string; isError?: boolean }>((resolve) => {
-    exec(command, { cwd, timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      let output = '';
-      if (stdout) output += stdout;
-      if (stderr) output += (output ? '\n' : '') + stderr;
-      if (!output && error) output = error.message;
-
-      if (output.length > maxOutput) {
-        output = output.slice(0, maxOutput) + `\n... [truncated, ${output.length} total chars]`;
-      }
-
-      resolve({
-        content: output || '(no output)',
-        isError: error ? true : undefined,
-      });
+  const runForeground = async (command: string) => {
+    const result = await executor.exec(command, {
+      cwd: projectRoot,
+      timeout,
+      maxBuffer: 1024 * 1024,
     });
-  });
+
+    let output = result.output;
+    if (output.length > maxOutput) {
+      output = output.slice(0, maxOutput) + `\n... [truncated, ${output.length} total chars]`;
+    }
+
+    return {
+      content: output || '(no output)',
+      isError: result.isError ? true : undefined,
+    };
+  };
 
   return [
     {
       definition: {
         name: TOOL_SHELL,
+        group: ToolGroup.Shell,
         description: 'Execute a shell command. Set background=true to start a first-stage managed process session.',
         inputSchema: {
           type: 'object',
@@ -130,6 +141,7 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     {
       definition: {
         name: TOOL_PROCESS_LIST,
+        group: ToolGroup.Shell,
         description: 'List tracked background shell processes created by shell({ background: true }).',
         inputSchema: {
           type: 'object',
@@ -143,6 +155,7 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     {
       definition: {
         name: TOOL_PROCESS_POLL,
+        group: ToolGroup.Shell,
         description: 'Poll the latest status for a tracked background process.',
         inputSchema: {
           type: 'object',
@@ -166,6 +179,7 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     {
       definition: {
         name: TOOL_PROCESS_LOG,
+        group: ToolGroup.Shell,
         description: 'Read captured stdout/stderr for a tracked background process.',
         inputSchema: {
           type: 'object',
@@ -187,6 +201,7 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     {
       definition: {
         name: TOOL_PROCESS_WRITE,
+        group: ToolGroup.Shell,
         description: 'Write data to stdin for a tracked background process.',
         inputSchema: {
           type: 'object',
@@ -211,6 +226,7 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
     {
       definition: {
         name: TOOL_PROCESS_KILL,
+        group: ToolGroup.Shell,
         description: 'Stop a tracked background process with SIGTERM.',
         inputSchema: {
           type: 'object',
@@ -238,8 +254,8 @@ export function createShellTools(cwd: string, options?: ShellToolOptions): ToolR
  * Backward-compatible single shell tool factory.
  * Use createShellTools() or createAllTools() when background process tools are needed.
  */
-export function createShellTool(cwd: string, options?: ShellToolOptions): ToolRegistration {
-  return createShellTools(cwd, options)[0];
+export function createShellTool(projectRoot: string, options?: ShellToolOptions): ToolRegistration {
+  return createShellTools(projectRoot, options)[0];
 }
 
 class ProcessSessionManager {
@@ -248,25 +264,19 @@ class ProcessSessionManager {
   constructor(
     private readonly cwd: string,
     private readonly maxOutput: number,
+    private readonly executor: CommandExecutor,
   ) {}
 
   start(command: string): ProcessSummary {
-    const child = spawn(command, {
-      cwd: this.cwd,
-      shell: true,
-      stdio: 'pipe',
-    });
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
+    const handle = this.executor.spawn(command, { cwd: this.cwd });
 
     const session: ProcessSession = {
       id: `proc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       command,
       cwd: this.cwd,
-      child,
+      handle,
       startedAt: Date.now(),
-      pid: child.pid,
+      pid: handle.pid,
       status: 'running',
       exitCode: null,
       signal: null,
@@ -274,22 +284,22 @@ class ProcessSessionManager {
       truncated: false,
     };
 
-    child.stdout.on('data', (chunk: string) => {
+    handle.onStdOut((chunk: string) => {
       this.appendLog(session, chunk);
     });
 
-    child.stderr.on('data', (chunk: string) => {
+    handle.onStdErr((chunk: string) => {
       this.appendLog(session, chunk);
     });
 
-    child.on('error', (error) => {
+    handle.onError((error: Error) => {
       this.appendLog(session, `Process error: ${error.message}\n`);
       session.status = 'exited';
       session.exitCode = session.exitCode ?? 1;
       session.endedAt = Date.now();
     });
 
-    child.on('exit', (code, signal) => {
+    handle.onExit((code: number | null, signal: string | null) => {
       session.status = 'exited';
       session.exitCode = code;
       session.signal = signal;
@@ -324,24 +334,13 @@ class ProcessSessionManager {
     if (session.status !== 'running') {
       throw new Error(`Process is not running: ${id}`);
     }
-    if (!session.child.stdin.writable) {
+    if (!session.handle.stdinWritable) {
       throw new Error(`Process stdin is not writable: ${id}`);
     }
 
-    await new Promise<void>((resolve, reject) => {
-      session.child.stdin.write(data, (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    await session.handle.write(data);
 
-    return {
-      ...this.toSummary(session),
-      bytesWritten: data.length,
-    };
+    return { ...this.toSummary(session), bytesWritten: Buffer.byteLength(data, 'utf8') };
   }
 
   kill(id: string): ProcessSummary {
@@ -349,10 +348,27 @@ class ProcessSessionManager {
     if (!session) {
       throw new Error(`Process not found: ${id}`);
     }
-    if (session.status === 'running') {
-      session.child.kill('SIGTERM');
-    }
+    session.handle.kill('SIGTERM');
     return this.toSummary(session);
+  }
+
+  private appendLog(session: ProcessSession, chunk: string) {
+    if (session.truncated) return;
+
+    const remaining = this.maxOutput - session.log.length;
+    if (remaining <= 0) {
+      session.log += TRUNCATED_PREFIX;
+      session.truncated = true;
+      return;
+    }
+
+    if (chunk.length > remaining) {
+      session.log += chunk.slice(0, remaining);
+      session.log += TRUNCATED_PREFIX;
+      session.truncated = true;
+    } else {
+      session.log += chunk;
+    }
   }
 
   private toSummary(session: ProcessSession): ProcessSummary {
@@ -367,19 +383,5 @@ class ProcessSessionManager {
       exitCode: session.exitCode,
       signal: session.signal,
     };
-  }
-
-  private appendLog(session: ProcessSession, chunk: string): void {
-    const existing = session.truncated && session.log.startsWith(TRUNCATED_PREFIX)
-      ? session.log.slice(TRUNCATED_PREFIX.length)
-      : session.log;
-    const combined = existing + chunk;
-    if (combined.length <= this.maxOutput) {
-      session.log = combined;
-      return;
-    }
-
-    session.truncated = true;
-    session.log = `${TRUNCATED_PREFIX}${combined.slice(-this.maxOutput)}`;
   }
 }

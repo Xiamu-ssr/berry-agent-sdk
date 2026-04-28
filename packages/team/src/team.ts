@@ -14,6 +14,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Agent, ToolRegistration } from '@berry-agent/core';
+import { ToolGroup } from '@berry-agent/core';
 import type { TeamState, TeammateId, TeammateRecord, TeamMessage } from './types.js';
 import { WORKLIST_STATUS_VALUES } from './types.js';
 import { TeamStore } from './store.js';
@@ -342,7 +343,8 @@ export class Team {
       to: teammateId,
       content,
     });
-    const result = await agent.query(content);
+    // Resume teammate's current session so context is preserved across turns.
+    const result = await agent.query(content, agent.lastSessionId ? { resume: agent.lastSessionId } : undefined);
     await this.store.appendMessage({
       id: randomUUID(),
       ts: Date.now(),
@@ -387,6 +389,7 @@ export class Team {
       {
         definition: {
           name: 'message_teammate',
+          group: ToolGroup.Team,
           description:
             'Send a message to one of your teammates and wait for their reply. ' +
             "This is how you delegate work or ask questions. Returns the teammate's full response.",
@@ -417,6 +420,7 @@ export class Team {
       {
         definition: {
           name: 'list_team',
+          group: ToolGroup.Team,
           description: 'List all current teammates and their roles.',
           inputSchema: { type: 'object', properties: {} },
         },
@@ -434,6 +438,7 @@ export class Team {
       {
         definition: {
           name: 'disband_teammate',
+          group: ToolGroup.Team,
           description:
             'Remove a teammate from the team. Its session log is preserved for audit. ' +
             'Only use when the teammate role is no longer needed.',
@@ -459,6 +464,7 @@ export class Team {
       {
         definition: {
           name: 'read_team_inbox',
+          group: ToolGroup.Team,
           description:
             'Read messages teammates have sent to you (leader). Returns messages in chronological order. ' +
             'Useful when a teammate reports progress or asks a question via message_leader.',
@@ -511,6 +517,7 @@ export class Team {
     return {
       definition: {
         name: 'spawn_teammate',
+        group: ToolGroup.Team,
         description:
           'Recruit a new teammate into your team. Creates a *first-class agent* in the host ' +
           'registry (visible in the Agents tab, with its own session log and working dir) and ' +
@@ -574,6 +581,7 @@ export class Team {
       {
         definition: {
           name: 'message_leader',
+          group: ToolGroup.Team,
           description:
             'Send a message to your team leader. Use to report progress, ask for clarification, ' +
             'or request additional resources. Non-blocking — leader reads via read_team_inbox.',
@@ -615,6 +623,7 @@ export class Team {
     return {
       definition: {
         name: 'worklist',
+        group: ToolGroup.Team,
         description:
           `Shared team task board at <project>/.berry/worklist.json. Use this to coordinate ` +
           `work between team members. The state machine is enforced:\n` +

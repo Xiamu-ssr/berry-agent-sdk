@@ -18,7 +18,7 @@
 // This is deliberately a single self-contained file — the tool is the
 // whole surface area, no external helpers or sub-modules.
 
-import { TOOL_BROWSER } from '@berry-agent/core';
+import { TOOL_BROWSER, ToolGroup } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -45,7 +45,7 @@ export type BrowserAction =
   | 'close';
 
 export interface BrowserToolOptions {
-  /** Launch in headless mode (default true). */
+  /** Launch in headless mode (default false — browser is visible by default). */
   headless?: boolean;
   /** Per-action timeout ms (default 30s). */
   timeout?: number;
@@ -132,7 +132,7 @@ async function captureSnapshot(page: any): Promise<string> {
  * innerText snapshots automatically).
  */
 export function createBrowserTool(options: BrowserToolOptions = {}): ToolRegistration {
-  const headless = options.headless ?? true;
+  const headless = options.headless ?? false;
   const timeout = options.timeout ?? 30_000;
   const snapshotMaxChars = options.snapshotMaxChars ?? 25_000;
 
@@ -433,6 +433,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): ToolRegistr
   return {
     definition: {
       name: TOOL_BROWSER,
+      group: ToolGroup.Web,
       description:
         'Control a Chromium browser via Playwright. ' +
         'Snapshot action returns an aria tree with refs (e.g. "e12"); pass refs back as ref="e12" to click/type/etc. ' +

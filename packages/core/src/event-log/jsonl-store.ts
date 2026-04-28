@@ -4,7 +4,7 @@
 // One JSONL file per session. Append-only, crash-recoverable.
 // Storage layout: {baseDir}/.berry/sessions/{sessionId}.jsonl
 
-import { readFile, writeFile, appendFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, mkdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { EventLogStore, SessionEvent, GetEventsOptions } from './types.js';
 
@@ -99,6 +99,20 @@ export class FileEventLogStore implements EventLogStore {
     } catch {
       // Directory doesn't exist yet
       return [];
+    }
+  }
+
+  /** Delete the event log file for a session (used by clearSession). */
+  async clear(sessionId: string): Promise<void> {
+    const path = this.filePath(sessionId);
+    try {
+      await unlink(path);
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // File doesn't exist — nothing to clear
+        return;
+      }
+      throw err;
     }
   }
 

@@ -2,7 +2,7 @@
 // Berry Agent SDK — Common Tools: Web Search (adapter pattern)
 // ============================================================
 
-import { TOOL_WEB_SEARCH } from '@berry-agent/core';
+import { TOOL_WEB_SEARCH, ToolGroup } from '@berry-agent/core';
 import type { CredentialStore, ToolRegistration } from '@berry-agent/core';
 
 // ----- Public types -----
@@ -174,6 +174,7 @@ export function createWebSearchTool(config: WebSearchConfig): ToolRegistration {
     return {
       definition: {
         name: TOOL_WEB_SEARCH,
+        group: ToolGroup.Web,
         description: `Search the web. Currently NOT configured (missing ${keyName}).`,
         inputSchema: {
           type: 'object',
@@ -196,6 +197,7 @@ export function createWebSearchTool(config: WebSearchConfig): ToolRegistration {
   return {
     definition: {
       name: TOOL_WEB_SEARCH,
+      group: ToolGroup.Web,
       description: 'Search the web and return a list of results with title, URL, and snippet.',
       inputSchema: {
         type: 'object',

@@ -21,6 +21,7 @@ export { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, comp
 // Pricing
 export { calculateCost, getPricing, MODEL_PRICING } from './collector/pricing.js';
 export type { ModelPricing, CostResult } from './collector/pricing.js';
+export { fetchOpenRouterPricing } from './collector/openrouter-pricing.js';
 
 // Collectors
 export { createCollector } from './collector/collector.js';

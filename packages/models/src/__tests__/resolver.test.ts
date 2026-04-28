@@ -133,7 +133,7 @@ describe('createModelResolver', () => {
     const resolver = createModelResolver(reg.models['claude-opus-4.7']!, reg);
     resolver.reportError?.(new Error('1'), { isTransient: true });
     expect(resolver.resolve().apiKey).toBe('sk-zen');
-    resolver.resetForSession?.('new-session');
+    resolver.resetForSession?.();
     expect(resolver.resolve().apiKey).toBe('sk-anthropic');
   });
 
@@ -142,6 +142,25 @@ describe('createModelResolver', () => {
     expect(() =>
       createModelResolver({ id: 'empty', providers: [] }, reg),
     ).toThrow(ModelResolveError);
+  });
+
+  it('does not advance pointer for single-provider models', () => {
+    const reg = mkRegistry();
+    const resolver = createModelResolver(reg.models['single-provider']!, reg);
+    // Even after reporting a transient error, pointer should not advance
+    // because there is no fallback provider to rotate to.
+    resolver.reportError?.(new Error('timeout'), { isTransient: true, statusCode: 503 });
+    // Should still resolve to the same provider (not throw "All providers failed")
+    const cfg = resolver.resolve();
+    expect(cfg.apiKey).toBe('sk-corp');
+    // Still not exhausted after multiple errors
+    resolver.reportError?.(new Error('429'), { isTransient: true, statusCode: 429 });
+    const cfg2 = resolver.resolve();
+    expect(cfg2.apiKey).toBe('sk-corp');
+    // resetForSession still works on single-provider
+    resolver.resetForSession?.();
+    const cfg3 = resolver.resolve();
+    expect(cfg3.apiKey).toBe('sk-corp');
   });
 
   it('onRotate callback fires with from/to refs', () => {

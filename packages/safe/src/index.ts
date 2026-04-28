@@ -1,5 +1,5 @@
 // ============================================================
-// @berry-agent/safe — Safety guards, classifier, and audit
+// @berry-agent/safe — Safety guards, classifier, audit, and sandbox
 // ============================================================
 
 // Tier 0: Pre-built rule guards (zero LLM cost)
@@ -9,6 +9,7 @@ export {
   directoryScope,
   rateLimiter,
   compositeGuard,
+  writeScopeGuard,
 } from './guards/rules.js';
 
 // Tier 2: LLM Transcript Classifier (reasoning-blind, two-stage)
@@ -37,6 +38,14 @@ export {
   createConsoleAuditSink,
 } from './audit/audit-logger.js';
 
+// Tier -1: OS-level sandbox (Seatbelt / bubblewrap)
+export {
+  createSandbox,
+  createSandboxedExecutor,
+  buildSandboxProfile,
+  defaultSandboxConfig,
+} from './sandbox/index.js';
+
 // Types
 export type {
   ClassifierConfig,
@@ -48,3 +57,5 @@ export type {
   AuditSink,
   BackpressureState,
 } from './types.js';
+
+export type { SandboxConfig, SandboxProfile } from './sandbox/index.js';

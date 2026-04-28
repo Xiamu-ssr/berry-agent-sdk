@@ -27,12 +27,9 @@ describe('runCompaction', () => {
         { role: 'user', content: 'hello', createdAt: 1 },
         { role: 'assistant', content: [{ type: 'text', text: 'world' }], createdAt: 2 },
       ],
-      systemPrompt: ['base'],
       createdAt: 1,
       lastAccessedAt: 2,
       metadata: {
-        cwd: '/tmp',
-        model: 'fake-model',
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCacheReadTokens: 0,
@@ -45,6 +42,7 @@ describe('runCompaction', () => {
     const appended: SessionEvent[] = [];
     const emitted: AgentEvent[] = [];
 
+    // Use a custom strategy that shortens a message so tokensFreed > 0
     const result = await runCompaction({
       session,
       compactLevel: 'hard',
@@ -57,10 +55,14 @@ describe('runCompaction', () => {
       compactionConfig: { contextWindow: 200000 },
       compactionStrategy: {
         async compact(messages) {
+          // Simulate compaction: shorten the first message to free tokens
+          const compacted = messages.map((m, i) =>
+            i === 0 ? { ...m, content: 'hi' } : m,
+          );
           return {
-            messages,
+            messages: compacted,
             layersApplied: ['merge_messages'],
-            tokensFreed: 45000,
+            tokensFreed: 1, // message-level freed (char-based)
           };
         },
       },
@@ -74,19 +76,21 @@ describe('runCompaction', () => {
       type: 'compaction_marker',
       strategy: 'threshold',
       triggerReason: 'threshold',
-      tokensFreed: 45000,
+      // tokensFreed is now in full-context terms (contextBefore - contextAfter)
       contextBefore: 175000,
       thresholdPct: 0.875,
       contextWindow: 200000,
       layersApplied: ['merge_messages'],
     }));
-    expect(typeof marker?.contextAfter).toBe('number');
+    // tokensFreed should be > 0 since we shortened "hello" → "hi"
+    expect(marker!.tokensFreed).toBeGreaterThan(0);
+    // contextAfter should be less than contextBefore
+    expect(marker!.contextAfter).toBeLessThan(175000);
     expect(typeof marker?.durationMs).toBe('number');
 
     expect(emitted).toContainEqual(expect.objectContaining({
       type: 'compaction',
       triggerReason: 'threshold',
-      tokensFreed: 45000,
       contextBefore: 175000,
       thresholdPct: 0.875,
       contextWindow: 200000,

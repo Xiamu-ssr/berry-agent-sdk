@@ -185,26 +185,93 @@ import type { ToolUseContent } from '../types.js';
 function repairOrphanToolUse(messages: Message[]): void {
   if (messages.length === 0) return;
 
-  // Collect all tool_use IDs from assistant messages
-  // and all tool_result IDs from user messages
-  const toolUseIds = new Set<string>();
-  const toolResultIds = new Set<string>();
+  // Collect all tool_use and tool_result IDs globally.
+  const allToolUseIds = new Set<string>();
+  const allToolResultIds = new Set<string>();
 
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue;
     for (const block of msg.content) {
       if (block.type === 'tool_use') {
-        toolUseIds.add((block as ToolUseContent).id);
+        allToolUseIds.add((block as ToolUseContent).id);
       } else if (block.type === 'tool_result') {
-        toolResultIds.add((block as ToolResultContent).toolUseId);
+        allToolResultIds.add((block as ToolResultContent).toolUseId);
       }
     }
   }
 
-  const orphanIds = [...toolUseIds].filter(id => !toolResultIds.has(id));
+  // Pass 1: For each assistant message with tool_use, ensure the immediately
+  // following user message contains the matching tool_result(s). If a
+  // tool_result exists in a later message (e.g. displaced by a crash-recovery
+  // interject), move it into the correct position.
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+
+    const toolUseIds = msg.content
+      .filter(b => b.type === 'tool_use')
+      .map(b => (b as ToolUseContent).id);
+    if (toolUseIds.length === 0) continue;
+
+    // Check the next message for tool_results matching these IDs
+    const nextMsg = messages[i + 1];
+    if (nextMsg && nextMsg.role === 'user' && Array.isArray(nextMsg.content)) {
+      const nextResultIds = new Set(
+        nextMsg.content
+          .filter(b => b.type === 'tool_result')
+          .map(b => (b as ToolResultContent).toolUseId),
+      );
+      const missingIds = toolUseIds.filter(id => !nextResultIds.has(id));
+      if (missingIds.length === 0) continue; // all satisfied
+
+      // Some tool_results missing from immediate next message.
+      // Find and relocate them from later messages.
+      const displacedBlocks: ContentBlock[] = [];
+      for (const id of missingIds) {
+        if (!allToolResultIds.has(id)) continue; // truly orphaned, handled in pass 2
+        for (let j = i + 2; j < messages.length; j++) {
+          const laterMsg = messages[j];
+          if (laterMsg.role !== 'user' || !Array.isArray(laterMsg.content)) continue;
+          const idx = laterMsg.content.findIndex(
+            b => b.type === 'tool_result' && (b as ToolResultContent).toolUseId === id,
+          );
+          if (idx >= 0) {
+            displacedBlocks.push(laterMsg.content.splice(idx, 1)[0]!);
+            // Remove empty user messages left behind
+            if (laterMsg.content.length === 0) {
+              messages.splice(j, 1);
+            }
+            break;
+          }
+        }
+      }
+
+      if (displacedBlocks.length > 0) {
+        // Prepend displaced tool_results to the next user message (tool_results first)
+        nextMsg.content = [...displacedBlocks, ...nextMsg.content];
+      }
+    }
+  }
+
+  // Pass 2: Handle truly orphaned tool_use (no tool_result anywhere).
+  const remainingToolUseIds = new Set<string>();
+  const remainingToolResultIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === 'tool_use') {
+        remainingToolUseIds.add((block as ToolUseContent).id);
+      } else if (block.type === 'tool_result') {
+        remainingToolResultIds.add((block as ToolResultContent).toolUseId);
+      }
+    }
+  }
+
+  const orphanIds = [...remainingToolUseIds].filter(id => !remainingToolResultIds.has(id));
   if (orphanIds.length === 0) return;
 
-  // Append synthetic tool_result blocks
+  // Append synthetic tool_result blocks for truly orphaned tool_use
   const syntheticResults: ContentBlock[] = orphanIds.map(id => ({
     type: 'tool_result' as const,
     toolUseId: id,

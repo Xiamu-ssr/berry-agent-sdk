@@ -296,7 +296,8 @@ describe('Agent', () => {
 
     expect(result.sessionId).toBe(created.id);
     expect(storedBeforeTurn?.messages).toEqual([]);
-    expect(storedBeforeTurn?.systemPrompt).toEqual(normalizeSystemPrompt(['base prompt']));
+    // systemPrompt is no longer on Session — verify through agent instead
+    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(['base prompt']));
     expect(idsBeforeTurn).toContain(created.id);
     expect(storedAfterTurn?.messages).toHaveLength(2);
     expect(storedAfterTurn?.messages[0]?.content).toBe('first turn');
@@ -344,7 +345,8 @@ describe('Agent', () => {
 
     expect(resumed.sessionId).toBe(first.sessionId);
     expect(forked.sessionId).not.toBe(first.sessionId);
-    expect(originalSession?.systemPrompt).toEqual(normalizeSystemPrompt(['override prompt']));
+    // systemPrompt override is query-time only, does not change the agent's base prompt
+    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(['base prompt']));
     expect(originalSession?.messages).toHaveLength(4);
     expect(forkedSession?.messages).toHaveLength(6);
     expect(forkedSession?.messages[0].content).toBe('first');

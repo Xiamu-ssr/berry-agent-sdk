@@ -30,6 +30,8 @@ export interface ToolResultContent {
 export interface ThinkingContent {
   type: 'thinking';
   thinking: string;
+  /** Anthropic thinking signature; must be preserved for multi-turn continuity */
+  signature?: string;
 }
 
 export interface ImageContent {
@@ -100,6 +102,44 @@ export function flattenSystemPrompt(
 
 // ----- Tools -----
 
+/**
+ * Tool group enum — semantic categorization for UI display and permission scoping.
+ * Set on `ToolDefinition.group`; defaults to `Other` when omitted.
+ */
+export enum ToolGroup {
+  /** File system read/write/list: read_file, write_file, edit_file, list_files */
+  File = 'file',
+  /** Command execution & process management: shell, process_list, etc. */
+  Shell = 'shell',
+  /** Code/content search within project: grep, find_files */
+  Search = 'search',
+  /** Internet access: web_search, web_fetch, browser */
+  Web = 'web',
+  /** Agent knowledge persistence: save_memory, save_discovery */
+  Memory = 'memory',
+  /** Multi-agent collaboration: spawn_teammate, message_leader, etc. */
+  Team = 'team',
+  /** Agent self-management: load_skill, delegate, todo_read/write, sleep */
+  Agent = 'agent',
+  /** Host platform operations: berry_status, berry_restart, etc. */
+  System = 'system',
+  /** Default / ungrouped (MCP dynamic tools, custom tools, etc.) */
+  Other = 'other',
+}
+
+/** Human-readable labels for each ToolGroup. */
+export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
+  [ToolGroup.File]: 'File',
+  [ToolGroup.Shell]: 'Shell',
+  [ToolGroup.Search]: 'Search',
+  [ToolGroup.Web]: 'Web',
+  [ToolGroup.Memory]: 'Memory',
+  [ToolGroup.Team]: 'Team',
+  [ToolGroup.Agent]: 'Agent',
+  [ToolGroup.System]: 'System',
+  [ToolGroup.Other]: 'Other',
+};
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -108,6 +148,8 @@ export interface ToolDefinition {
     properties: Record<string, unknown>;
     required?: string[];
   };
+  /** Tool group for categorization (defaults to Other). */
+  group?: ToolGroup;
 }
 
 export interface ToolRegistration {
@@ -180,10 +222,11 @@ export interface ProviderResolver {
   reportError?(err: unknown, hints?: { isTransient?: boolean; statusCode?: number }): void;
 
   /**
-   * Optional — reset state (e.g. when a new session starts). Core calls this
-   * at session boundary if defined. Useful for per-session stickiness.
+   * Optional — reset state (e.g. pointer/exhausted flag). Core calls this
+   * at the start of each query so transient errors from a previous query
+   * don't permanently brick the resolver.
    */
-  resetForSession?(sessionId: string): void;
+  resetForSession?(): void;
 }
 
 /** Convenience: input accepted by Agent.provider / AgentCreateConfig.provider. */
@@ -235,15 +278,12 @@ export interface TokenUsage {
 export interface Session {
   id: string;
   messages: Message[];
-  systemPrompt: SystemPromptBlock[];
   createdAt: number;
   lastAccessedAt: number;
   metadata: SessionMetadata;
 }
 
 export interface SessionMetadata {
-  cwd: string;
-  model: string;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens: number;
@@ -417,7 +457,7 @@ export interface ToolGuardContext {
   toolName: string;
   /** Input arguments */
   input: Record<string, unknown>;
-  /** Session info */
+  /** Session info — cwd and model come from the agent instance */
   session: { id: string; cwd: string; model: string };
   /** Sequential index of this tool call within the current query */
   callIndex: number;
@@ -481,8 +521,6 @@ export interface QueryOptions {
 
 /** Create an empty durable session before the first user turn arrives. */
 export interface CreateSessionOptions {
-  /** Optional initial system prompt override for the new session. */
-  systemPrompt?: SystemPromptInput;
 }
 
 /** JSON Schema for structured output */
@@ -577,6 +615,14 @@ export interface Middleware {
   onAfterApiCall?: (
     request: ProviderRequest,
     response: ProviderResponse,
+    context: MiddlewareContext,
+  ) => Promise<void> | void;
+
+  /** Called when a provider API call fails (after all retries are exhausted).
+   *  Observe collectors use this to record the failed call with error details. */
+  onApiCallError?: (
+    request: ProviderRequest,
+    error: unknown,
     context: MiddlewareContext,
   ) => Promise<void> | void;
 

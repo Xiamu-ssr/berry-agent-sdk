@@ -278,7 +278,8 @@ export interface GetEventsOptions {
 }
 
 /**
- * Append-only event log storage. Events are never modified or deleted.
+ * Append-only event log storage. Events are never modified or deleted
+ * (except by explicit `clear` for session reset).
  * Implementations must guarantee ordering: events are returned in append order.
  */
 export interface EventLogStore {
@@ -296,6 +297,13 @@ export interface EventLogStore {
 
   /** List all session IDs that have event logs. */
   listSessions(): Promise<string[]>;
+
+  /**
+   * Clear all events for a session. Used when the user explicitly resets
+   * (e.g. "clear chat") — this makes the event log empty so that
+   * resolveSession won't rebuild old messages from it.
+   */
+  clear(sessionId: string): Promise<void>;
 }
 
 // ----- Context Strategy Interface -----

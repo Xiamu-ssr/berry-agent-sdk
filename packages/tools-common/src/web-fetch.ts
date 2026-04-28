@@ -9,7 +9,7 @@
 //   5. Non-HTML: pretty-printed JSON or raw body
 
 import { NodeHtmlMarkdown } from 'node-html-markdown';
-import { TOOL_WEB_FETCH } from '@berry-agent/core';
+import { TOOL_WEB_FETCH, ToolGroup } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
 import * as net from 'node:net';
 import { promises as dns } from 'node:dns';
@@ -40,6 +40,7 @@ export function createWebFetchTool(options?: WebFetchToolOptions): ToolRegistrat
   return {
     definition: {
       name: TOOL_WEB_FETCH,
+      group: ToolGroup.Web,
       description:
         'Fetch a URL and extract readable content (powered by Mozilla Readability). Returns markdown or plain text.',
       inputSchema: {

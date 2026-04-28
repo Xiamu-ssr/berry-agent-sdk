@@ -25,7 +25,7 @@ export { executeTools } from './tool-executor.js';
 export type { ExecuteToolsParams, ExecuteToolsResult } from './tool-executor.js';
 
 // Compaction Runner
-export { shouldCompact, runCompaction, preCompactMemoryFlush } from './compaction-runner.js';
+export { shouldCompact, shouldSoftCompact, shouldHardCompact, currentContextTokens, runCompaction, preCompactMemoryFlush } from './compaction-runner.js';
 
 // Chat / Timeline (UI-friendly format)
 export { toChatMessages, toChatTimeline } from './chat.js';
@@ -73,6 +73,12 @@ export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';
 export { withRetry, isRetryableError, getRetryDelay, classifyError } from './utils/retry.js';
 export type { ErrorKind } from './utils/retry.js';
 
+// Command Executor (sandbox abstraction)
+export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from './executor.js';
+
+// Agent Scope (permission fact source)
+export { AgentScope } from './scope.js';
+
 // Credential store (secrets / API keys)
 export {
   DefaultCredentialStore,
@@ -86,6 +92,9 @@ export * from './constants.js';
 
 // Tool name constants (single source of truth)
 export * from './tool-names.js';
+
+// Tool group enum and labels
+export { ToolGroup, TOOL_GROUP_LABELS } from './types.js';
 
 // Types
 export type {

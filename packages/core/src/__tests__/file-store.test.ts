@@ -18,7 +18,6 @@ async function makeStore() {
 function makeSession(id: string): Session {
   return {
     id,
-    systemPrompt: ['test prompt'],
     createdAt: 1,
     lastAccessedAt: 2,
     messages: [
@@ -26,8 +25,6 @@ function makeSession(id: string): Session {
       { role: 'assistant', content: 'world', createdAt: 2 },
     ],
     metadata: {
-      cwd: '/tmp',
-      model: 'fake-model',
       totalInputTokens: 1,
       totalOutputTokens: 2,
       totalCacheReadTokens: 3,

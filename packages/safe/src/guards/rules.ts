@@ -2,7 +2,7 @@
 // Pre-built rule-based guards (Tier 0 — zero LLM cost)
 // ============================================================
 
-import type { ToolGuard, ToolGuardDecision } from '@berry-agent/core';
+import type { ToolGuard, ToolGuardDecision, AgentScope } from '@berry-agent/core';
 import { resolve, relative } from 'node:path';
 
 /**
@@ -97,5 +97,36 @@ export function compositeGuard(...guards: ToolGuard[]): ToolGuard {
       }
     }
     return modified ?? { action: 'allow' };
+  };
+}
+
+/**
+ * Write scope guard: restricts write_file and edit_file to paths
+ * within the agent's writable scope. Read operations are not restricted.
+ *
+ * Uses AgentScope as the single source of truth for writable paths.
+ * Shell commands are NOT checked here — OS-level sandbox handles them.
+ */
+export function writeScopeGuard(scope: AgentScope): ToolGuard {
+  const writeTools = new Set(['write_file', 'edit_file']);
+  const pathFields = ['path', 'file', 'filename'];
+
+  return async ({ toolName, input }) => {
+    if (!writeTools.has(toolName)) return { action: 'allow' };
+
+    for (const field of pathFields) {
+      const value = input[field];
+      if (typeof value !== 'string') continue;
+
+      // Resolve using projectDir as base (matches CC-style path resolution)
+      const resolved = resolve(scope.projectDir, value);
+      if (!scope.isWritable(resolved)) {
+        return {
+          action: 'deny',
+          reason: `Path "${value}" resolves to "${resolved}", which is outside writable scope. Writable: ${scope.writableRoots.join(', ')}`,
+        };
+      }
+    }
+    return { action: 'allow' };
   };
 }

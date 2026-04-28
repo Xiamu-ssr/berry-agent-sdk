@@ -26,36 +26,69 @@ import {
 } from './constants.js';
 
 /**
- * Determine whether compaction is needed before the next API call.
- *
- * Strategy:
- * - If we have real `inputTokens` from the last API response, use that.
- * - Otherwise, fall back to char-based estimate.
- *
- * Returns:
- * - 'hard' (>=85%): run all enabled layers (including LLM summarize)
- * - 'soft' (>=60%): run only cheap layers
- * - 'none': no compaction needed
+ * Determine the current full-context token count for compaction decisions.
+ * Uses the API-returned `lastInputTokens` (ground truth: system+tools+messages)
+ * when available, otherwise falls back to char-based estimate.
+ */
+export function currentContextTokens(params: {
+  session: Session;
+  systemPrompt: SystemPromptBlock[];
+}): number {
+  const { session, systemPrompt } = params;
+  const lastInput = session.metadata.lastInputTokens;
+  if (lastInput !== undefined && lastInput > 0) {
+    return lastInput;
+  }
+  return estimateTokens(session.messages) + estimateTokens_system(systemPrompt);
+}
+
+/**
+ * Whether soft compaction is needed (>=60% of context window).
+ * Soft compaction runs cheap layers only (clear thinking, truncate tool results, merge).
+ * Should be checked at **turn entry** — not inside the per-inference loop — to
+ * avoid breaking the prompt cache prefix on every iteration.
+ */
+export function shouldSoftCompact(params: {
+  session: Session;
+  systemPrompt: SystemPromptBlock[];
+  compactionConfig?: CompactionConfig;
+  contextWindow: number;
+}): boolean {
+  const { compactionConfig, contextWindow } = params;
+  const softThreshold = compactionConfig?.softThreshold ?? Math.floor(contextWindow * DEFAULT_SOFT_COMPACTION_RATIO);
+  return currentContextTokens(params) > softThreshold;
+}
+
+/**
+ * Whether hard compaction is needed (>=85% of context window).
+ * Hard compaction runs all layers including LLM summarize and truncate_oldest.
+ * Checked **before every LLM inference** in the agent loop to prevent
+ * prompt-too-long errors.
+ */
+export function shouldHardCompact(params: {
+  session: Session;
+  systemPrompt: SystemPromptBlock[];
+  compactionConfig?: CompactionConfig;
+  contextWindow: number;
+}): boolean {
+  const { compactionConfig, contextWindow } = params;
+  const hardThreshold = compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
+  return currentContextTokens(params) > hardThreshold;
+}
+
+/**
+ * @deprecated Use shouldSoftCompact() or shouldHardCompact() instead.
+ * Unified compaction check: returns 'hard' if over hard threshold,
+ * 'soft' if over soft threshold, 'none' otherwise.
  */
 export function shouldCompact(params: {
   session: Session;
+  systemPrompt: SystemPromptBlock[];
   compactionConfig?: CompactionConfig;
   contextWindow: number;
 }): 'none' | 'soft' | 'hard' {
-  const { session, compactionConfig, contextWindow } = params;
-  const hardThreshold = compactionConfig?.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
-  const softThreshold = compactionConfig?.softThreshold ?? Math.floor(contextWindow * DEFAULT_SOFT_COMPACTION_RATIO);
-
-  let currentTokens: number;
-  const lastInput = session.metadata.lastInputTokens;
-  if (lastInput !== undefined && lastInput > 0) {
-    currentTokens = lastInput;
-  } else {
-    currentTokens = estimateTokens(session.messages) + estimateTokens_system(session.systemPrompt);
-  }
-
-  if (currentTokens > hardThreshold) return 'hard';
-  if (currentTokens > softThreshold) return 'soft';
+  if (shouldHardCompact(params)) return 'hard';
+  if (shouldSoftCompact(params)) return 'soft';
   return 'none';
 }
 
@@ -96,7 +129,11 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
   } = params;
 
   const ctxWindow = compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-  const contextBefore = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
+  const messageTokensBefore = estimateTokens(session.messages);
+  // contextBefore is the full input tokens (system+tools+messages) from the last API response
+  const contextBefore = session.metadata.lastInputTokens ?? messageTokensBefore;
+  // Overhead = system_prompt + tools tokens (anything that isn't messages)
+  const nonMessageOverhead = Math.max(0, contextBefore - messageTokensBefore);
   const thresholdPct = contextBefore / ctxWindow;
   const layersForLevel = compactLevel === 'soft'
     ? (compactionConfig?.softLayers ?? DEFAULT_SOFT_LAYERS as unknown as CompactionLayer[])
@@ -120,9 +157,14 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
     ? await params.compactionStrategy.compact(session.messages, compactCfg, { contextWindow: ctxWindow })
     : await compact(session.messages, compactCfg, provider, forkCtx);
   const compactDuration = Date.now() - compactStart;
-  const contextAfter = estimateTokens(result.messages);
+  // contextAfter in full-input terms: system+tools overhead + compressed message tokens
+  const messageTokensAfter = estimateTokens(result.messages);
+  const contextAfter = nonMessageOverhead + messageTokensAfter;
   session.messages = result.messages;
   session.metadata.compactionCount++;
+
+  // tokensFreed in full-input terms
+  const tokensFreed = contextBefore - contextAfter;
 
   const triggerReason = compactLevel === 'soft'
     ? COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD
@@ -134,7 +176,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
     type: 'compaction_marker',
     strategy: triggerReason,
     triggerReason,
-    tokensFreed: result.tokensFreed,
+    tokensFreed,
     contextBefore,
     contextAfter,
     thresholdPct,
@@ -146,7 +188,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
   emit({
     type: 'compaction',
     layersApplied: result.layersApplied,
-    tokensFreed: result.tokensFreed,
+    tokensFreed,
     triggerReason,
     contextBefore,
     contextAfter,

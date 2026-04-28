@@ -65,6 +65,11 @@ describe('AnthropicProvider adapters', () => {
       role: 'assistant',
       content: [
         {
+          type: 'thinking',
+          thinking: 'hidden',
+          signature: '',
+        },
+        {
           type: 'text',
           text: 'let me inspect',
         },
@@ -131,7 +136,7 @@ describe('AnthropicProvider adapters', () => {
     expect(parsed).toEqual([
       { type: 'text', text: 'hello' },
       { type: 'tool_use', id: 'toolu_2', name: 'grep', input: { pattern: 'foo' } },
-      { type: 'thinking', thinking: 'considering' },
+      { type: 'thinking', thinking: 'considering', signature: 'sig' },
     ]);
   });
 
@@ -212,6 +217,7 @@ describe('OpenAIProvider adapters', () => {
     expect(wireMessages[2]).toEqual({
       role: 'assistant',
       content: 'checking',
+      reasoning_content: '',
       tool_calls: [
         {
           id: 'call_1',

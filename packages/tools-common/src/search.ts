@@ -3,18 +3,24 @@
 // ============================================================
 
 import { exec } from 'node:child_process';
-import type { ToolRegistration } from '@berry-agent/core';
-import { resolveScopedRelativePath, shellEscape } from './path.js';
+import type { ToolRegistration, ToolContext } from '@berry-agent/core';
+import { ToolGroup } from '@berry-agent/core';
+import { resolveClaudeCodeRelativePath, shellEscape } from './path.js';
 
 const MAX_OUTPUT = 10_000;
 
 /**
- * Create search tools (grep, find_files) scoped to a base directory.
+ * Create search tools (grep, find_files) scoped to a project directory (Claude Code style).
+ *
+ * Path rules:
+ *   "/path"     → relative to projectRoot
+ *   "path"      → relative to cwd (from ToolContext)
+ *   "//abs/path" → absolute path (must stay within projectRoot)
  */
-export function createSearchTools(baseDir: string): ToolRegistration[] {
+export function createSearchTools(projectRoot: string): ToolRegistration[] {
   const run = (cmd: string): Promise<{ content: string; isError?: boolean }> =>
     new Promise((resolve) => {
-      exec(cmd, { cwd: baseDir, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      exec(cmd, { cwd: projectRoot, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
         let output = stdout || '';
         if (stderr) output += (output ? '\n' : '') + stderr;
         if (!output && error) output = error.message;
@@ -27,7 +33,9 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
     {
       definition: {
         name: 'grep',
-        description: 'Search for a pattern in files using grep. Returns matching lines with file paths.',
+        group: ToolGroup.Search,
+        description: 'Search for a pattern in files using grep. Returns matching lines with file paths. ' +
+          'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -38,10 +46,11 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
           required: ['pattern'],
         },
       },
-      execute: async (input) => {
+      execute: async (input, context: ToolContext) => {
         try {
+          const cwd = context?.cwd ?? projectRoot;
           const pattern = input.pattern as string;
-          const path = resolveScopedRelativePath(baseDir, (input.path as string) || '.');
+          const path = resolveClaudeCodeRelativePath(projectRoot, cwd, (input.path as string) || '.');
           const include = typeof input.include === 'string'
             ? `--include=${shellEscape(input.include)}`
             : '';
@@ -54,7 +63,9 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
     {
       definition: {
         name: 'find_files',
-        description: 'Find files by name pattern. Returns matching file paths.',
+        group: ToolGroup.Search,
+        description: 'Find files by name pattern. Returns matching file paths. ' +
+          'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -65,10 +76,11 @@ export function createSearchTools(baseDir: string): ToolRegistration[] {
           required: ['pattern'],
         },
       },
-      execute: async (input) => {
+      execute: async (input, context: ToolContext) => {
         try {
+          const cwd = context?.cwd ?? projectRoot;
           const pattern = input.pattern as string;
-          const path = resolveScopedRelativePath(baseDir, (input.path as string) || '.');
+          const path = resolveClaudeCodeRelativePath(projectRoot, cwd, (input.path as string) || '.');
           const maxDepth = typeof input.maxDepth === 'number' && Number.isFinite(input.maxDepth)
             ? Math.max(0, Math.trunc(input.maxDepth))
             : undefined;

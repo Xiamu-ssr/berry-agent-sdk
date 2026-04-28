@@ -17,6 +17,7 @@ import {
   TOOL_SAVE_MEMORY,
   TOOL_SAVE_DISCOVERY,
 } from './tool-names.js';
+import { ToolGroup } from './types.js';
 
 /** Hard upper bound on a single sleep call, to stop agents sleeping forever. */
 export const SLEEP_MAX_SECONDS = 300; // 5 minutes
@@ -62,6 +63,7 @@ interface RuntimeToolOptions {
 
 const TODO_READ_DEFINITION: ToolDefinition = {
   name: TOOL_TODO_READ,
+  group: ToolGroup.Agent,
   description: 'Read the current per-session todo checklist.',
   inputSchema: {
     type: 'object',
@@ -71,6 +73,7 @@ const TODO_READ_DEFINITION: ToolDefinition = {
 
 const TODO_WRITE_DEFINITION: ToolDefinition = {
   name: TOOL_TODO_WRITE,
+  group: ToolGroup.Agent,
   description: 'Replace the current per-session todo checklist with a minimal set of items.',
   inputSchema: {
     type: 'object',
@@ -94,6 +97,7 @@ const TODO_WRITE_DEFINITION: ToolDefinition = {
 
 const SLEEP_DEFINITION: ToolDefinition = {
   name: TOOL_SLEEP,
+  group: ToolGroup.Agent,
   description:
     `Suspend yourself for up to ${SLEEP_MAX_SECONDS}s. Use this to wait for background jobs, rate-limit windows, or to poll external state on an interval. The sleep can be cut short by an external interject signal — you'll resume and continue reasoning immediately when that happens.`,
   inputSchema: {
@@ -110,6 +114,7 @@ const SLEEP_DEFINITION: ToolDefinition = {
 
 const SAVE_MEMORY_DEFINITION: ToolDefinition = {
   name: TOOL_SAVE_MEMORY,
+  group: ToolGroup.Memory,
   description:
     'Append an entry to your personal MEMORY.md. Use this to save ' +
     'decisions, preferences, context, or lessons that you want to recall in ' +
@@ -126,6 +131,7 @@ const SAVE_MEMORY_DEFINITION: ToolDefinition = {
 
 const SAVE_DISCOVERY_DEFINITION: ToolDefinition = {
   name: TOOL_SAVE_DISCOVERY,
+  group: ToolGroup.Memory,
   description:
     'Append a discovery to the shared project knowledge base ' +
     '(`.berry-discoveries.md` in the project root). Use this to record ' +

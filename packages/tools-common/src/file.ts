@@ -4,36 +4,43 @@
 
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { ToolRegistration } from '@berry-agent/core';
-import { resolveScopedPath } from './path.js';
+import type { ToolRegistration, ToolContext } from '@berry-agent/core';
+import { ToolGroup } from '@berry-agent/core';
+import { resolveClaudeCodePath } from './path.js';
 
 /**
- * Create file operation tools scoped to a base directory.
+ * Create file operation tools scoped to a project directory (Claude Code style).
  * Tools: read_file, write_file, list_files
+ *
+ * Path rules:
+ *   "/path"     → relative to projectRoot
+ *   "path"      → relative to cwd (from ToolContext)
+ *   "//abs/path" → absolute path (must stay within projectRoot)
  */
-export function createFileTools(baseDir: string): ToolRegistration[] {
-  const safePath = (p: string) => resolveScopedPath(baseDir, p);
-
+export function createFileTools(projectRoot: string): ToolRegistration[] {
   return [
     {
       definition: {
         name: 'read_file',
-        description: 'Read the contents of a file. Returns the file content as text.',
+        group: ToolGroup.File,
+        description: 'Read the contents of a file. Returns the file content as text. ' +
+          'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
         inputSchema: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: 'Relative path to the file' },
+            path: { type: 'string', description: 'Path to the file (Claude Code style: "/" = project root, no "/" = cwd-relative, "//" = absolute)' },
             offset: { type: 'number', description: 'Line number to start reading from (1-indexed)' },
             limit: { type: 'number', description: 'Maximum number of lines to read' },
           },
           required: ['path'],
         },
       },
-      execute: async (input) => {
+      execute: async (input, context: ToolContext) => {
         try {
-          const filePath = safePath(input.path as string);
-          const content = await readFile(filePath, 'utf-8');
-          const lines = content.split('\n');
+          const cwd = context?.cwd ?? projectRoot;
+          const filePath = resolveClaudeCodePath(projectRoot, cwd, input.path as string);
+          const fileContent = await readFile(filePath, 'utf-8');
+          const lines = fileContent.split('\n');
           const offset = ((input.offset as number) ?? 1) - 1;
           const limit = (input.limit as number) ?? lines.length;
           const slice = lines.slice(offset, offset + limit).join('\n');
@@ -48,22 +55,25 @@ export function createFileTools(baseDir: string): ToolRegistration[] {
     {
       definition: {
         name: 'write_file',
-        description: 'Write content to a file. Creates parent directories if needed.',
+        group: ToolGroup.File,
+        description: 'Write content to a file. Creates parent directories if needed. ' +
+          'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
         inputSchema: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: 'Relative path to the file' },
+            path: { type: 'string', description: 'Path to the file (Claude Code style)' },
             content: { type: 'string', description: 'Content to write' },
           },
           required: ['path', 'content'],
         },
       },
-      execute: async (input) => {
+      execute: async (input, context: ToolContext) => {
         try {
-          const filePath = safePath(input.path as string);
+          const cwd = context?.cwd ?? projectRoot;
+          const filePath = resolveClaudeCodePath(projectRoot, cwd, input.path as string);
           await mkdir(dirname(filePath), { recursive: true });
           await writeFile(filePath, input.content as string, 'utf-8');
-          return { content: `Written ${(input.content as string).length} bytes to ${input.path}` };
+          return { content: `Written ${(input.content as string).length} bytes to ${filePath}` };
         } catch (err) {
           return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
         }
@@ -72,17 +82,20 @@ export function createFileTools(baseDir: string): ToolRegistration[] {
     {
       definition: {
         name: 'list_files',
-        description: 'List files and directories in a given path.',
+        group: ToolGroup.File,
+        description: 'List files and directories in a given path. ' +
+          'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
         inputSchema: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: 'Relative directory path (default: ".")' },
+            path: { type: 'string', description: 'Directory path (Claude Code style, default: ".")' },
           },
         },
       },
-      execute: async (input) => {
+      execute: async (input, context: ToolContext) => {
         try {
-          const dirPath = safePath((input.path as string) ?? '.');
+          const cwd = context?.cwd ?? projectRoot;
+          const dirPath = resolveClaudeCodePath(projectRoot, cwd, (input.path as string) ?? '.');
           const entries = await readdir(dirPath, { withFileTypes: true });
           const lines = entries.map(e => {
             const prefix = e.isDirectory() ? '📁 ' : '📄 ';

@@ -3,9 +3,9 @@
 // ============================================================
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { TOOL_EDIT_FILE } from '@berry-agent/core';
-import type { ToolRegistration } from '@berry-agent/core';
-import { resolveScopedPath } from './path.js';
+import { TOOL_EDIT_FILE, ToolGroup } from '@berry-agent/core';
+import type { ToolRegistration, ToolContext } from '@berry-agent/core';
+import { resolveClaudeCodePath } from './path.js';
 
 interface Edit {
   oldText: string;
@@ -13,21 +13,26 @@ interface Edit {
 }
 
 /**
- * Create an edit_file tool scoped to a base directory.
+ * Create an edit_file tool scoped to a project directory (Claude Code style).
  * Performs exact text replacements — each oldText must be unique in the file.
+ *
+ * Path rules:
+ *   "/path"     → relative to projectRoot
+ *   "path"      → relative to cwd (from ToolContext)
+ *   "//abs/path" → absolute path (must stay within projectRoot)
  */
-export function createEditFileTool(baseDir: string): ToolRegistration {
-  const safePath = (p: string) => resolveScopedPath(baseDir, p);
-
+export function createEditFileTool(projectRoot: string): ToolRegistration {
   return {
     definition: {
       name: TOOL_EDIT_FILE,
+      group: ToolGroup.File,
       description:
-        'Apply exact text replacements to a file. Each oldText must appear exactly once in the file.',
+        'Apply exact text replacements to a file. Each oldText must appear exactly once in the file. ' +
+        'Use "/path" for project-root-relative, "path" for cwd-relative, "//abs/path" for absolute.',
       inputSchema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative path to the file' },
+          path: { type: 'string', description: 'Path to the file (Claude Code style)' },
           edits: {
             type: 'array',
             description: 'Array of { oldText, newText } replacements',
@@ -44,9 +49,10 @@ export function createEditFileTool(baseDir: string): ToolRegistration {
         required: ['path', 'edits'],
       },
     },
-    execute: async (input) => {
+    execute: async (input, context: ToolContext) => {
       try {
-        const filePath = safePath(input.path as string);
+        const cwd = context?.cwd ?? projectRoot;
+        const filePath = resolveClaudeCodePath(projectRoot, cwd, input.path as string);
         const edits = input.edits as Edit[];
         let content = await readFile(filePath, 'utf-8');
         const applied: string[] = [];
@@ -75,7 +81,7 @@ export function createEditFileTool(baseDir: string): ToolRegistration {
         }
 
         await writeFile(filePath, content, 'utf-8');
-        return { content: `Applied ${edits.length} edit(s) to ${input.path}:\n${applied.join('\n')}` };
+        return { content: `Applied ${edits.length} edit(s) to ${filePath}:\n${applied.join('\n')}` };
       } catch (err) {
         return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
       }

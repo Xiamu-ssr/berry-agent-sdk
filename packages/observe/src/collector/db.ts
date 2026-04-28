@@ -146,6 +146,8 @@ export function createDatabase(dbPath: string = ':memory:'): ObserveDB {
     'ALTER TABLE turns ADD COLUMN recovered_from_crash INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE turns ADD COLUMN orphaned_tool_count INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE turns ADD COLUMN previous_turn_id TEXT',
+    // v0.4+: record failed API calls
+    'ALTER TABLE llm_calls ADD COLUMN error_message TEXT',
   ];
   for (const stmt of migrations) {
     try { db.run(sql.raw(stmt)); } catch { /* column already exists */ }

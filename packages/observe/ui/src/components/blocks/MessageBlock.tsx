@@ -34,6 +34,8 @@ interface ThinkingBlock {
 }
 interface ImageBlock {
   type: 'image';
+  mediaType?: string;
+  data?: string;
   source?: { type: string; media_type?: string; data?: string; url?: string };
 }
 
@@ -162,10 +164,26 @@ function ThinkingCard({ text }: { text: string }) {
 
 // ---- Image ----
 function ImageCard({ block }: { block: ImageBlock }) {
+  const mediaType = block.mediaType ?? block.source?.media_type ?? 'unknown';
+  const data = block.data ?? block.source?.data;
+  const dataUrl = data && mediaType !== 'unknown'
+    ? `data:${mediaType};base64,${data}`
+    : block.source?.url;
+
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-      <Image size={14} />
-      <span>Image ({block.source?.media_type ?? 'unknown'})</span>
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-2">
+      <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <Image size={14} />
+        <span>Image ({mediaType})</span>
+      </div>
+      {dataUrl && (
+        <img
+          src={dataUrl}
+          alt="User uploaded image"
+          className="max-w-full max-h-64 rounded object-contain"
+          loading="lazy"
+        />
+      )}
     </div>
   );
 }

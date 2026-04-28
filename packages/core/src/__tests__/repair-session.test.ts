@@ -61,10 +61,15 @@ async function seedSession(agent: Agent, id: string, messages: Session['messages
   const session: Session = {
     id,
     messages,
-    systemPrompt: ['test'],
     createdAt: Date.now(),
     lastAccessedAt: Date.now(),
-    metadata: { cwd: '/tmp', model: 'fake-model' },
+    metadata: {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      compactionCount: 0,
+    },
   };
   await store.save(session);
 }

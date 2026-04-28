@@ -27,6 +27,7 @@ export interface ExecuteToolsParams {
   makeBase: () => { id: string; timestamp: number; sessionId: string; turnId?: string };
   middlewareContext: MiddlewareContext;
   cwd: string;
+  model: string;
   abortSignal?: AbortSignal;
 }
 
@@ -51,6 +52,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
     makeBase,
     middlewareContext: mwCtx,
     cwd,
+    model,
     abortSignal,
   } = params;
 
@@ -93,8 +95,8 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
           input: toolUse.input,
           session: {
             id: session.id,
-            cwd: session.metadata.cwd,
-            model: session.metadata.model,
+            cwd,
+            model,
           },
           callIndex: toolCalls,
         });

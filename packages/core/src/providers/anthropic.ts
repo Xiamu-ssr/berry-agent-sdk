@@ -324,37 +324,41 @@ export class AnthropicProvider implements Provider {
       return { role: 'user', content: [block] };
     }
 
-    const content: ContentBlockParam[] = msg.content.map((block, idx) => {
-      const isLast = idx === msg.content.length - 1;
-      const cache = addCache && isLast
-        ? { cache_control: { type: 'ephemeral' as const } }
-        : {};
+    // Anthropic requires tool_result blocks to come FIRST in the user message,
+    // with any text / image blocks AFTER all tool_results.
+    const toolResults: ContentBlockParam[] = [];
+    const otherBlocks: ContentBlockParam[] = [];
 
-      if (block.type === 'text') {
-        return { type: 'text' as const, text: block.text, ...cache };
-      }
+    for (const block of msg.content) {
       if (block.type === 'tool_result') {
-        return {
+        toolResults.push({
           type: 'tool_result' as const,
           tool_use_id: (block as ToolResultContent).toolUseId,
           content: (block as ToolResultContent).content,
           is_error: (block as ToolResultContent).isError ?? false,
-          ...cache,
-        } as ToolResultBlockParam;
-      }
-      if (block.type === 'image') {
-        return {
+        } as ToolResultBlockParam);
+      } else if (block.type === 'text') {
+        otherBlocks.push({ type: 'text' as const, text: block.text });
+      } else if (block.type === 'image') {
+        otherBlocks.push({
           type: 'image' as const,
           source: {
             type: 'base64' as const,
             media_type: (block as ImageContent).mediaType,
             data: (block as ImageContent).data,
           },
-          ...cache,
-        } as unknown as ContentBlockParam;
+        } as unknown as ContentBlockParam);
+      } else {
+        otherBlocks.push({ type: 'text' as const, text: JSON.stringify(block) });
       }
-      return { type: 'text' as const, text: JSON.stringify(block), ...cache };
-    });
+    }
+
+    const content: ContentBlockParam[] = [...toolResults, ...otherBlocks];
+
+    if (addCache && content.length > 0) {
+      const last = content[content.length - 1]!;
+      (last as TextBlockParam & { cache_control?: unknown }).cache_control = { type: 'ephemeral' as const };
+    }
 
     return { role: 'user', content };
   }
@@ -369,28 +373,35 @@ export class AnthropicProvider implements Provider {
       return { role: 'assistant', content: [block] };
     }
 
-    const content: ContentBlockParam[] = msg.content
-      .filter(block => block.type !== 'thinking')
-      .map((block, idx, arr) => {
-        const isLast = idx === arr.length - 1;
-        const cache = addCache && isLast
-          ? { cache_control: { type: 'ephemeral' as const } }
-          : {};
+    const content: ContentBlockParam[] = msg.content.map((block, idx, arr) => {
+      const isLast = idx === arr.length - 1;
+      const cache = addCache && isLast
+        ? { cache_control: { type: 'ephemeral' as const } }
+        : {};
 
-        if (block.type === 'text') {
-          return { type: 'text' as const, text: block.text, ...cache };
-        }
-        if (block.type === 'tool_use') {
-          return {
-            type: 'tool_use' as const,
-            id: (block as ToolUseContent).id,
-            name: (block as ToolUseContent).name,
-            input: (block as ToolUseContent).input,
-            ...cache,
-          } as ToolUseBlockParam;
-        }
-        return { type: 'text' as const, text: JSON.stringify(block), ...cache };
-      });
+      if (block.type === 'text') {
+        return { type: 'text' as const, text: block.text, ...cache };
+      }
+      if (block.type === 'tool_use') {
+        return {
+          type: 'tool_use' as const,
+          id: (block as ToolUseContent).id,
+          name: (block as ToolUseContent).name,
+          input: (block as ToolUseContent).input,
+          ...cache,
+        } as ToolUseBlockParam;
+      }
+      if (block.type === 'thinking') {
+        const t = block as ThinkingContent;
+        return {
+          type: 'thinking' as const,
+          thinking: t.thinking,
+          signature: t.signature ?? '',
+          ...cache,
+        } as unknown as ContentBlockParam;
+      }
+      return { type: 'text' as const, text: JSON.stringify(block), ...cache };
+    });
 
     return { role: 'assistant', content };
   }
@@ -432,9 +443,11 @@ export class AnthropicProvider implements Provider {
         } as ToolUseContent;
       }
       if (block.type === 'thinking') {
+        const b = block as unknown as { thinking?: string; signature?: string };
         return {
           type: 'thinking',
-          thinking: (block as unknown as ThinkingBlock).thinking ?? '',
+          thinking: b.thinking ?? '',
+          signature: b.signature,
         } as ThinkingContent;
       }
       return { type: 'text', text: JSON.stringify(block) } as TextContent;
@@ -454,9 +467,11 @@ export class AnthropicProvider implements Provider {
       };
     }
     if (block.type === 'thinking') {
+      const b = block as unknown as { thinking?: string; signature?: string };
       return {
         type: 'thinking',
-        thinking: (block as unknown as ThinkingBlock).thinking ?? '',
+        thinking: b.thinking ?? '',
+        signature: b.signature,
       };
     }
     return undefined;
