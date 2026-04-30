@@ -1,8 +1,40 @@
 # Changelog
 
-All notable changes to Berry Agent SDK.
+All notable changes to Berry Agent SDK. Packages ship independently; each
+entry scopes its changes to a specific `@berry-agent/*` package + version.
 
-## [0.4.0-alpha.1] — 2026-04-22
+## [@berry-agent/mcp 0.3.1-alpha.0] — 2026-04-29
+
+### Fixed
+
+- Sanitize upstream MCP tool names before forwarding to providers.
+  Anthropic / OpenAI / Moonshot / OpenRouter enforce function names
+  matching `^[a-zA-Z][a-zA-Z0-9_-]*$`. Servers that expose dotted or
+  colon-separated names (e.g. `product-project.create_draft`) caused
+  every inference with tools to fail with `invalid_request_error`.
+  `createMCPTools` now rewrites disallowed characters to `_`, warns on
+  rewrite, and detects sanitization collisions. Dispatch still uses the
+  original upstream name, so MCP routing is unchanged.
+
+### Changed
+
+- `ToolRegistration.source` now carries `{ kind: 'mcp', server }`
+  provenance so downstream UIs can attribute tools without re-parsing
+  the `${prefix}name` convention.
+
+## [@berry-agent/models 0.1.0-alpha.0] — 2026-04-29
+
+### Added
+
+- First publish. Unified model registry + provider tier resolution.
+
+## [@berry-agent/team 0.1.0-alpha.0] — 2026-04-29
+
+### Added
+
+- First publish. Multi-agent team orchestration (worklist, roles, leader).
+
+## [@berry-agent/memory-file, core, observe, safe, tools-common 0.4.0-alpha.1] — 2026-04-22
 
 ### Changed — Crash recovery is now SDK-internal
 
@@ -51,7 +83,6 @@ sessionId` as a query option.
 
 - `docs/DURABILITY.md` rewritten to describe the v0.4 design (English).
 - `docs/DURABILITY.zh.md` aligned with EN.
-- `docs/V0.4-PLAN.md` tracks the phased refactor for audit.
 
 ---
 

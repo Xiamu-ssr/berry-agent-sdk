@@ -91,7 +91,17 @@ function parseFrontmatter(fm: Record<string, any>, dirName: string): SkillMeta {
       ? Boolean(fm['user-invocable'])
       : true,
     paths: asStringArray(fm.paths),
+    source: asSkillSource(fm.source),
+    authorAgent: asString(fm.author_agent) ?? asString(fm['author-agent']) ?? asString(fm.authorAgent),
+    createdAt: asString(fm.created_at) ?? asString(fm['created-at']) ?? asString(fm.createdAt),
   };
+}
+
+function asSkillSource(v: unknown): SkillMeta['source'] {
+  if (v === 'global' || v === 'user' || v === 'market' || v === 'self-authored') {
+    return v;
+  }
+  return undefined;
 }
 
 /**
@@ -104,6 +114,14 @@ export function buildSkillIndex(skills: Skill[]): string {
   const entries = skills.map(s => {
     let entry = `- ${s.meta.name}: ${s.meta.description}`;
     if (s.meta.whenToUse) entry += ` (use when: ${s.meta.whenToUse})`;
+    // Mark self-authored skills so the agent sees its own provenance and can
+    // reason about trust / staleness when deciding whether to load_skill.
+    if (s.meta.source === 'self-authored') {
+      const parts: string[] = ['self-authored'];
+      if (s.meta.authorAgent) parts.push(`by ${s.meta.authorAgent}`);
+      if (s.meta.createdAt) parts.push(s.meta.createdAt.slice(0, 10));
+      entry += ` [${parts.join(', ')}]`;
+    }
     return entry;
   });
 

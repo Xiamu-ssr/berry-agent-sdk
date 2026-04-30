@@ -16,13 +16,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@berry-agent/core": ">=0.1.0",
-    "playwright-core": ">=1.50.0"
-  },
-  "peerDependenciesMeta": {
-    "playwright-core": {
-      "optional": true
-    }
+    "@berry-agent/core": ">=0.1.0"
   },
   "devDependencies": {
     "@berry-agent/core": "*",

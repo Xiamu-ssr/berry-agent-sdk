@@ -20,6 +20,21 @@ export interface SkillMeta {
   userInvocable?: boolean;
   /** File path patterns for conditional activation. */
   paths?: string[];
+  /**
+   * Provenance of this skill. Informational only — the SDK does not route
+   * on this field; consumers (e.g. berry-claw) use it to decide how to
+   * surface the skill in UIs and in the system-prompt index.
+   *
+   *   'global'         — installed into a shared pool by the host product
+   *   'user'           — hand-placed by the user in a per-agent dir
+   *   'market'         — installed via a skill market / registry
+   *   'self-authored'  — produced by an agent for itself (auto-distilled)
+   */
+  source?: 'global' | 'user' | 'market' | 'self-authored';
+  /** When source === 'self-authored', the agent id that authored this skill. */
+  authorAgent?: string;
+  /** ISO-8601 date/time the skill was first authored or installed. */
+  createdAt?: string;
 }
 
 /** A fully loaded skill (meta + content). */

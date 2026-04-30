@@ -4,11 +4,13 @@ TypeScript Agent Harness SDK — the infrastructure layer for building autonomou
 
 ```
 @berry-agent/core          Agent loop, providers, compaction, skills, delegate/spawn
-@berry-agent/tools-common  10 pre-built tools (file, shell, search, web, browser)
+@berry-agent/tools-common  Pre-built tools (file, shell, search, web, browser)
 @berry-agent/observe       Full-stack observability (SQLite + analyzers + REST + dashboard UI)
 @berry-agent/safe          Guards, LLM classifier, PI probe, audit
 @berry-agent/mcp           MCP client → Berry tool adapter
-@berry-agent/memory        Memory backends (file, mem0, zep) with unified interface
+@berry-agent/memory-file   File-system memory provider (chunked markdown + retrieval)
+@berry-agent/models        Unified model registry & provider tier resolution
+@berry-agent/team          Multi-agent team orchestration (worklist, roles, leader)
 ```
 
 ## Install
@@ -16,7 +18,8 @@ TypeScript Agent Harness SDK — the infrastructure layer for building autonomou
 ```bash
 npm install @berry-agent/core @berry-agent/tools-common
 # Optional:
-npm install @berry-agent/observe @berry-agent/safe @berry-agent/mcp @berry-agent/memory
+npm install @berry-agent/observe @berry-agent/safe @berry-agent/mcp
+npm install @berry-agent/memory-file @berry-agent/models @berry-agent/team
 ```
 
 ## Quick Start
@@ -132,19 +135,19 @@ Your App (e.g., berry-claw)
 @berry-agent/mcp           ← MCP integration (peer dep on core)
 ```
 
-## Numbers
+## Status
 
-- **Source**: ~9,600 lines across 6 packages + UI
-- **Tests**: 257 (21 test files), all passing
-- **Status**: Alpha (v0.3.0-alpha.0)
+Alpha. Packages ship on the `alpha` dist-tag and share no single version —
+each package (`@berry-agent/core`, `mcp`, `memory-file`, `observe`, `safe`,
+`tools-common`, `models`, `team`) is versioned independently.
 
 ## Development
 
 ```bash
 npm install
 npm run build          # Build all packages
-npm test               # Run all unit tests (257)
-npm run test:integration  # Run integration tests (requires API keys)
+npm test               # Run unit tests
+npm run test:integration  # Integration tests (requires API keys)
 ```
 
 ## Roadmap

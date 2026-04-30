@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFileTools, createShellTool, createShellTools, createSearchTools, createAllTools, createEditFileTool, createWebFetchTool, createWebSearchTool } from '../index.js';
+import { COMMON_TOOL_NAMES } from '@berry-agent/core';
 
 let tmpDir: string;
 let siblingDir: string;
@@ -389,29 +390,15 @@ describe('web_search tool', () => {
   });
 });
 
-describe('browser tool', () => {
-  it('creates tool with correct definition', async () => {
-    const { createBrowserTool } = await import('../browser.js');
-    const tool = createBrowserTool();
-    expect(tool.definition.name).toBe('browser');
-    expect(tool.definition.inputSchema.required).toContain('action');
-  });
-
-  it('returns error when playwright is not installed', async () => {
-    // In CI / test env without playwright browsers, the tool should error gracefully
-    const { createBrowserTool } = await import('../browser.js');
-    const tool = createBrowserTool();
-    const result = await tool.execute({ action: 'navigate', url: 'https://example.com' }, { cwd: '.' });
-    // Either playwright isn't installed or browsers aren't available — both produce isError
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('Error');
-  });
-});
-
 describe('createAllTools', () => {
   it('returns file, shell/process, and search tools together', () => {
     const tools = createAllTools(tmpDir);
-    expect(tools).toHaveLength(12);
+    // Single source of truth: COMMON_TOOL_NAMES. Note web_search/web_fetch
+    // are *not* part of createAllTools (they're exposed via separate
+    // factories), so we subtract them from the expected count.
+    const webTools = ['web_search', 'web_fetch'];
+    const expectedCount = COMMON_TOOL_NAMES.filter(n => !webTools.includes(n)).length;
+    expect(tools).toHaveLength(expectedCount);
     const names = tools.map(t => t.definition.name);
     expect(names).toContain('read_file');
     expect(names).toContain('write_file');

@@ -58,7 +58,6 @@ export const TOOL_GREP = 'grep' as const;
 export const TOOL_FIND_FILES = 'find_files' as const;
 export const TOOL_WEB_SEARCH = 'web_search' as const;
 export const TOOL_WEB_FETCH = 'web_fetch' as const;
-export const TOOL_BROWSER = 'browser' as const;
 
 /** All core built-in tool names. */
 export const CORE_TOOL_NAMES = [
@@ -76,5 +75,5 @@ export const COMMON_TOOL_NAMES = [
   TOOL_READ_FILE, TOOL_WRITE_FILE, TOOL_EDIT_FILE, TOOL_LIST_FILES,
   TOOL_SHELL, TOOL_PROCESS_LIST, TOOL_PROCESS_POLL, TOOL_PROCESS_LOG, TOOL_PROCESS_WRITE, TOOL_PROCESS_KILL,
   TOOL_GREP, TOOL_FIND_FILES,
-  TOOL_WEB_SEARCH, TOOL_WEB_FETCH, TOOL_BROWSER,
+  TOOL_WEB_SEARCH, TOOL_WEB_FETCH,
 ] as const;

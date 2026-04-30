@@ -98,6 +98,7 @@ export class Agent {
   private tools: Map<string, ToolRegistration>;
   private legacySkills: string[];  // deprecated: raw .md paths
   private skillDirs: string[];
+  private disabledSkills: Set<string>;
   private loadedSkills: Skill[] | null = null;  // lazy-loaded
   private cwd: string;
   private sessionStore: SessionStore;
@@ -224,6 +225,7 @@ export class Agent {
     this.tools = new Map();
     this.legacySkills = [];
     this.skillDirs = config.skillDirs ?? [];
+    this.disabledSkills = new Set(config.disabledSkills ?? []);
     this.cwd = config.cwd ?? process.cwd();
     this.compactionConfig = config.compaction;
     this.compactionStrategy = config.compactionStrategy;
@@ -405,6 +407,7 @@ export class Agent {
       systemPrompt: config.systemPrompt ?? 'You are a helpful AI assistant.',
       tools: config.tools,
       skillDirs: config.skillDirs,
+      disabledSkills: config.disabledSkills,
       cwd,
       sessionStore,
       compaction: config.compaction,
@@ -951,20 +954,42 @@ export class Agent {
   /**
    * Switch the model used by this agent. Keeps the same provider type/key/baseUrl,
    * only changes the model identifier sent to the API.
+   *
+   * Like switchProvider(), this drops any attached resolver — otherwise the
+   * new model would be rolled back on the next inference when the resolver
+   * re-derives its (stale) config. Callers needing failover should pass a
+   * fresh ProviderResolver via switchProvider() instead.
    */
   switchModel(model: string): void {
+    this.providerResolver = null;
     this.providerConfig = { ...this.providerConfig, model };
     this.provider = createProvider(this.providerConfig);
   }
 
   /**
-   * Switch the entire provider (type/key/baseUrl/model) at runtime.
-   * Sessions are preserved. This is the low-level method — prefer
-   * switchModel() for simple model changes.
+   * Replace the agent's provider state at runtime. Accepts either a static
+   * ProviderConfig or a full ProviderResolver. Sessions are preserved.
+   *
+   * There is only ever ONE provider state source on an Agent: `providerConfig`
+   * (and optionally `providerResolver`, which re-derives providerConfig on
+   * every inference). Callers who swap the provider must replace BOTH or the
+   * resolver's closure will silently roll the new config back on the next
+   * inference (see refreshProviderIfNeeded).
+   *
+   * - Static ProviderConfig → drops any attached resolver (failover off until
+   *   a new resolver is supplied).
+   * - ProviderResolver → replaces the attached resolver; initial config is
+   *   taken from `resolve()`.
    */
-  switchProvider(config: ProviderConfig): void {
-    this.providerConfig = config;
-    this.provider = createProvider(config);
+  switchProvider(input: ProviderInput): void {
+    if (isProviderResolver(input)) {
+      this.providerResolver = input as ProviderResolver;
+      this.providerConfig = this.providerResolver.resolve();
+    } else {
+      this.providerResolver = null;
+      this.providerConfig = input as ProviderConfig;
+    }
+    this.provider = createProvider(this.providerConfig);
   }
 
   /** Get current provider config (read-only) */
@@ -1675,9 +1700,10 @@ export class Agent {
       allSkills.push(...skills);
     }
 
-    // Deduplicate by name (first wins)
+    // Filter out disabled skills, then deduplicate by name (first wins)
     const seen = new Set<string>();
     this.loadedSkills = allSkills.filter(s => {
+      if (this.disabledSkills.has(s.meta.name)) return false;
       if (seen.has(s.meta.name)) return false;
       seen.add(s.meta.name);
       return true;

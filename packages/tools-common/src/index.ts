@@ -28,8 +28,6 @@ export { createWebFetchTool } from './web-fetch.js';
 export { createWebSearchTool } from './web-search.js';
 export type { SearchProvider, SearchResult, WebSearchConfig, WebSearchProviderName, CredentialKeyMeta } from './web-search.js';
 export { WEB_SEARCH_CREDENTIAL_KEYS, WEB_SEARCH_CREDENTIAL_META } from './web-search.js';
-export { createBrowserTool } from './browser.js';
-export type { BrowserAction, BrowserToolOptions } from './browser.js';
 
 /**
  * Create all common tools (file + edit + shell + search) scoped to a project directory.
@@ -42,11 +40,13 @@ export type { BrowserAction, BrowserToolOptions } from './browser.js';
  *   "path"      → relative to cwd (from ToolContext)
  *   "//abs/path" → absolute path (must stay within scope)
  *
- * web_search, web_fetch, and browser are NOT included — use their factory functions separately.
+ * web_search and web_fetch are NOT included — use their factory functions separately.
+ * Browser automation is now provided via MCP (e.g. `@playwright/mcp`), not as a
+ * built-in tool in tools-common.
  */
 export function createAllTools(scopeOrRoot: AgentScope | string, shellOptions?: ShellToolOptions): ToolRegistration[] {
   const scope = typeof scopeOrRoot === 'string'
-    ? new AgentScope(scopeOrRoot, scopeOrRoot)
+    ? AgentScope.fromRoot(scopeOrRoot)
     : scopeOrRoot;
   const projectDir = scope.projectDir;
   return [

@@ -155,6 +155,19 @@ export interface ToolDefinition {
 export interface ToolRegistration {
   definition: ToolDefinition;
   execute: (input: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>;
+  /**
+   * Provenance of the tool. Omitted means built-in (the tool was registered
+   * by the application directly, not via an adapter). `kind: 'mcp'` is
+   * stamped by {@link createMCPTools} / {@link createMCPCenterTools} and
+   * carries the upstream server name so the UI / fact layer can attribute
+   * tools back to their source without re-parsing the `${prefix}toolName`
+   * convention.
+   */
+  source?: {
+    kind: 'builtin' | 'mcp';
+    /** MCP server name (upstream, no prefix). Only set when `kind === 'mcp'`. */
+    server?: string;
+  };
 }
 
 export interface ToolContext {
@@ -322,6 +335,13 @@ export interface AgentConfig {
   tools?: ToolRegistration[];
   /** Directories containing skills (each subdirectory has a SKILL.md). */
   skillDirs?: string[];
+  /**
+   * Skill names to exclude from loading. Applied after discovery from
+   * `skillDirs`, before dedup. Generic runtime filter — the product
+   * embedding the SDK decides what semantics (whitelist / blacklist) to
+   * project onto this list.
+   */
+  disabledSkills?: string[];
   cwd?: string;
   /** Compaction config */
   compaction?: CompactionConfig;
@@ -418,6 +438,8 @@ export interface AgentCreateConfig {
   tools?: ToolRegistration[];
   /** Skill directories. */
   skillDirs?: string[];
+  /** Skill names to exclude from loading. */
+  disabledSkills?: string[];
   /** Working directory (default: process.cwd()). */
   cwd?: string;
   /** Session store (default: FileSessionStore at `{cwd}/.berry-sessions/`). */
