@@ -10,7 +10,7 @@
 //   core              → defines CommandExecutor
 //   tools-common      → implements NodeExecutor (default, no sandbox)
 //   safe              → implements SandboxedExecutor (Seatbelt / bubblewrap)
-//   berry-claw        → picks which executor to inject
+//   host product      → picks which executor to inject
 
 // ===== Types =====
 

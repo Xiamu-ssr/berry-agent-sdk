@@ -6,7 +6,7 @@
 // catalogs should be refreshed live via `listModels()` when the provider
 // supports it.
 //
-// Adding a preset: PR-friendly, backwards compatible, data-only.
+// Adding a preset should be data-only.
 
 import type { ProviderPreset } from './types.js';
 

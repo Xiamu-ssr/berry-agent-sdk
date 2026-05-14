@@ -8,8 +8,8 @@
 //   model:X  → ProviderResolver (Layer 2)
 //   raw:...  → ProviderConfig   (bypasses models entirely)
 //
-// berry-claw wires this into its agent-manager so user config strings map
-// onto whichever of core's two accepted provider shapes is appropriate.
+// Host products wire this into their agent registry so user config strings
+// map onto whichever of core's two accepted provider shapes is appropriate.
 
 import type { ProviderInput, ProviderConfig, ProviderResolver } from '@berry-agent/core';
 import type { ModelsRegistry } from './types.js';

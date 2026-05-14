@@ -43,9 +43,7 @@ export interface AssistantMessageEvent extends BaseEvent {
   content: ContentBlock[];
 }
 
-/** A tool invocation (before execution). 
- *  @deprecated Removed in v1.6. Use ToolUseStartEvent.
- *  Type kept as a narrow alias for log-reading backward compatibility. */
+/** A compact tool invocation event. Prefer ToolUseStartEvent for status-rich logs. */
 export interface ToolUseEvent extends BaseEvent {
   type: 'tool_use';
   name: string;
@@ -86,10 +84,7 @@ export type { CompactionTriggerReason };
 /** Marker inserted when compaction occurs. Events before the last marker can be skipped for context building. */
 export interface CompactionMarkerEvent extends BaseEvent {
   type: 'compaction_marker';
-  /**
-   * Legacy field kept for backward compatibility.
-   * Mirrors triggerReason when the marker is produced by core.
-   */
+  /** Short trigger id; mirrors triggerReason when produced by core. */
   strategy: string;
   /** Structured trigger reason for UI rendering / analytics. */
   triggerReason?: CompactionTriggerReason;
@@ -143,6 +138,17 @@ export interface MessagesSnapshotEvent extends BaseEvent {
   reason: 'turn_end' | 'manual_compact' | 'auto_compact' | 'fork';
 }
 
+/** Provenance summary for the provider context committed by the SDK. */
+export interface ContextManifest {
+  promptPackVersion: string;
+  messageSource: 'messages.json';
+  messageCount: number;
+  systemBlockCount: number;
+  systemBlockHashes: string[];
+  toolCount: number;
+  toolsHash: string;
+}
+
 /** Full API request body sent to the LLM provider. */
 export interface ApiRequestEvent extends BaseEvent {
   type: 'api_request';
@@ -151,6 +157,7 @@ export interface ApiRequestEvent extends BaseEvent {
   messages: Message[];
   tools: { name: string; description: string }[];
   params: Record<string, unknown>;
+  contextManifest?: ContextManifest;
 }
 
 /** Full API response received from the LLM provider. */
@@ -179,9 +186,7 @@ export interface ToolUseEndEvent extends BaseEvent {
   isError: boolean;
 }
 
-/** API call metadata (token usage). 
- *  @deprecated Removed in v1.6. Use ApiRequestEvent + ApiResponseEvent.
- *  Type kept as a narrow alias for log-reading backward compatibility. */
+/** Compact API call metadata. Prefer ApiRequestEvent + ApiResponseEvent for full logs. */
 export interface ApiCallEvent extends BaseEvent {
   type: 'api_call';
   model: string;

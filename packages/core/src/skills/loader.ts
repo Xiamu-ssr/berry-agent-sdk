@@ -17,13 +17,35 @@ import matter from 'gray-matter';
 import type { Skill, SkillMeta, SkillIndex } from './types.js';
 
 /**
+ * Options for filling in missing SkillMeta fields when the loader discovers
+ * a skill whose frontmatter didn't declare them. The loader never overrides
+ * explicit frontmatter — defaults only fire when the field is absent.
+ *
+ * Host products use this to stamp provenance on a whole directory:
+ *   - passing a per-agent workspace dir → `{defaultSource: 'per-agent',
+ *     defaultAuthorAgent: agentId}` marks hand-placed files as attributed to
+ *     that agent without requiring the user to write frontmatter.
+ *   - passing a global pool dir → `{defaultSource: 'global'}`.
+ */
+export interface LoadSkillsOptions {
+  /** Value to populate `source` when frontmatter omits it. */
+  defaultSource?: SkillMeta['source'];
+  /** Value to populate `authorAgent` when frontmatter omits it. */
+  defaultAuthorAgent?: string;
+}
+
+/**
  * Load all skills from a skills directory.
  * Scans for subdirectories containing SKILL.md (case-insensitive).
  *
  * @param skillsDir Path to the skills directory (e.g., "./skills" or "~/.config/skills")
+ * @param options   Default-value injections for missing frontmatter fields.
  * @returns Array of loaded skills with parsed metadata
  */
-export async function loadSkillsFromDir(skillsDir: string): Promise<Skill[]> {
+export async function loadSkillsFromDir(
+  skillsDir: string,
+  options: LoadSkillsOptions = {},
+): Promise<Skill[]> {
   const resolvedDir = resolve(skillsDir);
   let entries;
   try {
@@ -37,7 +59,7 @@ export async function loadSkillsFromDir(skillsDir: string): Promise<Skill[]> {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
     const skillDir = join(resolvedDir, entry.name);
-    const skill = await loadSkill(skillDir);
+    const skill = await loadSkill(skillDir, options);
     if (skill) skills.push(skill);
   }
 
@@ -48,7 +70,10 @@ export async function loadSkillsFromDir(skillsDir: string): Promise<Skill[]> {
  * Load a single skill from a directory.
  * Looks for SKILL.md or skill.md in the directory.
  */
-export async function loadSkill(skillDir: string): Promise<Skill | null> {
+export async function loadSkill(
+  skillDir: string,
+  options: LoadSkillsOptions = {},
+): Promise<Skill | null> {
   const resolvedDir = resolve(skillDir);
   const dirName = basename(resolvedDir);
 
@@ -56,11 +81,11 @@ export async function loadSkill(skillDir: string): Promise<Skill | null> {
   for (const filename of ['SKILL.md', 'skill.md']) {
     const filePath = join(resolvedDir, filename);
     try {
-      await stat(filePath);
+      const fileStat = await stat(filePath);
       const raw = await readFile(filePath, 'utf-8');
       const { data: frontmatter, content } = matter(raw);
 
-      const meta = parseFrontmatter(frontmatter, dirName);
+      const meta = parseFrontmatter(frontmatter, dirName, options, fileStat.mtime);
       return {
         meta,
         content: content.trim(),
@@ -78,8 +103,23 @@ export async function loadSkill(skillDir: string): Promise<Skill | null> {
 /**
  * Parse frontmatter into SkillMeta.
  * Handles CC, ClawHub, and SkillsDirectory fields.
+ *
+ * Defaults (source / authorAgent / createdAt) only kick in when the
+ * frontmatter doesn't declare the field — explicit values always win so
+ * a hand-written override still round-trips.
  */
-function parseFrontmatter(fm: Record<string, any>, dirName: string): SkillMeta {
+function parseFrontmatter(
+  fm: Record<string, any>,
+  dirName: string,
+  options: LoadSkillsOptions,
+  fileMtime: Date,
+): SkillMeta {
+  const declaredSource = asSkillSource(fm.source);
+  const declaredAuthor =
+    asString(fm.author_agent) ?? asString(fm['author-agent']) ?? asString(fm.authorAgent);
+  const declaredCreatedAt =
+    asString(fm.created_at) ?? asString(fm['created-at']) ?? asString(fm.createdAt);
+
   return {
     name: asString(fm.name) ?? dirName,
     description: asString(fm.description) ?? `Skill: ${dirName}`,
@@ -91,16 +131,17 @@ function parseFrontmatter(fm: Record<string, any>, dirName: string): SkillMeta {
       ? Boolean(fm['user-invocable'])
       : true,
     paths: asStringArray(fm.paths),
-    source: asSkillSource(fm.source),
-    authorAgent: asString(fm.author_agent) ?? asString(fm['author-agent']) ?? asString(fm.authorAgent),
-    createdAt: asString(fm.created_at) ?? asString(fm['created-at']) ?? asString(fm.createdAt),
+    source: declaredSource ?? options.defaultSource,
+    authorAgent: declaredAuthor ?? options.defaultAuthorAgent,
+    // File mtime is our best proxy for "when the skill entered the system".
+    // It's not perfect (a `touch` bumps it), but it beats leaving undefined —
+    // the UI and buildSkillIndex both use createdAt for ordering/display.
+    createdAt: declaredCreatedAt ?? fileMtime.toISOString(),
   };
 }
 
 function asSkillSource(v: unknown): SkillMeta['source'] {
-  if (v === 'global' || v === 'user' || v === 'market' || v === 'self-authored') {
-    return v;
-  }
+  if (v === 'global' || v === 'per-agent') return v;
   return undefined;
 }
 
@@ -114,10 +155,11 @@ export function buildSkillIndex(skills: Skill[]): string {
   const entries = skills.map(s => {
     let entry = `- ${s.meta.name}: ${s.meta.description}`;
     if (s.meta.whenToUse) entry += ` (use when: ${s.meta.whenToUse})`;
-    // Mark self-authored skills so the agent sees its own provenance and can
-    // reason about trust / staleness when deciding whether to load_skill.
-    if (s.meta.source === 'self-authored') {
-      const parts: string[] = ['self-authored'];
+    // Tag per-agent skills with authorship so the agent can reason about
+    // trust / staleness when deciding whether to load_skill. Global skills
+    // are the host-curated baseline and need no extra annotation.
+    if (s.meta.source === 'per-agent') {
+      const parts: string[] = ['per-agent'];
       if (s.meta.authorAgent) parts.push(`by ${s.meta.authorAgent}`);
       if (s.meta.createdAt) parts.push(s.meta.createdAt.slice(0, 10));
       entry += ` [${parts.join(', ')}]`;

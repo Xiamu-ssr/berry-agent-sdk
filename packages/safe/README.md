@@ -57,7 +57,8 @@ Two-stage, reasoning-blind classifier. Only sees user messages + tool call paylo
 import { createClassifierGuard } from '@berry-agent/safe';
 
 const guard = createClassifierGuard({
-  provider: { type: 'anthropic', apiKey: '...', model: 'claude-sonnet-4-20250514' },
+  modelRef: 'tier:fast',
+  registry: myModelsRegistry,
   environment: {
     projectDir: '/my/project',
     trustedDomains: ['github.com/myorg'],

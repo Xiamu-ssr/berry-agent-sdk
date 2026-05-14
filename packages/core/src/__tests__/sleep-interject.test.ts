@@ -8,10 +8,15 @@ import { TOOL_SLEEP } from '../tool-names.js';
 import { SLEEP_MAX_SECONDS } from '../runtime-tools.js';
 import type {
   AgentEvent,
+  AgentStatus,
   ProviderConfig,
   ProviderResponse,
   Provider,
 } from '../types.js';
+import { tmpHome } from './helpers.js';
+
+const STATUS_WAIT_TIMEOUT_MS = 1_000;
+const STATUS_POLL_INTERVAL_MS = 5;
 
 class FakeProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -58,12 +63,21 @@ function makeAgent() {
   const provider = new FakeProvider();
   const events: AgentEvent[] = [];
   const agent = new Agent({
+    home: tmpHome(),
     provider: { type: 'anthropic', apiKey: 'x', model: 'fake' } as ProviderConfig,
     providerInstance: provider,
     systemPrompt: 'test',
     onEvent: (e) => events.push(e),
   });
   return { agent, provider, events };
+}
+
+async function waitForStatus(agent: Agent, status: AgentStatus): Promise<void> {
+  const deadline = Date.now() + STATUS_WAIT_TIMEOUT_MS;
+  while (agent.status !== status && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+  }
+  expect(agent.status).toBe(status);
 }
 
 describe('sleep tool', () => {
@@ -78,20 +92,20 @@ describe('sleep tool', () => {
     const { agent, provider } = makeAgent();
     provider.enqueue(sleepCallReply(10_000), textReply('done'));
 
-    const queryPromise = agent.query('sleep long');
-    // Give the sleep tool a tick to register its waker
-    await new Promise(r => setTimeout(r, 10));
-    expect(agent.status).toBe('sleeping');
+    const queryPromise = agent.send('sleep long');
+    await waitForStatus(agent, 'sleeping');
     agent.interject('wake up');
     const result = await queryPromise;
     // The sleep result message should mention the clamped limit
     const content = JSON.stringify(result);
     expect(content).not.toContain('10000s'); // definitely not 10k seconds
-    // Interjected message should now be present in the messages
+    // Interjected message should now be present in the messages. Note: the
+    // context builder merges adjacent same-role messages, so the interject
+    // text lands inside the ContentBlock[] of the tool_result user message.
     const lastCallMessages = provider.seenMessages.at(-1)!;
     const userTexts = lastCallMessages
       .filter((m: any) => m.role === 'user')
-      .map((m: any) => typeof m.content === 'string' ? m.content : '')
+      .map((m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
       .join('\n');
     expect(userTexts).toContain('wake up');
   });
@@ -99,20 +113,19 @@ describe('sleep tool', () => {
   it('rejects negative seconds', async () => {
     const { agent, provider } = makeAgent();
     provider.enqueue(sleepCallReply(-1), textReply('done'));
-    await agent.query('sleep bad');
+    await agent.send('sleep bad');
     // Should not throw; the tool should have returned an error
     // We verify via seenMessages that tool_result contained the error
     // (The FakeProvider won't emit anything — we just confirm no hang.)
     expect(agent.status).toBe('idle');
   });
 
-  it('transitions: thinking -> tool_executing -> sleeping -> tool_executing -> thinking -> idle', async () => {
+  it('transitions: tool_use -> sleeping -> tool_use -> idle', async () => {
     const { agent, provider, events } = makeAgent();
     provider.enqueue(sleepCallReply(60), textReply('done'));
 
-    const queryPromise = agent.query('sleep a minute');
-    await new Promise(r => setTimeout(r, 10));
-    expect(agent.status).toBe('sleeping');
+    const queryPromise = agent.send('sleep a minute');
+    await waitForStatus(agent, 'sleeping');
     agent.interject('wake');
     await queryPromise;
 
@@ -124,20 +137,20 @@ describe('sleep tool', () => {
     expect(statusSeq).toContain('sleeping');
     // Must end on idle
     expect(statusSeq[statusSeq.length - 1]).toBe('idle');
-    // Sleeping must be between thinking and thinking (tool round-trip)
-    const firstThinking = statusSeq.indexOf('thinking');
+    // Sleeping must be sandwiched between tool_use transitions
+    const firstToolUse = statusSeq.indexOf('tool_use');
     const sleepIdx = statusSeq.indexOf('sleeping');
-    const lastThinking = statusSeq.lastIndexOf('thinking');
-    expect(firstThinking).toBeLessThan(sleepIdx);
-    expect(sleepIdx).toBeLessThan(lastThinking);
+    const lastToolUse = statusSeq.lastIndexOf('tool_use');
+    expect(firstToolUse).toBeLessThan(sleepIdx);
+    expect(sleepIdx).toBeLessThan(lastToolUse);
   });
 
   it('tool_result reports whether the sleep was cut short by interject', async () => {
     const { agent, provider } = makeAgent();
     provider.enqueue(sleepCallReply(60), textReply('ok'));
 
-    const queryPromise = agent.query('sleep');
-    await new Promise(r => setTimeout(r, 10));
+    const queryPromise = agent.send('sleep');
+    await waitForStatus(agent, 'sleeping');
     agent.interject('wake');
     await queryPromise;
 
@@ -166,8 +179,8 @@ describe('interject()', () => {
     // Two turns: first the sleep tool call, then a plain reply after interject.
     provider.enqueue(sleepCallReply(60), textReply('acknowledged'));
 
-    const queryPromise = agent.query('initial');
-    await new Promise(r => setTimeout(r, 10));
+    const queryPromise = agent.send('initial');
+    await waitForStatus(agent, 'sleeping');
     agent.interject('urgent update');
     await queryPromise;
 
@@ -184,8 +197,8 @@ describe('interject()', () => {
     const { agent, provider } = makeAgent();
     provider.enqueue(sleepCallReply(60), textReply('ok'));
 
-    const queryPromise = agent.query('start');
-    await new Promise(r => setTimeout(r, 10));
+    const queryPromise = agent.send('start');
+    await waitForStatus(agent, 'sleeping');
     agent.interject('first');
     agent.interject('second');
     agent.interject('third');
@@ -194,7 +207,7 @@ describe('interject()', () => {
     const secondCall = provider.seenMessages[1];
     const userText = secondCall
       .filter((m: any) => m.role === 'user')
-      .map((m: any) => typeof m.content === 'string' ? m.content : '')
+      .map((m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
       .join('\n');
     expect(userText).toContain('first');
     expect(userText).toContain('second');

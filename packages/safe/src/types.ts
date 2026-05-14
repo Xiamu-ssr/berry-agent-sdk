@@ -2,7 +2,8 @@
 // Berry Agent SDK — Safe Package Types
 // ============================================================
 
-import type { ToolGuard, ToolGuardDecision, Provider, ProviderConfig } from '@berry-agent/core';
+import type { ToolGuard, ToolGuardDecision } from '@berry-agent/core';
+import type { ModelsRegistry } from '@berry-agent/models';
 
 // ===== Guard types =====
 
@@ -13,10 +14,26 @@ export type GuardRule = (toolName: string, input: Record<string, unknown>) => To
 
 /** Configuration for the LLM transcript classifier. */
 export interface ClassifierConfig {
-  /** Provider config for the classifier model. Default model: claude-sonnet-4-20250514 */
-  provider: ProviderConfig;
-  /** Optional pre-built Provider instance (for sharing / testing). */
-  providerInstance?: Provider;
+  /**
+   * Model reference string resolved via the models registry.
+   * Examples: 'tier:fast', 'model:claude-sonnet-4-20250514', 'raw:...'
+   * Required unless `sdkConfigPath` is provided.
+   */
+  modelRef?: string;
+  /**
+   * Models registry used to resolve modelRef into a provider config.
+   * Typically the same registry loaded from berry-sdk.json.
+   * Required unless `sdkConfigPath` is provided.
+   */
+  registry?: ModelsRegistry;
+  /**
+   * Path to berry-sdk.json. When provided (and modelRef/registry are not),
+   * the classifier reads safe.classifier.model and models from this file
+   * using `loadSdkConfig()`. Zero-config setup.
+   */
+  sdkConfigPath?: string;
+  /** Optional pre-built Provider instance (for testing / sharing). */
+  providerInstance?: import('@berry-agent/core').Provider;
   /** Trust boundary: domains, orgs, buckets that count as "internal". */
   environment?: EnvironmentConfig;
   /** Block rules. Uses defaultBlockRules if not specified. */

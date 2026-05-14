@@ -9,6 +9,23 @@ import { createSandbox } from '../sandbox/index.js';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+async function startLocalHttpServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('sandbox-ok');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((err) => err ? reject(err) : resolve());
+    }),
+  };
+}
 
 describe('buildSeatbeltProfile', () => {
   it('generates a profile with deny default and global read', () => {
@@ -170,23 +187,31 @@ describe.skipIf(process.platform !== 'darwin')('Seatbelt integration', () => {
   });
 
   it('allows network access by default', async () => {
+    const localServer = await startLocalHttpServer();
     const executor = createSandbox(defaultSandboxConfig('/tmp'));
-    const result = await executor!.exec('curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://example.com', {
-      cwd: '/tmp',
-      timeout: 10000,
-    });
-    // Should get a 200 or 3xx redirect — network is allowed
-    expect(result.output).toMatch(/200|301|302/);
+    try {
+      const result = await executor!.exec(`curl -s --connect-timeout 2 "${localServer.url}"`, {
+        cwd: '/tmp',
+        timeout: 5000,
+      });
+      expect(result.output).toContain('sandbox-ok');
+    } finally {
+      await localServer.close();
+    }
   });
 
   it('denies network when network=deny override', async () => {
+    const localServer = await startLocalHttpServer();
     const executor = createSandbox(defaultSandboxConfig('/tmp', { network: 'deny' }));
-    const result = await executor!.exec('curl -s --connect-timeout 1 http://example.com 2>&1; echo "EXIT:$?"', {
-      cwd: '/tmp',
-      timeout: 10000,
-    });
-    // curl should fail — network denied
-    expect(result.output).not.toContain('example');
+    try {
+      const result = await executor!.exec(`curl -s --connect-timeout 1 "${localServer.url}" 2>&1; echo "EXIT:$?"`, {
+        cwd: '/tmp',
+        timeout: 5000,
+      });
+      expect(result.output).not.toContain('sandbox-ok');
+    } finally {
+      await localServer.close();
+    }
   });
 
   it('denies writing to disallowed paths', async () => {

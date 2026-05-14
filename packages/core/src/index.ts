@@ -4,16 +4,42 @@
 
 // Core
 export { Agent } from './agent.js';
+export { AgentHome } from './agent-home.js';
+export type { AgentHomeSnapshot } from './agent-home.js';
+export type { AgentSnapshot, MCPSummary } from './agent-helpers/introspection.js';
 export type { CompactionResult } from './compaction/compactor.js';
 export { flattenSystemPrompt, normalizeSystemPrompt, toProviderResolver } from './types.js';
+export {
+  BUILTIN_PROMPT_PACKS,
+  DEFAULT_PROMPT_PACK,
+  DEFAULT_PROMPT_PACK_ID,
+  builtinPromptPackIds,
+  ensurePromptPackDirectory,
+  exportPromptPack,
+  getBuiltinPromptPack,
+  importPromptPack,
+  listPromptPacks,
+  packsDir,
+  promptPackPath,
+  readPromptPack,
+  readPromptPackFromDirectory,
+  resolvePromptPack,
+  writePromptPack,
+} from './prompts.js';
+export type {
+  PromptPack,
+  PromptPackDescriptor,
+  PromptPackDirectoryOptions,
+  PromptPackImportOptions,
+  PromptPackInput,
+} from './prompts.js';
 
 // Provider Registry
 export { ProviderRegistry } from './registry.js';
 export type { ProviderEntry, ResolvedModel } from './registry.js';
 
 // Providers
-export { AnthropicProvider } from './providers/anthropic.js';
-export { OpenAIProvider } from './providers/openai.js';
+export { createProvider } from './agent-helpers/provider.js';
 
 // Compaction
 export { compact, estimateTokens, DefaultCompactionStrategy } from './compaction/compactor.js';
@@ -62,12 +88,13 @@ export type {
 
 // Workspace
 export { FileAgentMemory, FileProjectContext, initWorkspace } from './workspace/index.js';
-export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata } from './workspace/index.js';
+export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata, ReasoningEffort } from './workspace/index.js';
 export type { MemoryProvider, MemoryInitContext } from './memory/index.js';
 
 // Skills
 export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
-export type { Skill, SkillMeta, SkillIndex } from './skills/types.js';
+export type { Skill, SkillMeta, SkillIndex, SkillDirSpec } from './skills/types.js';
+export type { LoadSkillsOptions } from './skills/loader.js';
 
 // Retry utility (for custom providers)
 export { withRetry, isRetryableError, getRetryDelay, classifyError } from './utils/retry.js';
@@ -83,7 +110,6 @@ export { AgentScope } from './scope.js';
 export {
   DefaultCredentialStore,
   MemoryCredentialStore,
-  defaultCredentialFilePath,
 } from './credentials.js';
 export type { CredentialStore } from './credentials.js';
 
@@ -151,10 +177,9 @@ export type {
   ToolGuardContext,
   ToolGuardDecision,
 
-  // Delegate / Spawn
+  // Delegate
   DelegateConfig,
   DelegateResult,
-  SpawnConfig,
 
   // Middleware
   Middleware,

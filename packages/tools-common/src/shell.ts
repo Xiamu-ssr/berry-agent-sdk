@@ -250,10 +250,7 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
   ];
 }
 
-/**
- * Backward-compatible single shell tool factory.
- * Use createShellTools() or createAllTools() when background process tools are needed.
- */
+/** Single shell tool factory; createShellTools() also includes process tools. */
 export function createShellTool(projectRoot: string, options?: ShellToolOptions): ToolRegistration {
   return createShellTools(projectRoot, options)[0];
 }

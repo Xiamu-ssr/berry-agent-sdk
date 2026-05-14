@@ -61,18 +61,19 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
   // Emit all tool_call events first
   for (const toolUse of toolUses) {
     toolCalls++;
-    emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input });
+    emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input, toolUseId: toolUse.id });
   }
 
   const toolResultBlocks: ContentBlock[] = await Promise.all(
     toolUses.map(async (toolUse): Promise<ContentBlock> => {
       const tool = tools.get(toolUse.name);
       if (!tool) {
-        emit({ type: 'tool_result', name: toolUse.name, isError: true });
+        const unknownMsg = `Error: unknown tool "${toolUse.name}"`;
+        emit({ type: 'tool_result', name: toolUse.name, isError: true, toolUseId: toolUse.id, output: unknownMsg });
         return {
           type: 'tool_result',
           toolUseId: toolUse.id,
-          content: `Error: unknown tool "${toolUse.name}"`,
+          content: unknownMsg,
           isError: true,
         };
       }
@@ -136,7 +137,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
             output: denyContent,
             isError: true,
           });
-          emit({ type: 'tool_result', name: toolUse.name, isError: true });
+          emit({ type: 'tool_result', name: toolUse.name, isError: true, toolUseId: toolUse.id, output: denyContent });
           return {
             type: 'tool_result',
             toolUseId: toolUse.id,
@@ -186,7 +187,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
           isError: result.isError ?? false,
         });
 
-        emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false });
+        emit({ type: 'tool_result', name: toolUse.name, isError: result.isError ?? false, toolUseId: toolUse.id, output: resultContent });
         return {
           type: 'tool_result',
           toolUseId: toolUse.id,
@@ -211,7 +212,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
           isError: true,
         });
 
-        emit({ type: 'tool_result', name: toolUse.name, isError: true });
+        emit({ type: 'tool_result', name: toolUse.name, isError: true, toolUseId: toolUse.id, output: errContent });
         return {
           type: 'tool_result',
           toolUseId: toolUse.id,

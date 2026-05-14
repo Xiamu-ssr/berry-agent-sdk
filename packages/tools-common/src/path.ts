@@ -6,7 +6,6 @@ import { isAbsolute, relative, resolve } from 'node:path';
 
 /**
  * Resolve a user-supplied path relative to baseDir and ensure it stays within scope.
- * (Legacy single-root scoping — kept for backward compatibility.)
  */
 export function resolveScopedPath(baseDir: string, inputPath: string): string {
   const base = resolve(baseDir);
@@ -22,7 +21,6 @@ export function resolveScopedPath(baseDir: string, inputPath: string): string {
 
 /**
  * Resolve a path for shell-based tools, returning a baseDir-relative path when possible.
- * (Legacy single-root scoping — kept for backward compatibility.)
  */
 export function resolveScopedRelativePath(baseDir: string, inputPath: string): string {
   const base = resolve(baseDir);

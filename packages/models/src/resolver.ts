@@ -15,6 +15,7 @@ import type {
   TierId,
 } from './types.js';
 import { getPreset, RAW_PRESET_ID } from './presets.js';
+import { ModelResolverSnapshot, summarizeError } from './resolver-snapshot.js';
 
 /** Error thrown when the requested model or tier cannot be built into a resolver. */
 export class ModelResolveError extends Error {
@@ -77,6 +78,17 @@ export interface CreateModelResolverOptions {
 }
 
 /**
+ * Resolver with observability — extends the core {@link ProviderResolver}
+ * contract with a typed {@link getSnapshot} method. Host products consume
+ * this to render "which provider am I routing to right now" panels without
+ * reaching into resolver internals.
+ */
+export interface ModelResolverWithSnapshot extends ProviderResolver {
+  /** Typed view of the resolver's current rotation state. */
+  getSnapshot(): ModelResolverSnapshot;
+}
+
+/**
  * Build a ProviderResolver from a Layer 2 ModelBinding + the surrounding
  * registry (needed to look up Layer 1 ProviderInstances).
  *
@@ -91,7 +103,7 @@ export function createModelResolver(
   binding: ModelBinding,
   registry: Pick<ModelsRegistry, 'providers'>,
   options: CreateModelResolverOptions = {},
-): ProviderResolver {
+): ModelResolverWithSnapshot {
   if (!binding.providers || binding.providers.length === 0) {
     throw new ModelResolveError(
       `Model "${binding.id}" has no providers configured`,
@@ -157,6 +169,18 @@ export function createModelResolver(
       lastError = null;
       exhausted = false;
     },
+
+    getSnapshot(): ModelResolverSnapshot {
+      return new ModelResolverSnapshot({
+        id: `model:${binding.id}`,
+        modelId: binding.id,
+        providers: binding.providers,
+        pointer,
+        exhausted,
+        lastError: summarizeError(lastError),
+        capturedAt: Date.now(),
+      });
+    },
   };
 }
 
@@ -169,7 +193,7 @@ export function createTierResolver(
   tier: TierId,
   registry: ModelsRegistry,
   options: CreateModelResolverOptions = {},
-): ProviderResolver {
+): ModelResolverWithSnapshot {
   const modelId = registry.tiers[tier];
   if (!modelId) {
     throw new ModelResolveError(
@@ -184,8 +208,21 @@ export function createTierResolver(
       'tier_dangling',
     );
   }
-  const resolver = createModelResolver(binding, registry, options);
-  return { ...resolver, id: `tier:${tier}:${modelId}` };
+  const inner = createModelResolver(binding, registry, options);
+  const id = `tier:${tier}:${modelId}`;
+  // Spread preserves reference equality for snapshot-backing closures inside
+  // `inner`, while rebinding `id` so observers see the tier label.
+  return {
+    ...inner,
+    id,
+    getSnapshot(): ModelResolverSnapshot {
+      const snap = inner.getSnapshot();
+      return new ModelResolverSnapshot({
+        ...snap.toJSON(),
+        id,
+      });
+    },
+  };
 }
 
 function buildExhaustedError(binding: ModelBinding, lastError: unknown): Error {

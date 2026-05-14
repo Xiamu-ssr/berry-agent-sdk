@@ -22,16 +22,17 @@ export interface SkillMeta {
   paths?: string[];
   /**
    * Provenance of this skill. Informational only — the SDK does not route
-   * on this field; consumers (e.g. berry-claw) use it to decide how to
-   * surface the skill in UIs and in the system-prompt index.
+   * on this field; host products use it to decide how to surface the skill
+   * in UIs and in the system-prompt index.
    *
-   *   'global'         — installed into a shared pool by the host product
-   *   'user'           — hand-placed by the user in a per-agent dir
-   *   'market'         — installed via a skill market / registry
-   *   'self-authored'  — produced by an agent for itself (auto-distilled)
+   *   'global'    — installed into a host-wide shared pool
+   *   'per-agent' — lives under a single agent's workspace; the agent
+   *                 itself may be the author (self-distilled) or a human
+   *                 may have hand-placed it. The distinction between
+   *                 "who wrote it" is carried by `authorAgent`.
    */
-  source?: 'global' | 'user' | 'market' | 'self-authored';
-  /** When source === 'self-authored', the agent id that authored this skill. */
+  source?: 'global' | 'per-agent';
+  /** When the skill was authored by an agent, the agent id. */
   authorAgent?: string;
   /** ISO-8601 date/time the skill was first authored or installed. */
   createdAt?: string;
@@ -53,4 +54,21 @@ export interface SkillIndex {
   name: string;
   description: string;
   whenToUse?: string;
+}
+
+/**
+ * A skills directory plus default provenance to stamp onto skills whose
+ * frontmatter didn't declare it. Used by {@link AgentConfig.skillDirs} so
+ * the host product can tag a whole pool (e.g. "this is the global pool" /
+ * "this is agent X's private pool") without editing each SKILL.md.
+ *
+ * Explicit frontmatter always wins — defaults only fill in missing fields.
+ */
+export interface SkillDirSpec {
+  /** Absolute or relative path to the skills directory. */
+  dir: string;
+  /** Source default for skills under this dir whose frontmatter omits it. */
+  defaultSource?: SkillMeta['source'];
+  /** authorAgent default for skills under this dir whose frontmatter omits it. */
+  defaultAuthorAgent?: string;
 }

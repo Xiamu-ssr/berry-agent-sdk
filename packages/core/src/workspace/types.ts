@@ -22,12 +22,10 @@ export interface AgentMemory {
   exists(): Promise<boolean>;
 }
 
-/** Project context interface — shared knowledge across agents. */
+/** Project context interface — shared knowledge across agents. Read-only from the agent's side (humans maintain AGENTS.md). */
 export interface ProjectContext {
   /** Project root directory. */
   readonly root: string;
-  /** Load project context files (e.g., AGENTS.md, PROJECT.md). Returns empty string if none found. */
+  /** Load `{project}/AGENTS.md`. Returns empty string if not present. */
   loadContext(): Promise<string>;
-  /** Append a discovery to project knowledge (.berry-discoveries.md). */
-  appendDiscovery(content: string): Promise<void>;
 }

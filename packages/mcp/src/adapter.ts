@@ -26,11 +26,11 @@ export async function createMCPTools(
   client: MCPClient,
   options?: MCPToolOptions,
 ): Promise<ToolRegistration[]> {
-  const prefix = options?.prefix ?? '';
   const include = options?.include ? new Set(options.include) : null;
   const exclude = options?.exclude ? new Set(options.exclude) : null;
 
   const mcpTools = await client.listTools();
+  const prefix = resolvePrefix(mcpTools, options);
   const registrations: ToolRegistration[] = [];
   // Track sanitized names per server so we can warn on collisions.
   const seen = new Set<string>();
@@ -87,6 +87,36 @@ export async function createMCPTools(
   }
 
   return registrations;
+}
+
+/**
+ * Resolve the effective prefix using explicit > auto-detect precedence.
+ *
+ * - `options.prefix` wins when defined (including the empty string, which
+ *   means the caller deliberately wants no prefix).
+ * - `options.autoPrefix` is the friendly default: applied only when the
+ *   upstream server hasn't already baked the same identifier into its tool
+ *   names. Detection is case-insensitive and treats `_` / `-` as equivalent
+ *   separators — covers the common "server ships `skylark_doc_*` tools"
+ *   case without silently hiding an intentional collision.
+ * - Empty tool list falls through to the raw autoPrefix so short-lived
+ *   servers don't get a surprise empty prefix.
+ */
+function resolvePrefix(
+  tools: Array<{ name: string }>,
+  options: MCPToolOptions | undefined,
+): string {
+  if (options?.prefix !== undefined) return options.prefix;
+  const auto = options?.autoPrefix;
+  if (!auto) return '';
+  if (tools.length === 0) return auto;
+  const stem = auto.toLowerCase().replace(/[_-]+$/, '');
+  if (!stem) return auto;
+  const allPrefixed = tools.every((t) => {
+    const lower = t.name.toLowerCase();
+    return lower.startsWith(`${stem}_`) || lower.startsWith(`${stem}-`);
+  });
+  return allPrefixed ? '' : auto;
 }
 
 /**

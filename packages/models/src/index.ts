@@ -33,7 +33,11 @@ export {
   buildProviderConfig,
   ModelResolveError,
 } from './resolver.js';
-export type { CreateModelResolverOptions } from './resolver.js';
+export type { CreateModelResolverOptions, ModelResolverWithSnapshot } from './resolver.js';
+
+// Resolver snapshot (typed observability for provider rotation state)
+export { ModelResolverSnapshot } from './resolver-snapshot.js';
+export type { ModelResolverSnapshotData, ResolverErrorSummary } from './resolver-snapshot.js';
 
 // Model reference string parser (tier:X / model:X / raw:...)
 export { parseModelRef, formatRawRef } from './parse.js';
@@ -42,3 +46,7 @@ export type { ModelRef } from './parse.js';
 // Top-level convenience
 export { selectProvider } from './select.js';
 export type { SelectProviderOptions } from './select.js';
+
+// Zod schema for SDK config namespace
+export { modelsNamespaceSchema, modelProviderRefSchema, modelBindingSchema, providerInstanceSchema } from './schema.js';
+export type { ModelsNamespaceConfig } from './schema.js';

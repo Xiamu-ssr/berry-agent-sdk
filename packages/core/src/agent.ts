@@ -4,9 +4,12 @@
 // The main Agent class. Pure library, no CLI dependency.
 // Manages: agent loop, tools, sessions, compaction, cache.
 
+import { createHash } from 'node:crypto';
+
 import type {
   AgentConfig,
   AgentCreateConfig,
+  AgentStatus,
   QueryOptions,
   CreateSessionOptions,
   QueryResult,
@@ -28,42 +31,37 @@ import type {
   ToolGuard,
   DelegateConfig,
   DelegateResult,
-  SpawnConfig,
   Middleware,
   MiddlewareContext,
   ToolDefinition,
   TodoItem,
   SystemPromptBlock,
   SystemPromptInput,
+  ModelRefResolver,
 } from './types.js';
 import { normalizeSystemPrompt, toProviderResolver, ToolGroup } from './types.js';
-import type { EventLogStore, SessionEvent, ContextStrategy } from './event-log/types.js';
-import { DefaultContextStrategy } from './event-log/context-builder.js';
+import type { EventLogStore, SessionEvent } from './event-log/types.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
-import { detectCrashArtifacts, formatCrashInterject } from './event-log/crash-detector.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAIProvider } from './providers/openai.js';
 import type { AgentMemory, ProjectContext } from './workspace/types.js';
 import type { MemoryProvider } from './memory/provider.js';
 import { FileAgentMemory } from './workspace/file-memory.js';
 import { FileProjectContext } from './workspace/file-project.js';
-import { initWorkspace } from './workspace/initializer.js';
+import { initWorkspaceSync, saveAgentConfigSync, type ReasoningEffort } from './workspace/initializer.js';
 import { estimateTokens, type CompactionResult, type ForkContext } from './compaction/compactor.js';
 import type { CompactionStrategy } from './compaction/types.js';
 import { DefaultCompactionStrategy } from './compaction/compactor.js';
-import { loadSkillsFromDir, buildSkillIndex } from './skills/loader.js';
 import type { Skill } from './skills/types.js';
 import { FileSessionStore } from './session/file-store.js';
 import type { ProviderRegistry } from './registry.js';
+import { AgentHome } from './agent-home.js';
+import { resolvePromptPack, type PromptPack } from './prompts.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
-  DEFAULT_COMPACTION_RATIO,
-  DEFAULT_SOFT_COMPACTION_RATIO,
   DEFAULT_SOFT_LAYERS,
   DEFAULT_MAX_TURNS,
   MAX_PTL_RETRIES,
-  MAX_RETRIES,
-  REQUEST_TIMEOUT_MS,
   COMPACTION_TRIGGER_REASON,
 } from './constants.js';
 import { TOOL_LOAD_SKILL, TOOL_DELEGATE } from './tool-names.js';
@@ -74,12 +72,58 @@ import {
   runCompaction,
   preCompactMemoryFlush,
 } from './compaction-runner.js';
-import { createRuntimeTools, getRuntimeToolDefinitions } from './runtime-tools.js';
-import { getRetryDelay, isRetryableError } from './utils/retry.js';
+import { createRuntimeTools } from './runtime-tools.js';
+import { isRetryableError } from './utils/retry.js';
+import {
+  generateId,
+  generateEventId,
+  generateTurnId,
+  sleep,
+  createProvider,
+  isProviderResolver,
+  providerConfigsEqual,
+  isPromptTooLongError,
+  createInMemoryStore,
+  createEmptySessionMetadata,
+  extractText,
+  accumulateUsage,
+  mergeToolsByName,
+  repairOrphanToolUses,
+  snapshotFrom,
+  getToolsFrom,
+  getSkillMetasFrom,
+  getMCPFrom,
+  SkillManager,
+  runDelegate,
+  SessionController,
+  callProvider,
+  type AgentSnapshot,
+  type MCPSummary,
+} from './agent-helpers/index.js';
 
 /** Internal config extension for sub-agent creation (not part of public API). */
 interface InternalAgentConfig extends AgentConfig {
   _isSubAgent?: boolean;
+  /**
+   * Test-only / internal-hydration escape hatch for the base system prompt.
+   * Public callers MUST NOT use this — the real source is `<home>/AGENTS.md`.
+   * Kept here so unit tests that need to assert on specific prompt content
+   * (e.g. delegate `appendSystemPrompt` merging) don't have to stand up a
+   * temp directory + AgentHome just to write one file.
+   */
+  _systemPromptOverride?: SystemPromptInput;
+  /**
+   * Legacy test-only alias for `_systemPromptOverride`. Tests are excluded
+   * from tsconfig, so test files can still pass `systemPrompt: '...'` to
+   * `new Agent({...})` and have the value flow into the base prompt.
+   * Public callers CANNOT reach this (it's not on `AgentConfig`).
+   */
+  systemPrompt?: SystemPromptInput;
+}
+
+function shortHash(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return createHash('sha256').update(text ?? '').digest('hex').slice(0, 16);
 }
 
 export class Agent {
@@ -90,16 +134,23 @@ export class Agent {
    * provider request, rebuilding `this.provider` when the config changes,
    * and calls reportError() on failure.
    *
-   * When `null`, the agent uses the static `providerConfig` / `provider`
-   * fields unchanged (original behavior — backward compatible).
+   * When `null`, the agent uses the static `providerConfig` / `provider`.
    */
   private providerResolver: ProviderResolver | null;
+  /**
+   * Product-supplied model-ref resolver. Core persists model refs as strings,
+   * while host products decide how tier/model/raw refs map to
+   * ProviderInput.
+   */
+  private _modelResolver: ModelRefResolver | null;
   private systemPrompt: SystemPromptBlock[];
   private tools: Map<string, ToolRegistration>;
-  private legacySkills: string[];  // deprecated: raw .md paths
-  private skillDirs: string[];
-  private disabledSkills: Set<string>;
-  private loadedSkills: Skill[] | null = null;  // lazy-loaded
+  /**
+   * Skill bookkeeping — lazy loading and index rendering.
+   * Agent delegates to this manager; skill-dir state lives on the manager,
+   * not on the Agent directly.
+   */
+  private skills: SkillManager;
   private cwd: string;
   private sessionStore: SessionStore;
   private compactionConfig: AgentConfig['compaction'];
@@ -108,12 +159,20 @@ export class Agent {
   private toolGuard?: ToolGuard;
   private middleware: Middleware[];
   private eventLogStore?: EventLogStore;
-  private contextStrategy: ContextStrategy;
+  private promptPack: PromptPack;
   private _memory?: AgentMemory;
   private _memoryProvider?: MemoryProvider;
   private _projectContext?: ProjectContext;
-  private _workspaceRoot?: string;
-  private _workspaceReady?: Promise<void>;
+  /**
+   * Structured directory layout — the single source of truth for every
+   * on-disk path this Agent owns. Always set (AGENTS.md §agent.json).
+   */
+  private _home: AgentHome;
+
+  /** Snapshot of this agent's on-disk layout. */
+  get home(): AgentHome {
+    return this._home;
+  }
   private _children = new Map<string, Agent>();
   private _isSubAgent = false;
   private _lastSessionId?: string;
@@ -129,13 +188,13 @@ export class Agent {
   private _pendingInterjects: string[] = [];
   private _interjectWakers: Array<() => void> = [];
   private _sleepDepth = 0;
-  /** Session IDs for which crash detection has already run this process lifetime.
-   *  Prevents re-detecting (and re-appending crash_recovered) on every resume
-   *  of the same session. */
-  private _crashCheckedSessions = new Set<string>();
+  /** Session lifecycle helper (resolve / create / list / clear / compact).
+   *  Owns its own per-process crash-detection dedup cache. */
+  private sessions!: SessionController;
 
-  // Hot-reload: instance-level tool allow-list. Intersects with per-query allowedTools.
-  private _instanceAllowedTools?: Set<string>;
+  // Hot-reload: instance-level tool DENY-list (persisted to agent.json).
+  // Applied after per-query allowedTools filtering.
+  private _toolDenylist: Set<string> = new Set();
 
   // Lifecycle hooks
   private _onQueryStart?: (session: Session, prompt: string | ContentBlock[]) => void | Promise<void>;
@@ -189,8 +248,8 @@ export class Agent {
       onExit: () => {
         this._sleepDepth = Math.max(0, this._sleepDepth - 1);
         if (this._sleepDepth === 0 && this._status === 'sleeping') {
-          // Return to tool_executing; the outer loop will reset status after.
-          this.setStatus('tool_executing');
+          // Return to tool_use; the outer loop will reset status after.
+          this.setStatus('tool_use');
         }
       },
       interjectWaker: () => new Promise<void>((resolve) => {
@@ -219,54 +278,96 @@ export class Agent {
   }
 
   constructor(config: AgentConfig) {
-    // Normalize system prompt to array of blocks
-    this.systemPrompt = normalizeSystemPrompt(config.systemPrompt);
+    // System prompt is NOT a constructor parameter (AGENTS.md §Context).
+    // The base seed here is the SDK prompt pack; real product/project content comes from
+    // AGENTS.md / per-project AGENTS.md / skill index, which `buildSystemPrompt`
+    // stitches on at send-time. `_systemPromptOverride` is a test/internal
+    // escape hatch only.
+    const internal = config as InternalAgentConfig;
+    this.promptPack = resolvePromptPack(config.promptPack, { directory: config.promptPackDir });
+    this.systemPrompt = normalizeSystemPrompt(
+      internal._systemPromptOverride ?? internal.systemPrompt ?? this.promptPack.baseAgent,
+    );
+
+    if (!config.home) {
+      throw new Error(
+        'AgentConfig.home is required. Construct `new AgentHome(rootDir)` and pass it in.',
+      );
+    }
+    this._home = config.home;
+
+    // Seed agent.json on first launch with the caller-supplied model ref /
+    // compaction / skills / mcp. On subsequent launches the on-disk file is
+    // authoritative and these seed values are ignored (AGENTS.md §agent.json).
+    const metadata = initWorkspaceSync(this._home.root, {
+      model: config.model,
+      reasoningEffort: config.reasoningEffort,
+      compaction: config.compaction,
+      skills: config.skillDirs
+        ? { extraDirs: config.skillDirs.map((e) => (typeof e === 'string' ? e : e.dir)) }
+        : undefined,
+    });
+
+    // Instance-level tool denylist seeds from agent.json.
+    this._toolDenylist = new Set(metadata.toolDenylist ?? []);
 
     this.tools = new Map();
-    this.legacySkills = [];
-    this.skillDirs = config.skillDirs ?? [];
-    this.disabledSkills = new Set(config.disabledSkills ?? []);
+    this.skills = new SkillManager({
+      skillDirs: (metadata.skills?.extraDirs ?? []).map((dir) => ({ dir })),
+      disabledSkills: new Set(config.disabledSkills ?? []),
+    });
     this.cwd = config.cwd ?? process.cwd();
-    this.compactionConfig = config.compaction;
+    // Compaction: agent.json wins if set, otherwise fall back to the seed.
+    this.compactionConfig = metadata.compaction ?? config.compaction;
     this.compactionStrategy = config.compactionStrategy;
     this.toolGuard = config.toolGuard;
     this.middleware = config.middleware ?? [];
-    this.sessionStore = config.sessionStore ?? createInMemoryStore();
+
+    // Session store: explicit override still wins, otherwise a FileSessionStore
+    // rooted at AgentHome.sessionsDir (SDK-owned layout).
+    this.sessionStore = config.sessionStore
+      ?? new FileSessionStore(this._home.sessionsDir);
     this.onEvent = config.onEvent;
-    // Normalize provider input — plain ProviderConfig still works, but the
-    // agent loop funnels everything through a resolver internally so the
-    // failover hook (@berry-agent/models) can slot in transparently.
+
+    // Provider: resolver input still wins (for failover wrapping), then
+    // agent.json.model resolved via the host resolver, otherwise fall back
+    // to the caller-supplied provider config.
+    this._modelResolver = config.modelResolver ?? null;
     if (isProviderResolver(config.provider)) {
       this.providerResolver = config.provider as ProviderResolver;
       this.providerConfig = this.providerResolver.resolve();
+    } else if (metadata.model && this._modelResolver) {
+      // On-disk model ref + host resolver → full ProviderInput.
+      const input = this._modelResolver(metadata.model);
+      if (isProviderResolver(input)) {
+        this.providerResolver = input;
+        this.providerConfig = this.providerResolver.resolve();
+      } else {
+        this.providerResolver = null;
+        this.providerConfig = input;
+      }
+    } else if (metadata.model) {
+      // On-disk model ref without registry → treat as bare model id.
+      this.providerResolver = null;
+      this.providerConfig = { ...config.provider as ProviderConfig, model: metadata.model };
     } else {
       this.providerResolver = null;
       this.providerConfig = config.provider as ProviderConfig;
     }
-    // Inject top-level reasoningEffort into provider config
-    if (config.reasoningEffort) {
-      this.providerConfig = { ...this.providerConfig, reasoningEffort: config.reasoningEffort };
+    // Reasoning effort: on-disk value wins, then caller-supplied config.
+    const effort = metadata.reasoningEffort ?? config.reasoningEffort;
+    if (effort) {
+      this.providerConfig = { ...this.providerConfig, reasoningEffort: effort };
     }
-    this.contextStrategy = new DefaultContextStrategy();
-    this._isSubAgent = (config as InternalAgentConfig)._isSubAgent ?? false;
+    this._isSubAgent = internal._isSubAgent ?? false;
     this._onQueryStart = config.onQueryStart;
     this._onQueryEnd = config.onQueryEnd;
 
-    // Workspace: auto-wire event log, memory, and system prompt from AGENT.md
-    if (config.workspace) {
-      this._workspaceRoot = config.workspace;
-      // Auto-create EventLogStore if user didn't provide one
-      if (!config.eventLogStore) {
-        this.eventLogStore = new FileEventLogStore(config.workspace);
-      } else {
-        this.eventLogStore = config.eventLogStore;
-      }
-      this._memory = new FileAgentMemory(config.workspace);
-      // Kick off workspace init in background (idempotent); query() awaits before first use
-      this._workspaceReady = initWorkspace(config.workspace).then(() => {});
-    } else {
-      this.eventLogStore = config.eventLogStore;
-    }
+    // Workspace wiring — event log, memory. initWorkspaceSync above already
+    // created the directory tree, so no async workspaceReady gate is needed.
+    this.eventLogStore = config.eventLogStore
+      ?? new FileEventLogStore(this._home.sessionsDir);
+    this._memory = new FileAgentMemory(this._home.root);
     this._memoryProvider = config.memory;
 
     // Project context
@@ -284,7 +385,7 @@ export class Agent {
 
     // Register built-in load_skill tool when skills are configured.
     // The model calls load_skill(name) via standard tool_use to get full skill body.
-    if (this.skillDirs.length > 0 && !this.tools.has(TOOL_LOAD_SKILL)) {
+    if (this.skills.hasSkillDirs() && !this.tools.has(TOOL_LOAD_SKILL)) {
       this.tools.set(TOOL_LOAD_SKILL, {
         definition: {
           name: TOOL_LOAD_SKILL,
@@ -354,11 +455,9 @@ export class Agent {
       });
     }
 
-    // The built-in `spawn_agent` tool was removed in v0.4: persistent sub-agent
-    // creation now belongs to @berry-agent/team (leader-only `spawn_teammate`).
-    // The underlying `agent.spawn()` method stays public and is used by the
-    // team package to create teammates. Any consumer still wanting raw spawn
-    // can build their own tool wrapper on top of `agent.spawn()`.
+    // Persistent sub-agent spawning lives in @berry-agent/team (leader-only
+    // `spawn_teammate` tool). The core Agent has no spawn API — `delegate()`
+    // is the only in-core way to fork a sub-turn.
 
     // Register tools from MemoryProvider (if provided).
     if (this._memoryProvider) {
@@ -366,20 +465,47 @@ export class Agent {
         this.tools.set(tool.definition.name, tool);
       }
     }
+
+    // Session controller — getters keep refs live so switchModel() /
+    // setSystemPrompt() / addTool() all show up without re-wiring the bag.
+    this.sessions = new SessionController({
+      sessionStore: this.sessionStore,
+      eventLogStore: this.eventLogStore,
+      projectContext: this._projectContext,
+      memory: this._memory,
+      compactionConfig: this.compactionConfig,
+      compactionStrategy: this.compactionStrategy,
+      toolGuardEnabled: !!this.toolGuard,
+      getProvider: () => this.provider,
+      getProviderConfig: () => this.providerConfig,
+      getSystemPrompt: () => this.systemPrompt,
+      getPromptPack: () => this.promptPack,
+      getTools: () => this.tools,
+      interject: (text) => this.interject(text),
+      emit: (event, onEvent) => this.emit(event, onEvent),
+      buildSystemPrompt: (base) => this.buildSystemPrompt(base),
+    });
   }
 
   /**
    * Simplified agent creation. Sensible defaults:
-   * - FileSessionStore at `{cwd}/.berry-sessions/`
+   * - FileSessionStore at `{home.root}/sessions/`
    * - Default compaction config
    * - No tools (add via `agent.addTool()` or pass `tools`)
    *
    * For full control, use `new Agent(config)` directly.
    */
   static create(config: AgentCreateConfig): Agent {
+    if (!config.home) {
+      throw new Error(
+        'Agent.create: `home` is required. Construct `new AgentHome(rootDir)` and pass it in.',
+      );
+    }
     const cwd = config.cwd ?? process.cwd();
 
-    // Resolve provider config (or pass-through resolver unchanged)
+    // Resolve provider config (or pass-through resolver unchanged).
+    // Agent constructor will treat this as a seed on first launch; subsequent
+    // launches read provider from agent.json instead.
     let providerConfig: ProviderInput;
     if (config.registry) {
       providerConfig = config.registry.toProviderConfig(config.model);
@@ -398,45 +524,37 @@ export class Agent {
       };
     }
 
-    // Session store: file-based by default
-    const sessionsDir = config.sessionsDir ?? `${cwd}/.berry-sessions`;
-    const sessionStore = config.sessionStore ?? new FileSessionStore(sessionsDir);
-
     return new Agent({
       provider: providerConfig,
-      systemPrompt: config.systemPrompt ?? 'You are a helpful AI assistant.',
       tools: config.tools,
       skillDirs: config.skillDirs,
       disabledSkills: config.disabledSkills,
       cwd,
-      sessionStore,
+      sessionStore: config.sessionStore,
       compaction: config.compaction,
       toolGuard: config.toolGuard,
       eventLogStore: config.eventLogStore,
-      workspace: config.workspace,
-      
+      home: config.home,
       project: config.project,
       middleware: config.middleware,
       onEvent: config.onEvent,
+      promptPack: config.promptPack,
+      promptPackDir: config.promptPackDir,
     });
-
   }
 
   /**
-   * Send a message to the agent and get a response.
-   * Handles: tool loop, compaction, cache, session persistence.
-   * When eventLogStore is configured, appends events for every action
-   * and rebuilds context from the event log via ContextStrategy.
+   * Send a turn to the agent and get a response. The single entry point —
+   * handles tool loop, compaction, cache, session persistence. `prompt`
+   * accepts a plain string or a `ContentBlock[]` for multimodal turns.
+   * When `eventLogStore` is configured, appends events for every action.
+   * The provider context is always committed to and read back from
+   * messages.json before each LLM inference; events.jsonl is audit/UI history.
    */
-  /**
-   * Send a turn to the agent. `prompt` accepts either a plain string
-   * (text-only, the common path) or a ContentBlock[] for multimodal turns
-   * (mix text + image blocks). Images travel through provider adapters
-   * unchanged until compaction, which strips them before summarization.
-   */
-  async query(prompt: string | ContentBlock[], options?: QueryOptions): Promise<QueryResult> {
-    // Ensure workspace is initialized before first query
-    if (this._workspaceReady) await this._workspaceReady;
+  async send(prompt: string | ContentBlock[], options?: QueryOptions): Promise<QueryResult> {
+    if (this._status === 'destroyed') {
+      throw new Error('Agent has been destroyed; create a new instance to continue');
+    }
 
     // Reset provider resolver so that transient errors from a previous query
     // don't permanently brick the model. Each query starts with a clean slate.
@@ -486,7 +604,7 @@ export class Agent {
     await appendEvent({ ...makeBase(), type: 'user_message', content: prompt });
 
     this._querying = true;
-    this.setStatus('thinking');
+    this.setStatus('tool_use', 'thinking');
 
     // Wrap main loop in try-catch to guarantee query_end is always emitted.
     // Without this, errors cause turns to stay "active" forever.
@@ -498,8 +616,8 @@ export class Agent {
       }
       return result;
     } catch (err) {
-      this.setStatus('error', err instanceof Error ? err.message : String(err));
-      // Emit error query_end so the turn is marked as failed, not stuck "active"
+      // Emit error query_end so the turn is marked as failed, not stuck "active".
+      // Status is reset to idle in the finally block below.
       const errorResult: QueryResult = {
         text: '',
         sessionId: session.id,
@@ -523,10 +641,9 @@ export class Agent {
       throw err;
     } finally {
       this._querying = false;
-      // Preserve 'error' so UI can observe the failure. Observers that
-      // want to reset can do so explicitly; the next query() transitions
-      // back to 'thinking' anyway.
-      if (this._status !== 'error') this.setStatus('idle');
+      // Runtime check: destroy() may have fired concurrently. The TS narrowing
+      // here is stale (status was set to 'tool_use' before this try block).
+      if ((this._status as AgentStatus) !== 'destroyed') this.setStatus('idle');
     }
   }
 
@@ -558,31 +675,41 @@ export class Agent {
       const compactLevel: 'soft' | 'hard' = shouldHardCompact({ session, systemPrompt: this.systemPrompt, compactionConfig: this.compactionConfig, contextWindow: ctxWindow }) ? 'hard' : 'soft';
 
       if (compactLevel === 'hard' && this._memory) {
-        this.setStatus('memory_flushing');
+        this.setStatus('tool_use', 'memory_flushing');
         await preCompactMemoryFlush({
           session,
           memory: this._memory!,
           provider: this.provider,
           systemPrompt: fullSystemPrompt,
+          promptPack: this.promptPack,
           emit,
           appendEvent,
           makeBase,
         });
       }
 
-      this.setStatus('compacting', compactLevel);
-      await runCompaction({
-        compactionStrategy: this.compactionStrategy,
+      this.setStatus('tool_use', `compacting:${compactLevel}`);
+      await this.runCompactionWithMiddleware(
         session,
-        compactionConfig: this.compactionConfig,
-        compactLevel,
-        provider: this.provider,
-        systemPrompt: fullSystemPrompt,
-        allowedTools,
-        emit,
-        appendEvent,
-        makeBase,
-      });
+        {
+          level: compactLevel,
+          reason: 'threshold',
+          tokensBefore: session.metadata.lastInputTokens ?? 0,
+        },
+        () => runCompaction({
+          compactionStrategy: this.compactionStrategy,
+          session,
+          compactionConfig: this.compactionConfig,
+          compactLevel,
+          provider: this.provider,
+          systemPrompt: fullSystemPrompt,
+          promptPack: this.promptPack,
+          allowedTools,
+          emit,
+          appendEvent,
+          makeBase,
+        }),
+      );
       compacted = true;
     }
 
@@ -601,35 +728,45 @@ export class Agent {
       //     prompt-too-long errors on the next API call.
       if (shouldHardCompact({ session, systemPrompt: this.systemPrompt, compactionConfig: this.compactionConfig, contextWindow: ctxWindow })) {
         if (this._memory) {
-          this.setStatus('memory_flushing');
+          this.setStatus('tool_use', 'memory_flushing');
           await preCompactMemoryFlush({
             session,
             memory: this._memory!,
             provider: this.provider,
             systemPrompt: fullSystemPrompt,
+            promptPack: this.promptPack,
             emit,
             appendEvent,
             makeBase,
           });
         }
 
-        this.setStatus('compacting', 'hard');
-        await runCompaction({
-          compactionStrategy: this.compactionStrategy,
+        this.setStatus('tool_use', 'compacting:hard');
+        await this.runCompactionWithMiddleware(
           session,
-          compactionConfig: this.compactionConfig,
-          compactLevel: 'hard',
-          provider: this.provider,
-          systemPrompt: fullSystemPrompt,
-          allowedTools,
-          emit,
-          appendEvent,
-          makeBase,
-        });
+          {
+            level: 'hard',
+            reason: 'threshold',
+            tokensBefore: session.metadata.lastInputTokens ?? 0,
+          },
+          () => runCompaction({
+            compactionStrategy: this.compactionStrategy,
+            session,
+            compactionConfig: this.compactionConfig,
+            compactLevel: 'hard',
+            provider: this.provider,
+            systemPrompt: fullSystemPrompt,
+            promptPack: this.promptPack,
+            allowedTools,
+            emit,
+            appendEvent,
+            makeBase,
+          }),
+        );
         compacted = true;
       }
 
-      this.setStatus('thinking');
+      this.setStatus('tool_use', 'thinking');
 
       // Drain any pending interject messages into the session so the upcoming
       // LLM call sees them. Interjects are always treated as user messages.
@@ -642,10 +779,9 @@ export class Agent {
         }
       }
 
-      // If event log is configured, rebuild messages from the log
-      const messagesForProvider = log
-        ? this.contextStrategy.buildMessages(await log.getEvents(session.id))
-        : session.messages;
+      // messages.json is the provider-context source of truth. Persist the
+      // current mutations first, then read back exactly what the provider sees.
+      let messagesForProvider = await this.persistAndReadProviderMessages(session);
 
       // 5b. Call provider (with PTL recovery)
       emit({
@@ -664,6 +800,7 @@ export class Agent {
         messages: messagesForProvider,
         tools: allowedTools.map(t => ({ name: t.definition.name, description: t.definition.description })),
         params: { maxTokens: this.providerConfig.maxTokens, thinkingBudget: this.providerConfig.thinkingBudget },
+        contextManifest: this.buildContextManifest(fullSystemPrompt, messagesForProvider, allowedTools),
       });
 
       let response: import('./types.js').ProviderResponse;
@@ -701,38 +838,48 @@ export class Agent {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
             // Force compaction to shrink context, then retry
-            this.setStatus('compacting', COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY);
-            await runCompaction({
-          compactionStrategy: this.compactionStrategy,
+            this.setStatus('tool_use', `compacting:${COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY}`);
+            await this.runCompactionWithMiddleware(
               session,
-              compactionConfig: this.compactionConfig,
-              compactLevel: 'hard',
-              provider: this.provider,
-              systemPrompt: fullSystemPrompt,
-              allowedTools,
-              emit: (event: AgentEvent) => {
-                // Override triggerReason for PTL recovery events
-                if (event.type === 'compaction') {
-                  emit({ ...event, triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY });
-                  return;
-                }
-                emit(event);
+              {
+                level: 'hard',
+                reason: 'overflow_retry',
+                tokensBefore: session.metadata.lastInputTokens ?? 0,
               },
-              appendEvent: async (event: SessionEvent) => {
-                // Override strategy for PTL recovery events
-                if ('type' in event && event.type === 'compaction_marker') {
-                  await appendEvent({
-                    ...event,
-                    strategy: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
-                    triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
-                  } as SessionEvent);
-                  return;
-                }
-                await appendEvent(event);
-              },
-              makeBase,
-            });
+              () => runCompaction({
+                compactionStrategy: this.compactionStrategy,
+                session,
+                compactionConfig: this.compactionConfig,
+                compactLevel: 'hard',
+                provider: this.provider,
+                systemPrompt: fullSystemPrompt,
+                promptPack: this.promptPack,
+                allowedTools,
+                emit: (event: AgentEvent) => {
+                  // Override triggerReason for PTL recovery events
+                  if (event.type === 'compaction') {
+                    emit({ ...event, triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY });
+                    return;
+                  }
+                  emit(event);
+                },
+                appendEvent: async (event: SessionEvent) => {
+                  // Override strategy for PTL recovery events
+                  if ('type' in event && event.type === 'compaction_marker') {
+                    await appendEvent({
+                      ...event,
+                      strategy: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
+                      triggerReason: COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY,
+                    } as SessionEvent);
+                    return;
+                  }
+                  await appendEvent(event);
+                },
+                makeBase,
+              }),
+            );
             compacted = true;
+            messagesForProvider = await this.persistAndReadProviderMessages(session);
             // Retry with compacted messages
             continue;
           }
@@ -812,7 +959,7 @@ export class Agent {
       if (response.stopReason !== 'tool_use' && toolUses.length > 0) {
         response.stopReason = 'tool_use';
       }
-      this.setStatus('tool_executing', toolUses.map(t => t.name).join(', '));
+      this.setStatus('tool_use', toolUses.map(t => t.name).join(', '));
 
       const mwCtx = this.getMiddlewareContext(session);
 
@@ -832,7 +979,7 @@ export class Agent {
       });
 
       toolCallCount += execResult.toolCalls;
-      this.setStatus('thinking');
+      this.setStatus('tool_use', 'thinking');
 
       // Add all tool results as one user message
       session.messages.push({
@@ -848,7 +995,8 @@ export class Agent {
       // Loop continues → next API call with tool results
     }
 
-    // 6. Persist session (skip when event log is source of truth)
+    // 6. Persist final session state. messages.json remains the provider
+    // context source of truth; events.jsonl is append-only audit/UI history.
     session.lastAccessedAt = Date.now();
     await this.sessionStore.save(session);
 
@@ -892,36 +1040,18 @@ export class Agent {
   // ===== Public API =====
 
   /** Create and persist an empty session before the first query turn. */
-  async createSession(_options?: CreateSessionOptions): Promise<Session> {
-    if (this._workspaceReady) await this._workspaceReady;
-    const session = await this.createFreshSession();
-    await this.sessionStore.save(session);
-    return session;
+  async createSession(options?: CreateSessionOptions): Promise<Session> {
+    return this.sessions.createSession(options);
   }
 
   /** Get a session by ID. When event log is configured, rebuilds from log. */
   async getSession(id: string): Promise<Session | null> {
-    if (this.eventLogStore) {
-      const events = await this.eventLogStore.getEvents(id);
-      const stored = await this.sessionStore.load(id);
-      if (events.length === 0) return normalizeLoadedSession(stored);
-      return {
-        id,
-        messages: this.contextStrategy.buildMessages(events),
-        createdAt: stored?.createdAt ?? events[0].timestamp,
-        lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
-        metadata: stored?.metadata ?? createEmptySessionMetadata(),
-      };
-    }
-    return normalizeLoadedSession(await this.sessionStore.load(id));
+    return this.sessions.getSession(id);
   }
 
   /** List all session IDs. When event log is configured, lists from log. */
   async listSessions(): Promise<string[]> {
-    if (this.eventLogStore) {
-      return this.eventLogStore.listSessions();
-    }
-    return this.sessionStore.list();
+    return this.sessions.listSessions();
   }
 
   /**
@@ -930,20 +1060,7 @@ export class Agent {
    * chat" should mean: the next query on this session starts fresh.
    */
   async clearSession(id: string): Promise<void> {
-    // 1. Clear the event log so resolveSession won't rebuild old messages
-    if (this.eventLogStore) {
-      await this.eventLogStore.clear(id);
-    }
-    // 2. Save an empty session to the session store
-    const existing = await this.sessionStore.load(id);
-    const cleared: Session = {
-      id,
-      messages: [],
-      createdAt: existing?.createdAt ?? Date.now(),
-      lastAccessedAt: Date.now(),
-      metadata: existing?.metadata ?? createEmptySessionMetadata(),
-    };
-    await this.sessionStore.save(cleared);
+    return this.sessions.clearSession(id);
   }
 
   /** Register an additional tool at runtime */
@@ -952,44 +1069,52 @@ export class Agent {
   }
 
   /**
-   * Switch the model used by this agent. Keeps the same provider type/key/baseUrl,
-   * only changes the model identifier sent to the API.
+   * Switch the model used by this agent. Accepts a model-ref string that
+   * follows the same conventions as the `provider` field at construction:
    *
-   * Like switchProvider(), this drops any attached resolver — otherwise the
-   * new model would be rolled back on the next inference when the resolver
-   * re-derives its (stale) config. Callers needing failover should pass a
-   * fresh ProviderResolver via switchProvider() instead.
+   *   - `'tier:fast'`  / `'tier:strong'` / `'tier:balanced'`
+   *   - `'model:claude-sonnet-4-20250514'`
+   *   - `'raw:...'`
+   *   - Bare model id (e.g. `'claude-sonnet-4-20250514'`) — treated as `model:`.
+   *
+   * When a `modelResolver` was provided at construction, the ref is resolved
+   * by the host product — this can set up failover, tier mapping, etc.
+   * Without a resolver, the ref is
+   * treated as a bare model id and only the `model` field of the current
+   * ProviderConfig is swapped (same key, same base URL, same type).
+   *
+   * Always drops any attached resolver so the new config is the single source
+   * of truth. Callers who need failover after a switch should pass a
+   * `modelResolver` at construction so switchModel can re-wire one.
    */
-  switchModel(model: string): void {
-    this.providerResolver = null;
-    this.providerConfig = { ...this.providerConfig, model };
+  switchModel(modelRef: string): void {
+    if (this._modelResolver) {
+      const input = this._modelResolver(modelRef);
+      if (isProviderResolver(input)) {
+        this.providerResolver = input;
+        this.providerConfig = this.providerResolver.resolve();
+      } else {
+        this.providerResolver = null;
+        this.providerConfig = input;
+      }
+    } else {
+      // No registry — treat as a bare model id, keep existing provider type/key/baseUrl.
+      this.providerResolver = null;
+      this.providerConfig = { ...this.providerConfig, model: modelRef };
+    }
     this.provider = createProvider(this.providerConfig);
+    saveAgentConfigSync(this._home.root, { model: modelRef });
   }
 
   /**
-   * Replace the agent's provider state at runtime. Accepts either a static
-   * ProviderConfig or a full ProviderResolver. Sessions are preserved.
-   *
-   * There is only ever ONE provider state source on an Agent: `providerConfig`
-   * (and optionally `providerResolver`, which re-derives providerConfig on
-   * every inference). Callers who swap the provider must replace BOTH or the
-   * resolver's closure will silently roll the new config back on the next
-   * inference (see refreshProviderIfNeeded).
-   *
-   * - Static ProviderConfig → drops any attached resolver (failover off until
-   *   a new resolver is supplied).
-   * - ProviderResolver → replaces the attached resolver; initial config is
-   *   taken from `resolve()`.
+   * Override the reasoning effort level on the current provider config.
+   * Takes effect on the next LLM inference. Persisted to agent.json.
    */
-  switchProvider(input: ProviderInput): void {
-    if (isProviderResolver(input)) {
-      this.providerResolver = input as ProviderResolver;
-      this.providerConfig = this.providerResolver.resolve();
-    } else {
-      this.providerResolver = null;
-      this.providerConfig = input as ProviderConfig;
-    }
+  setReasoningEffort(effort: ReasoningEffort): void {
+    this.providerResolver = null;
+    this.providerConfig = { ...this.providerConfig, reasoningEffort: effort };
     this.provider = createProvider(this.providerConfig);
+    saveAgentConfigSync(this._home.root, { reasoningEffort: effort });
   }
 
   /** Get current provider config (read-only) */
@@ -999,13 +1124,43 @@ export class Agent {
 
   // ===== Hot reload API =====
   //
-  // These mutators let a product (e.g. berry-claw) reconfigure a running
+  // These mutators let a host product reconfigure a running
   // Agent without destroying the instance, so sessions/memory/pending
   // interjects survive. Changes take effect on the next LLM inference.
 
   /** Replace the user-facing system prompt blocks. */
   setSystemPrompt(blocks: SystemPromptInput): void {
     this.systemPrompt = normalizeSystemPrompt(blocks);
+  }
+
+  private async persistAndReadProviderMessages(session: Session): Promise<Message[]> {
+    session.lastAccessedAt = Date.now();
+    await this.sessionStore.save(session);
+    const persisted = await this.sessionStore.load(session.id);
+    if (!persisted) {
+      throw new Error(`Session disappeared after save: ${session.id}`);
+    }
+    session.messages = persisted.messages;
+    session.metadata = persisted.metadata;
+    session.createdAt = persisted.createdAt;
+    session.lastAccessedAt = persisted.lastAccessedAt;
+    return persisted.messages;
+  }
+
+  private buildContextManifest(
+    systemPrompt: readonly SystemPromptBlock[],
+    messages: readonly Message[],
+    allowedTools: readonly ToolRegistration[],
+  ): import('./event-log/types.js').ContextManifest {
+    return {
+      promptPackVersion: this.promptPack.version,
+      messageSource: 'messages.json',
+      messageCount: messages.length,
+      systemBlockCount: systemPrompt.length,
+      systemBlockHashes: systemPrompt.map((block) => shortHash(block.text)),
+      toolCount: allowedTools.length,
+      toolsHash: shortHash(allowedTools.map((tool) => tool.definition)),
+    };
   }
 
   /** Register (or replace by name) a single tool. */
@@ -1019,19 +1174,72 @@ export class Agent {
   }
 
   /**
-   * Set an explicit allow-list of tool names used on every query. Pass `null`
-   * or `undefined` to clear and use all registered + runtime tools.
+   * Set the instance-level tool DENY-list. Names in the list are stripped
+   * from every query regardless of per-query `allowedTools`. Pass an empty
+   * array (or no arg) to clear. Persisted to `agent.json` synchronously so
+   * a restart keeps the same denylist.
    *
-   * Runtime tools (memory/todo/sleep) are always allowed; this filter only
-   * applies to user-registered tools.
+   * Runtime tools (todo/sleep) are NOT exempt — if a product denies them
+   * here, they are denied.
    */
-  setAllowedTools(names: string[] | null | undefined): void {
-    this._instanceAllowedTools = names ? new Set(names) : undefined;
+  setToolDenylist(names: string[] = []): void {
+    this._toolDenylist = new Set(names);
+    saveAgentConfigSync(this._home.root, {
+      toolDenylist: [...this._toolDenylist],
+    });
   }
 
-  /** Current instance-level tool allow-list (read-only). */
-  getAllowedTools(): string[] | undefined {
-    return this._instanceAllowedTools ? [...this._instanceAllowedTools] : undefined;
+  /** Current instance-level tool deny-list (read-only). */
+  getToolDenylist(): string[] {
+    return [...this._toolDenylist];
+  }
+
+  // ===== Lifecycle =====
+  //
+  // Four observable states:
+  //   idle      — waiting for input
+  //   tool_use  — running a turn (LLM call, tool execution, compaction — all fold here)
+  //   sleeping  — suspended by the sleep tool; interject() wakes
+  //   destroyed — terminal; every further call rejects
+  //
+  // There is no pause/resume. `send()` is the single turn entry point.
+  // `delegate()` forks a sub-turn; the agent stays in tool_use throughout.
+
+  /**
+   * Terminal shutdown. Destroys all child agents, clears pending interjects,
+   * and marks the instance unusable. After destroy():
+   *   - send() / delegate() reject
+   *   - registerTool / setSystemPrompt / setToolDenylist throw
+   *   - introspection still works so the product can render a final view
+   *
+   * Idempotent — calling destroy() twice is a no-op.
+   */
+  destroy(): void {
+    if (this._status === 'destroyed') return;
+    // Tear down children first so their own stores / tasks exit cleanly
+    for (const [id, child] of this._children.entries()) {
+      try {
+        child.destroy();
+      } catch (err) {
+        // Never let a rogue child block the parent's teardown
+        console.warn(`[agent] destroying child ${id} threw:`, err);
+      }
+    }
+    this._children.clear();
+
+    // Drop pending interjects + wake anything sleeping so awaiters don't leak
+    this._pendingInterjects = [];
+    const wakers = this._interjectWakers.splice(0);
+    for (const w of wakers) {
+      try { w(); } catch { /* noop */ }
+    }
+
+    this.setStatus('destroyed');
+  }
+
+  /** True once destroy() has completed. */
+  get isDestroyed(): boolean {
+    return this._status === 'destroyed';
   }
 
   // ===== Introspection =====
@@ -1043,32 +1251,22 @@ export class Agent {
 
   /** Get all registered tool definitions */
   getTools(): ToolDefinition[] {
-    const registered = [...this.tools.values()];
-    // Use a lightweight signal here — this path only needs definitions.
-    const runtime = getRuntimeToolDefinitions({
-      sleepSignal: {
-        onEnter: () => {},
-        onExit: () => {},
-        interjectWaker: () => new Promise(() => {}),
-      },
-      memory: this._memory,
-      projectContext: this._projectContext,
-    }).map((definition) => ({
-      definition,
-      execute: async () => ({ content: '' }),
-    }));
-
-    return mergeToolsByName(registered, runtime).map(t => t.definition);
+    return getToolsFrom(this.introspectionDeps());
   }
 
   /** Get loaded skill metadata (empty if skills not yet loaded) */
   getSkillMetas(): Array<{ name: string; description: string; dir: string }> {
-    if (!this.loadedSkills) return [];
-    return this.loadedSkills.map(s => ({
-      name: s.meta.name,
-      description: s.meta.description,
-      dir: s.dir,
-    }));
+    return getSkillMetasFrom(this.skills.loadedSnapshot);
+  }
+
+  /**
+   * Get MCP servers currently visible to this Agent, grouped by upstream
+   * server name. Derived from the registered tools Map — any tool whose
+   * `source.kind === 'mcp'` is rolled up here. Tool names remain prefixed
+   * (`mcp__<server>__<tool>`), matching what the LLM sees.
+   */
+  getMCP(): MCPSummary[] {
+    return getMCPFrom(this.introspectionDeps());
   }
 
   /** Get current working directory */
@@ -1076,49 +1274,31 @@ export class Agent {
     return this.cwd;
   }
 
-  /** Full introspection snapshot */
-  inspect(): {
-    provider: Readonly<ProviderConfig>;
-    systemPrompt: SystemPromptBlock[];
-    tools: ToolDefinition[];
-    skills: Array<{ name: string; description: string; dir: string }>;
-    cwd: string;
-    middleware: number;
-    hasToolGuard: boolean;
-    workspace?: string;
-    memory?: { available: boolean };
-    compaction?: {
-      threshold: number;
-      softThreshold: number;
-      contextWindow: number;
-      enabledLayers?: string[];
-    };
-    eventLog?: { available: boolean };
-    hasCustomCompaction: boolean;
-    children: string[];
-    status: import('./types.js').AgentStatus;
-    statusDetail?: string;
-  } {
-    const ctxWindow = this.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  /**
+   * Capture a frozen-in-time POJO of agent configuration + runtime state.
+   * Safe to pass around, serialize, or diff. Replaces the old inspect() /
+   * getSnapshot() pair.
+   */
+  snapshot(): AgentSnapshot {
+    return snapshotFrom(this.introspectionDeps());
+  }
+
+  /** Assemble the dependency bag introspection helpers read from. */
+  private introspectionDeps() {
     return {
-      provider: this.currentProvider,
-      systemPrompt: normalizeSystemPrompt(this.systemPrompt),
-      tools: this.getTools(),
-      skills: this.getSkillMetas(),
+      providerConfig: this.providerConfig,
+      systemPrompt: this.systemPrompt,
+      tools: this.tools,
+      loadedSkills: this.skills.loadedSnapshot,
       cwd: this.cwd,
-      middleware: this.middleware.length,
-      hasToolGuard: !!this.toolGuard,
-      workspace: this._workspaceRoot,
-      memory: { available: !!this._memory },
-      compaction: {
-        threshold: this.compactionConfig?.threshold ?? Math.floor(ctxWindow * DEFAULT_COMPACTION_RATIO),
-        softThreshold: this.compactionConfig?.softThreshold ?? Math.floor(ctxWindow * DEFAULT_SOFT_COMPACTION_RATIO),
-        contextWindow: ctxWindow,
-        enabledLayers: this.compactionConfig?.enabledLayers,
-      },
-      eventLog: { available: !!this.eventLogStore },
-      hasCustomCompaction: !!this.compactionStrategy,
-      children: [...this._children.keys()],
+      middleware: this.middleware,
+      toolGuard: this.toolGuard,
+      workspaceRoot: this._home.root,
+      memory: this._memory,
+      compactionConfig: this.compactionConfig,
+      compactionStrategy: this.compactionStrategy,
+      eventLogStore: this.eventLogStore,
+      children: this._children,
       status: this._status,
       statusDetail: this._statusDetail,
     };
@@ -1141,237 +1321,28 @@ export class Agent {
    * @returns Final text + usage from the delegate's execution
    */
   async delegate(message: string, config?: DelegateConfig): Promise<DelegateResult> {
-    const previousStatus = this._status;
-    this.setStatus('delegating');
-    const emit = (event: AgentEvent) => {
-      this.onEvent?.(event);
-      config?.onEvent?.(event);
-    };
-
-    // Stable sessionId for entire delegate lifecycle (fixes FK + observe consistency)
-    const delegateSessionId = `delegate_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    // Emit query_start so observe collector creates the session row before any llm_calls
-    emit({ type: 'query_start', sessionId: delegateSessionId, prompt: message });
-    emit({ type: 'delegate_start', message });
-
-    // Build system prompt for the delegate
-    let delegateSystemPrompt: SystemPromptBlock[];
-    if (config?.overrideSystemPrompt !== undefined) {
-      delegateSystemPrompt = normalizeSystemPrompt(config.overrideSystemPrompt);
-    } else {
-      // Start with main agent's system prompt (cache sharing)
-      delegateSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
-      if (config?.appendSystemPrompt !== undefined) {
-        const extra = normalizeSystemPrompt(config.appendSystemPrompt);
-        delegateSystemPrompt = [...delegateSystemPrompt, ...extra];
-      }
-    }
-
-    // Build conversation prefix (main agent's messages for cache sharing)
-    let contextMessages: Message[] = [];
-    if (config?.includeHistory !== false) {
-      const sid = config?.sessionId ?? this._lastSessionId;
-      if (sid) {
-        const session = await this.sessionStore.load(sid);
-        if (session) contextMessages = [...session.messages];
-      }
-    }
-
-    // Build messages: context prefix + delegate prompt
-    const messages: Message[] = [
-      ...contextMessages,
-      { role: 'user' as const, content: message, createdAt: Date.now() },
-    ];
-
-    const delegateSession: Session = {
-      id: delegateSessionId,
-      messages,
-      createdAt: Date.now(),
-      lastAccessedAt: Date.now(),
-      metadata: createEmptySessionMetadata(),
-    };
-
-    // Resolve tools
-    let delegateTools = this.resolveAllowedTools(config?.allowedTools, delegateSession);
-    if (config?.additionalTools) {
-      delegateTools = mergeToolsByName(config.additionalTools, delegateTools);
-    }
-
-    // Create a transient provider (same instance for cache sharing, or new for model override)
-    const delegateProvider = config?.model
-      ? createProvider({ ...this.providerConfig, model: config.model })
-      : this.provider;
-
-    const delegateGuard = config?.toolGuard ?? this.toolGuard;
-
-    // Run the delegate's tool loop
-    let delegateTurns = 0;
-    const maxTurns = config?.maxTurns ?? DEFAULT_MAX_TURNS;
-    let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
-    let toolCalls = 0;
-    const toolMap = new Map(delegateTools.map(t => [t.definition.name, t]));
-
-    try {
-      while (delegateTurns < maxTurns) {
-      delegateTurns++;
-
-      let request: ProviderRequest = {
-        systemPrompt: delegateSystemPrompt,
-        messages,
-        tools: delegateTools.map(t => t.definition),
-        signal: config?.abortSignal,
-      };
-
-      // Middleware: onBeforeApiCall (reuse stable delegateSessionId across all turns)
-      const mwCtx: MiddlewareContext = {
-        sessionId: delegateSessionId,
-        model: config?.model ?? this.providerConfig.model,
-        provider: this.providerConfig.type,
+    return runDelegate(
+      {
+        status: this._status,
+        lastSessionId: this._lastSessionId,
+        sessionStore: this.sessionStore,
+        providerConfig: this.providerConfig,
+        provider: this.provider,
+        toolGuard: this.toolGuard,
+        middleware: this.middleware,
         cwd: this.cwd,
-      };
-      for (const mw of this.middleware) {
-        if (mw.onBeforeApiCall) request = await mw.onBeforeApiCall(request, mwCtx);
-      }
-
-      const response = await (config?.stream && delegateProvider.stream
-        ? this.callProvider_delegate(delegateProvider, request, emit)
-        : delegateProvider.chat(request));
-
-      // Middleware: onAfterApiCall
-      for (const mw of this.middleware) {
-        if (mw.onAfterApiCall) await mw.onAfterApiCall(request, response, mwCtx);
-      }
-
-      totalUsage = accumulateUsage(totalUsage, response.usage);
-      emit({ type: 'api_response', usage: response.usage, stopReason: response.stopReason, model: config?.model ?? this.providerConfig.model });
-
-      // Add assistant message
-      messages.push({ role: 'assistant', content: response.content, createdAt: Date.now() });
-
-      // DEFENSIVE: same as main loop — check content for tool_use blocks, not
-      // just stopReason. See comment in main loop for rationale.
-      const toolUses = (response.content as ContentBlock[]).filter(
-        (b): b is ToolUseContent => b.type === 'tool_use',
-      );
-      if (response.stopReason !== 'tool_use' && toolUses.length === 0) break;
-      if (response.stopReason !== 'tool_use' && toolUses.length > 0) {
-        response.stopReason = 'tool_use';
-      }
-      const toolResultBlocks: ContentBlock[] = [];
-
-      for (const toolUse of toolUses) {
-        toolCalls++;
-        const tool = toolMap.get(toolUse.name);
-        if (!tool) {
-          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Error: unknown tool "${toolUse.name}"`, isError: true });
-          continue;
-        }
-
-        let guardedInput = toolUse.input;
-        if (delegateGuard) {
-          const decision = await delegateGuard({ toolName: toolUse.name, input: toolUse.input, session: { id: mwCtx.sessionId, cwd: this.cwd, model: mwCtx.model }, callIndex: toolCalls });
-          if (decision.action === 'deny') {
-            toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Permission denied: ${decision.reason}`, isError: true });
-            continue;
-          }
-          if (decision.action === 'modify') guardedInput = decision.input;
-        }
-
-        try {
-          // Middleware: onBeforeToolExec
-          for (const mw of this.middleware) {
-            if (mw.onBeforeToolExec) guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
-          }
-          const result = await tool.execute(guardedInput, { cwd: this.cwd, abortSignal: config?.abortSignal });
-          // Middleware: onAfterToolExec
-          for (const mw of this.middleware) {
-            if (mw.onAfterToolExec) await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
-          }
-          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: result.forLLM ?? result.content, isError: result.isError });
-        } catch (err) {
-          toolResultBlocks.push({ type: 'tool_result', toolUseId: toolUse.id, content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true });
-        }
-      }
-
-      messages.push({ role: 'user', content: toolResultBlocks, createdAt: Date.now() });
-    }
-
-      const lastMsg = messages[messages.length - 1];
-      const text = extractText(lastMsg);
-      const result: DelegateResult = { text, usage: totalUsage, turns: delegateTurns, toolCalls };
-      emit({ type: 'delegate_end', result });
-      return result;
-    } finally {
-      this.setStatus(previousStatus);
-    }
+        onEvent: this.onEvent,
+        systemPrompt: this.systemPrompt,
+        setStatus: (status, detail) => this.setStatus(status, detail),
+        buildSystemPrompt: (base, override) => this.buildSystemPrompt(base, override),
+        resolveAllowedTools: (allowed, session) => this.resolveAllowedTools(allowed, session),
+      },
+      message,
+      config,
+    );
   }
 
-  private async callProvider_delegate(
-    provider: Provider,
-    request: ProviderRequest,
-    emit: (event: AgentEvent) => void,
-  ): Promise<import('./types.js').ProviderResponse> {
-    if (!provider.stream) return provider.chat(request);
-    let finalResponse: import('./types.js').ProviderResponse | null = null;
-    for await (const event of provider.stream(request)) {
-      if (event.type === 'text_delta') emit({ type: 'text_delta', text: event.text });
-      else if (event.type === 'thinking_delta') emit({ type: 'thinking_delta', thinking: event.thinking });
-      else if (event.type === 'response') finalResponse = event.response;
-    }
-    if (!finalResponse) throw new Error('Provider stream ended without a final response');
-    return finalResponse;
-  }
-
-  // ===== Spawn (persistent sub-agent) =====
-
-  /**
-   * Create a persistent sub-agent. Inherits provider by default.
-   * Sub-agents cannot spawn further sub-agents.
-   */
-  spawn(config: SpawnConfig): Agent {
-    if (this._isSubAgent) {
-      throw new Error('Sub-agents cannot spawn further sub-agents');
-    }
-
-    const id = config.id ?? `child_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-
-    // Merge tools
-    let tools: ToolRegistration[];
-    if (config.tools && config.inheritTools !== false) {
-      // Specified tools + parent's tools
-      tools = [...this.tools.values(), ...config.tools];
-    } else if (config.tools) {
-      tools = config.tools;
-    } else {
-      tools = [...this.tools.values()]; // inherit all
-    }
-
-    const childConfig: InternalAgentConfig = {
-      provider: config.model
-        ? { ...this.providerConfig, model: config.model }
-        : this.providerConfig,
-      // Share provider instance for cache sharing (only when same model)
-      providerInstance: config.model ? undefined : this.provider,
-      systemPrompt: config.systemPrompt,
-      tools,
-      cwd: config.cwd ?? this.cwd,
-      compaction: config.compaction ?? this.compactionConfig,
-      toolGuard: config.toolGuard ?? this.toolGuard,
-      middleware: this.middleware,
-      onEvent: this.onEvent,
-      sessionStore: config.sessionStore ?? this.sessionStore,
-      eventLogStore: this.eventLogStore,
-      
-      _isSubAgent: true,
-    };
-    const child = new Agent(childConfig);
-
-    this._children.set(id, child);
-    this.emit({ type: 'child_spawned', childId: id });
-    return child;
-  }
-
-  /** Get all active sub-agents */
+  /** Get all active sub-agents (currently only populated by delegate-style helpers). */
   get children(): ReadonlyMap<string, Agent> {
     return this._children;
   }
@@ -1409,126 +1380,39 @@ export class Agent {
     };
   }
 
-  private async resolveSession(options?: QueryOptions): Promise<Session> {
-    if (options?.resume) {
-      // When event log is configured, rebuild session from event log (source of truth)
-      if (this.eventLogStore) {
-        const events = await this.eventLogStore.getEvents(options.resume);
-        const stored = await this.sessionStore.load(options.resume);
-        if (events.length === 0) {
-          // No events — maybe a legacy session, fall back to session store
-          const session = normalizeLoadedSession(stored);
-          if (!session) throw new Error(`Session not found: ${options.resume}`);
-          return session;
-        }
-
-        // Crash recovery: detect and record crash artifacts (orphaned tool calls).
-        // Only runs once per session per process, so repeated query() on a resumed
-        // session does not re-detect. Emits a `crash_recovered` event for audit
-        // and queues an interject to warn the LLM.
-        if (!this._crashCheckedSessions.has(options.resume)) {
-          this._crashCheckedSessions.add(options.resume);
-          const detection = detectCrashArtifacts(events);
-          if (detection.crashed) {
-            const interject = formatCrashInterject(detection.artifacts);
-            this.interject(interject);
-
-            // Audit record in event log (source of truth)
-            const lastEvent = events[events.length - 1];
-            const crashEvent = {
-              id: generateEventId(),
-              timestamp: Date.now(),
-              sessionId: options.resume,
-              turnId: lastEvent.turnId,
-              type: 'crash_recovered' as const,
-              artifactCount: detection.artifacts.length,
-              orphanedTools: detection.artifacts.map(a => ({
-                toolUseId: a.toolUseId,
-                name: a.name,
-                input: a.input,
-                startedAt: a.startedAt,
-                startEventId: a.startEventId,
-              })),
-              interjected: true,
-              crashedTurnId: lastEvent.turnId,
-            };
-            await this.eventLogStore.append(options.resume, crashEvent);
-
-            // Also emit as AgentEvent so collectors/observers can record it live.
-            this.emit(
-              {
-                type: 'crash_recovered',
-                sessionId: options.resume,
-                artifactCount: detection.artifacts.length,
-                orphanedTools: crashEvent.orphanedTools,
-                crashedTurnId: lastEvent.turnId,
-              },
-              options?.onEvent,
-            );
-          }
-        }
-
-        // Rebuild messages from event log
-        const messages = this.contextStrategy.buildMessages(events);
-        const session: Session = {
-          id: options.resume,
-          messages,
-          createdAt: stored?.createdAt ?? events[0].timestamp,
-          lastAccessedAt: stored?.lastAccessedAt ?? events[events.length - 1].timestamp,
-          metadata: stored?.metadata ?? createEmptySessionMetadata(),
-        };
-        return session;
+  /**
+   * Fire `onBeforeCompact` / `onAfterCompact` around a compaction call.
+   * Middleware errors are swallowed so an observer failure never aborts
+   * compaction — the agent's token-pressure logic must not depend on
+   * observe collectors succeeding.
+   */
+  private async runCompactionWithMiddleware(
+    session: Session,
+    compactCtx: import('./types.js').CompactionContext,
+    run: () => Promise<import('./compaction-runner.js').RunCompactionResult>,
+  ): Promise<import('./compaction-runner.js').RunCompactionResult> {
+    const mwCtx = this.getMiddlewareContext(session);
+    for (const mw of this.middleware) {
+      if (mw.onBeforeCompact) {
+        try { await mw.onBeforeCompact(compactCtx, mwCtx); } catch { /* ignore */ }
       }
-      const session = normalizeLoadedSession(await this.sessionStore.load(options.resume));
-      if (!session) throw new Error(`Session not found: ${options.resume}`);
-      return session;
     }
-    if (options?.fork) {
-      const source = normalizeLoadedSession(await this.sessionStore.load(options.fork));
-      if (!source) throw new Error(`Session not found: ${options.fork}`);
-      return {
-        ...structuredClone(source),
-        id: generateId(),
-        createdAt: Date.now(),
-        lastAccessedAt: Date.now(),
-      };
+    const result = await run();
+    const outcome: import('./types.js').CompactionOutcome = {
+      tokensFreed: result.result.tokensFreed,
+      layersApplied: [...result.result.layersApplied],
+      durationMs: result.durationMs,
+    };
+    for (const mw of this.middleware) {
+      if (mw.onAfterCompact) {
+        try { await mw.onAfterCompact(compactCtx, outcome, mwCtx); } catch { /* ignore */ }
+      }
     }
-    return this.createFreshSession();
+    return result;
   }
 
-  private async createFreshSession(): Promise<Session> {
-    const newSession: Session = {
-      id: generateId(),
-      messages: [],
-      createdAt: Date.now(),
-      lastAccessedAt: Date.now(),
-      metadata: createEmptySessionMetadata(),
-    };
-
-    // DURABILITY: write session_start event with complete initial state
-    if (this.eventLogStore) {
-      const projectCtx = this._projectContext
-        ? await this._projectContext.loadContext().catch(() => undefined)
-        : undefined;
-      await this.eventLogStore.append(newSession.id, {
-        id: generateEventId(),
-        timestamp: Date.now(),
-        sessionId: newSession.id,
-        turnId: 'start',
-        type: 'session_start',
-        systemPrompt: normalizeSystemPrompt(this.systemPrompt),
-        projectContextSnapshot: projectCtx,
-        toolsAvailable: Array.from(this.tools.values()).map(t => t.definition.name),
-        guardEnabled: !!this.toolGuard,
-        providerType: this.providerConfig.type,
-        model: this.providerConfig.model,
-        compactionConfig: this.compactionConfig
-          ? { ...this.compactionConfig, enabledLayers: this.compactionConfig.enabledLayers }
-          : undefined,
-      });
-    }
-
-    return newSession;
+  private async resolveSession(options?: QueryOptions): Promise<Session> {
+    return this.sessions.resolveSession(options);
   }
 
   private resolveAllowedTools(allowed?: string[], session?: Session): ToolRegistration[] {
@@ -1544,13 +1428,11 @@ export class Agent {
           timestamp: state.updatedAt,
         });
       },
-      memory: this._memory,
-      projectContext: this._projectContext,
     });
     const merged = mergeToolsByName(registered, runtime);
 
-    // Runtime tools (memory/todo/sleep) are always allowed; instance allow-list
-    // only filters user-registered tools.
+    // Runtime tools (memory/todo/sleep) are exempt from the per-query allow-list
+    // (keeps memory etc. always-on unless the denylist explicitly rejects them).
     const runtimeNames = new Set(runtime.map(t => t.definition.name));
     const applyAllow = (tool: ToolRegistration, set?: Set<string>): boolean => {
       if (!set) return true;
@@ -1558,13 +1440,15 @@ export class Agent {
       return set.has(tool.definition.name);
     };
 
-    const afterInstance = this._instanceAllowedTools
-      ? merged.filter(t => applyAllow(t, this._instanceAllowedTools))
+    // 1. Per-query allow-list (if provided) narrows user-registered tools.
+    const afterAllow = allowed
+      ? merged.filter(t => applyAllow(t, new Set(allowed)))
       : merged;
 
-    if (!allowed) return afterInstance;
-    const perQuerySet = new Set(allowed);
-    return afterInstance.filter(t => applyAllow(t, perQuerySet));
+    // 2. Instance-level denylist strips names unconditionally. Applied last so
+    // a product can guarantee certain tools are off regardless of allowedTools.
+    if (this._toolDenylist.size === 0) return afterAllow;
+    return afterAllow.filter(t => !this._toolDenylist.has(t.definition.name));
   }
 
   /**
@@ -1572,9 +1456,7 @@ export class Agent {
    * no todos have been set yet.
    */
   async getTodos(sessionId: string): Promise<TodoItem[]> {
-    const session = await this.sessionStore.load(sessionId);
-    if (!session) return [];
-    return session.metadata.todo?.items ?? [];
+    return this.sessions.getTodos(sessionId);
   }
 
   /**
@@ -1586,156 +1468,49 @@ export class Agent {
    * new session.
    */
   async compactSession(sessionId: string, options?: { reason?: string }): Promise<CompactionResult> {
-    const session = await this.sessionStore.load(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-
-    // Manual compact always runs hard (user explicitly requested it)
-    const compactLevel: 'hard' = 'hard';
-
-    const fullSystemPrompt = await this.buildSystemPrompt(this.systemPrompt);
-    const allowedTools = Array.from(this.tools.values());
-
-    if (this._memory) {
-      const makeBase = () => ({
-        id: generateId(), timestamp: Date.now(), sessionId, turnId: 'compact',
-      });
-      await preCompactMemoryFlush({
-        session,
-        memory: this._memory,
-        provider: this.provider,
-        systemPrompt: fullSystemPrompt,
-        emit: () => {},
-        appendEvent: async (event: SessionEvent) => {
-          if (this.eventLogStore) await this.eventLogStore.append(sessionId, event);
-        },
-        makeBase,
-      });
-    }
-
-    const { result: compactResult } = await runCompaction({
-      compactionStrategy: this.compactionStrategy,
-      session,
-      compactionConfig: this.compactionConfig,
-      compactLevel,
-      provider: this.provider,
-      systemPrompt: fullSystemPrompt,
-      allowedTools,
-      emit: () => {},
-      appendEvent: async (event: SessionEvent) => {
-        if (this.eventLogStore) await this.eventLogStore.append(sessionId, event);
-      },
-      makeBase: () => ({
-        id: generateId(), timestamp: Date.now(), sessionId, turnId: 'compact',
-      }),
-    });
-
-    await this.sessionStore.save(session);
-
-    if (this.eventLogStore) {
-      const snapshot: any = {
-        id: generateId(),
-        timestamp: Date.now(),
-        sessionId,
-        turnId: 'compact',
-        type: 'messages_snapshot',
-        messages: session.messages,
-        reason: options?.reason ?? 'manual_compact',
-      };
-      await this.eventLogStore.append(sessionId, snapshot);
-    }
-
-    return compactResult;
+    return this.sessions.compactSession(sessionId, options);
   }
 
   private async buildSystemPrompt(
-    basePrompt: SystemPromptBlock[],
+    basePrompt: readonly SystemPromptBlock[],
     override?: SystemPromptInput,
   ): Promise<SystemPromptBlock[]> {
     if (override !== undefined) return normalizeSystemPrompt(override);
 
     const base = normalizeSystemPrompt(basePrompt);
 
-    // Prepend project context if available
+    // Append project context after the SDK base prompt. Later blocks are
+    // product/project/agent-specific, while the base block stays reusable.
     if (this._projectContext) {
       const ctx = await this._projectContext.loadContext();
-      if (ctx) base.unshift({ text: ctx, cache: 'stable' });
+      if (ctx) base.push({ text: ctx, cache: 'stable' });
     }
 
-    // Append AGENT.md from workspace (if exists)
-    if (this._workspaceRoot) {
-      try {
-        const { readFile } = await import('node:fs/promises');
-        const { join } = await import('node:path');
-        const agentMd = await readFile(join(this._workspaceRoot, 'AGENT.md'), 'utf-8');
-        if (agentMd.trim()) base.push({ text: agentMd, cache: 'stable' });
-      } catch {
-        // AGENT.md doesn't exist or is empty — skip
-      }
+    // Append AGENTS.md from workspace (if exists)
+    try {
+      const { readFile } = await import('node:fs/promises');
+      const agentMd = await readFile(this._home.agentMdPath, 'utf-8');
+      if (agentMd.trim()) base.push({ text: agentMd, cache: 'stable' });
+    } catch {
+      // AGENTS.md doesn't exist or is empty — skip
     }
 
-    // Legacy skill loading (deprecated: injects full content)
-    if (this.legacySkills.length > 0) {
-      const skillContent = await this.loadLegacySkills();
-      if (skillContent) base.push({ text: skillContent, cache: 'stable' });
-    }
-
-    // New skill system: inject lightweight index (name + description + whenToUse)
+    // Skill system: inject lightweight index (name + description + whenToUse).
     // Full content is loaded lazily when the skill is invoked.
-    if (this.skillDirs.length > 0) {
-      const skills = await this.getLoadedSkills();
-      const index = buildSkillIndex(skills);
-      if (index) base.push({ text: index, cache: 'stable' });
-    }
+    const index = await this.skills.renderIndexBlock();
+    if (index) base.push({ text: index, cache: 'dynamic' });
 
     return base;
   }
 
-  /** Lazy-load skills from all skill directories (cached). */
-  private async getLoadedSkills(): Promise<Skill[]> {
-    if (this.loadedSkills) return this.loadedSkills;
-
-    const allSkills: Skill[] = [];
-    for (const dir of this.skillDirs) {
-      const skills = await loadSkillsFromDir(dir);
-      allSkills.push(...skills);
-    }
-
-    // Filter out disabled skills, then deduplicate by name (first wins)
-    const seen = new Set<string>();
-    this.loadedSkills = allSkills.filter(s => {
-      if (this.disabledSkills.has(s.meta.name)) return false;
-      if (seen.has(s.meta.name)) return false;
-      seen.add(s.meta.name);
-      return true;
-    });
-
-    return this.loadedSkills;
-  }
-
   /** Get a loaded skill by name (for lazy content loading). */
   async getSkill(name: string): Promise<Skill | null> {
-    const skills = await this.getLoadedSkills();
-    return skills.find(s => s.meta.name === name) ?? null;
+    return this.skills.getSkill(name);
   }
 
   /** Get all loaded skill indexes. */
   async getSkillIndexes(): Promise<Array<{ name: string; description: string; whenToUse?: string }>> {
-    const skills = await this.getLoadedSkills();
-    return skills.map(s => ({ name: s.meta.name, description: s.meta.description, whenToUse: s.meta.whenToUse }));
-  }
-
-  private async loadLegacySkills(): Promise<string | null> {
-    const { readFile } = await import('node:fs/promises');
-    const parts: string[] = [];
-    for (const path of this.legacySkills) {
-      try {
-        const content = await readFile(path, 'utf-8');
-        parts.push(content);
-      } catch {
-        // Skip unreadable skills
-      }
-    }
-    return parts.length > 0 ? parts.join('\n\n') : null;
+    return this.skills.getSkillIndexes();
   }
 
   /**
@@ -1774,317 +1549,20 @@ export class Agent {
     stream: boolean,
     emit: (event: AgentEvent) => void,
   ): Promise<import('./types.js').ProviderResponse> {
-    this.refreshProviderIfNeeded();
-
-    if (stream && this.provider.stream) {
-      let lastError: unknown;
-
-      for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-        let finalResponse: import('./types.js').ProviderResponse | null = null;
-        let sawAnyStreamEvent = false;
-
-        // Stream idle timeout: abort if no data received for REQUEST_TIMEOUT_MS.
-        // Strong supervision rule: first-token stall counts as an inference failure
-        // and may be retried a bounded number of times.
-        const idleController = new AbortController();
-        let idleTimer: ReturnType<typeof setTimeout> | null = null;
-        const resetIdle = () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => idleController.abort(new Error('Provider stream idle timeout')), REQUEST_TIMEOUT_MS);
-        };
-
-        // Compose with caller's abort signal
-        const composedSignal = request.signal
-          ? AbortSignal.any([request.signal, idleController.signal])
-          : idleController.signal;
-
-        const streamRequest: ProviderRequest = { ...request, signal: composedSignal };
-
-        try {
-          resetIdle();
-          for await (const event of this.provider.stream(streamRequest)) {
-            sawAnyStreamEvent = true;
-            resetIdle();
-            if (event.type === 'text_delta') {
-              emit({ type: 'text_delta', text: event.text });
-            } else if (event.type === 'thinking_delta') {
-              emit({ type: 'thinking_delta', thinking: event.thinking });
-            } else if (event.type === 'response') {
-              finalResponse = event.response;
-            }
-          }
-
-          if (!finalResponse) {
-            throw new Error('Provider stream ended without a final response');
-          }
-
-          return finalResponse;
-        } catch (error: any) {
-          lastError = error;
-
-          const callerAborted = !!request.signal?.aborted && !idleController.signal.aborted;
-          const timedOutBeforeFirstToken = idleController.signal.aborted && !sawAnyStreamEvent;
-          const retryableBeforeFirstToken = !sawAnyStreamEvent && !callerAborted && (timedOutBeforeFirstToken || isRetryableError(error));
-
-          if (!callerAborted) {
-            this.reportProviderError(error, typeof error?.status === 'number' ? error.status : undefined);
-            // Let the resolver rotate before the next retry attempt.
-            this.refreshProviderIfNeeded();
-          }
-
-          if (!retryableBeforeFirstToken || attempt > MAX_RETRIES) {
-            throw error;
-          }
-
-          const retryAfter = error.headers?.['retry-after'] ?? error.headers?.get?.('retry-after') ?? null;
-          const delayMs = getRetryDelay(attempt, retryAfter);
-
-          // Structured retry event so UIs / observe can surface strong-supervision decisions
-          // (e.g. "retrying after first-token timeout 2/4") without parsing error strings.
-          emit({
-            type: 'retry',
-            scope: 'stream',
-            attempt,
-            maxAttempts: MAX_RETRIES + 1,
-            reason: timedOutBeforeFirstToken ? 'stream_idle_timeout' : 'transient_error',
-            errorMessage: typeof error?.message === 'string' ? error.message : String(error),
-            delayMs,
-          });
-
-          await sleep(delayMs, request.signal);
-        } finally {
-          if (idleTimer) clearTimeout(idleTimer);
-        }
-      }
-
-      throw lastError;
-    }
-
-    try {
-      return await this.provider.chat(request);
-    } catch (error: any) {
-      const statusCode = typeof error?.status === 'number' ? error.status : undefined;
-      const callerAborted = !!request.signal?.aborted;
-      if (!callerAborted) {
-        this.reportProviderError(error, statusCode);
-      }
-      throw error;
-    }
+    return callProvider(
+      {
+        getProvider: () => this.provider,
+        refreshIfNeeded: () => this.refreshProviderIfNeeded(),
+        reportError: (err, statusCode) => this.reportProviderError(err, statusCode),
+      },
+      request,
+      stream,
+      emit,
+    );
   }
 
   private emit(event: AgentEvent, queryOnEvent?: (event: AgentEvent) => void): void {
     this.onEvent?.(event);
     queryOnEvent?.(event);
   }
-}
-
-// ===== Provider Factory =====
-
-async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-
-    const onAbort = () => {
-      cleanup();
-      reject(signal?.reason ?? new Error('Aborted during retry backoff'));
-    };
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-    };
-
-    if (signal?.aborted) {
-      cleanup();
-      reject(signal.reason ?? new Error('Aborted during retry backoff'));
-      return;
-    }
-
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-function createProvider(config: ProviderConfig): Provider {
-  switch (config.type) {
-    case 'anthropic':
-      return new AnthropicProvider(config);
-    case 'openai':
-      return new OpenAIProvider(config);
-    default:
-      throw new Error(`Unknown provider type: ${config.type}`);
-  }
-}
-
-function isProviderResolver(input: ProviderInput): input is ProviderResolver {
-  return typeof (input as ProviderResolver).resolve === 'function';
-}
-
-function providerConfigsEqual(a: ProviderConfig, b: ProviderConfig): boolean {
-  return (
-    a.type === b.type &&
-    a.apiKey === b.apiKey &&
-    a.model === b.model &&
-    (a.baseUrl ?? '') === (b.baseUrl ?? '')
-  );
-}
-
-// ===== Helpers =====
-
-function generateId(): string {
-  return `ses_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function normalizeLoadedSession(session: Session | null): Session | null {
-  if (!session) return null;
-  // Strip legacy fields that may have been persisted but are no longer part of Session
-  const { systemPrompt: _sp, ...rest } = session as Session & { systemPrompt?: unknown };
-  // Also strip cwd/model from metadata if present in legacy data
-  const { cwd: _cwd, model: _model, ...cleanMeta } = rest.metadata as SessionMetadata & { cwd?: unknown; model?: unknown };
-  return { ...rest, metadata: cleanMeta as SessionMetadata };
-}
-
-function extractText(message: Message): string {
-  if (!message) return '';
-  if (typeof message.content === 'string') return message.content;
-  return message.content
-    .filter((b): b is import('./types.js').TextContent => b.type === 'text')
-    .map(b => b.text)
-    .join('\n');
-}
-
-function accumulateUsage(total: TokenUsage, delta: TokenUsage): TokenUsage {
-  return {
-    inputTokens: total.inputTokens + delta.inputTokens,
-    outputTokens: total.outputTokens + delta.outputTokens,
-    cacheReadTokens: (total.cacheReadTokens ?? 0) + (delta.cacheReadTokens ?? 0),
-    cacheWriteTokens: (total.cacheWriteTokens ?? 0) + (delta.cacheWriteTokens ?? 0),
-  };
-}
-
-function generateEventId(): string {
-  return `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function generateTurnId(): string {
-  return `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function createInMemoryStore(): SessionStore {
-  const sessions = new Map<string, Session>();
-  return {
-    save: async (s) => { sessions.set(s.id, structuredClone(s)); },
-    load: async (id) => {
-      const s = sessions.get(id);
-      return s ? structuredClone(s) : null;
-    },
-    list: async () => [...sessions.keys()],
-    delete: async (id) => { sessions.delete(id); },
-  };
-}
-
-function createEmptySessionMetadata(): SessionMetadata {
-  return {
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    totalCacheReadTokens: 0,
-    totalCacheWriteTokens: 0,
-    compactionCount: 0,
-  };
-}
-
-function mergeToolsByName(primary: ToolRegistration[], secondary: ToolRegistration[]): ToolRegistration[] {
-  const merged = new Map<string, ToolRegistration>();
-
-  for (const tool of secondary) {
-    merged.set(tool.definition.name, tool);
-  }
-
-  for (const tool of primary) {
-    merged.set(tool.definition.name, tool);
-  }
-
-  return [...merged.values()];
-}
-
-/**
- * Detect "prompt too long" errors from various providers.
- *
- * Anthropic: status 400, error.type = 'invalid_request_error',
- *   message contains 'prompt is too long' or 'too many tokens'
- * OpenAI: status 400, code = 'context_length_exceeded'
- */
-/**
- * Repair orphan tool_use blocks: if an assistant message contains tool_use
- * blocks but the immediately following message is NOT a user message with
- * matching tool_result blocks, inject synthetic tool_result(s) so the
- * Anthropic API doesn't reject the entire conversation.
- *
- * This is a defensive measure against the stop_reason desync bug where
- * streaming returns stop_reason='end_turn' despite tool_use content.
- *
- * Modifies `messages` in place. Safe to call multiple times (idempotent).
- */
-function repairOrphanToolUses(messages: Message[]): void {
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role !== 'assistant') continue;
-    const blocks = Array.isArray(msg.content) ? msg.content : [];
-    const toolUseIds = blocks
-      .filter((b): b is ToolUseContent => (b as ContentBlock).type === 'tool_use')
-      .map(b => b.id);
-    if (toolUseIds.length === 0) continue;
-
-    // Check if the next message is a user message containing tool_result
-    // blocks for every tool_use id.
-    const next = messages[i + 1];
-    if (next && next.role === 'user') {
-      const nextBlocks = Array.isArray(next.content) ? next.content : [];
-      const resultIds = new Set(
-        nextBlocks
-          .filter((b): b is ToolResultContent => (b as ContentBlock).type === 'tool_result')
-          .map(b => b.toolUseId),
-      );
-      if (toolUseIds.every(id => resultIds.has(id))) continue; // all matched
-    }
-
-    // Orphan detected — inject synthetic tool_result blocks
-    const syntheticBlocks: ContentBlock[] = toolUseIds.map(id => ({
-      type: 'tool_result' as const,
-      toolUseId: id,
-      content: '[Berry SDK] Session repair: tool execution was interrupted. This tool_result was synthesized to maintain conversation integrity.',
-      isError: true,
-    }));
-    messages.splice(i + 1, 0, {
-      role: 'user',
-      content: syntheticBlocks,
-      createdAt: Date.now(),
-    });
-  }
-}
-
-function isPromptTooLongError(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const e = err as Record<string, unknown>;
-
-  // Anthropic SDK: BadRequestError with message about prompt length
-  const msg = (typeof e.message === 'string' ? e.message : '').toLowerCase();
-  if (
-    msg.includes('prompt is too long') ||
-    msg.includes('too many tokens') ||
-    msg.includes('context_length_exceeded') ||
-    msg.includes('maximum context length')
-  ) {
-    return true;
-  }
-
-  // OpenAI SDK: error.code === 'context_length_exceeded'
-  if (e.code === 'context_length_exceeded') return true;
-  const nested = e.error;
-  if (nested && typeof nested === 'object' && (nested as Record<string, unknown>).code === 'context_length_exceeded') return true;
-
-  return false;
 }

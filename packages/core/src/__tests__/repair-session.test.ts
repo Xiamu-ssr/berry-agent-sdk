@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
 import type { ContentBlock, Provider, ProviderConfig, ProviderResponse, Session, ToolRegistration } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 // ---- FakeProvider (same pattern as status.test.ts) ----
 class FakeProvider implements Provider {
@@ -47,6 +48,7 @@ const echoTool: ToolRegistration = {
 function makeAgent(): { agent: Agent; provider: FakeProvider } {
   const provider = new FakeProvider();
   const agent = new Agent({
+    home: tmpHome(),
     provider: providerConfig,
     providerInstance: provider,
     systemPrompt: 'test',
@@ -113,7 +115,7 @@ describe('Session repair: orphan tool_use', () => {
     ]);
 
     // Resume the corrupted session — repair should kick in
-    const result = await agent.query('continue please', { resume: 'corrupt-1' });
+    const result = await agent.send('continue please', { resume: 'corrupt-1' });
 
     expect(result.text).toBe('All good now.');
     expect(provider.callCount).toBe(1);
@@ -167,7 +169,7 @@ describe('Session repair: orphan tool_use', () => {
       },
     ]);
 
-    const result = await agent.query('next', { resume: 'healthy-1' });
+    const result = await agent.send('next', { resume: 'healthy-1' });
     expect(result.text).toBe('ok');
 
     // No synthetic repair should have been inserted
@@ -204,7 +206,7 @@ describe('Session repair: orphan tool_use', () => {
       },
     ]);
 
-    const result = await agent.query('use echo tool');
+    const result = await agent.send('use echo tool');
 
     // The tool should have been executed (loop continued despite bad stopReason)
     expect(provider.callCount).toBe(2);

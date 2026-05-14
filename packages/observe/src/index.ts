@@ -47,3 +47,7 @@ export type {
   InferenceRecord, TurnSummary, SessionSummary, AgentStats, AgentDetail,
   DimensionFilter, CleanupResult,
 } from './analyzer/api-types.js';
+
+// Zod schema for SDK config namespace
+export { observeNamespaceSchema } from './schema.js';
+export type { ObserveNamespaceConfig } from './schema.js';

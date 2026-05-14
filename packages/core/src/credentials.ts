@@ -10,8 +10,6 @@
 //   3. Per-agent credential isolation is possible by swapping the store.
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 
 /**
  * Synchronous credential lookup. Tools pass in a required key name; the
@@ -175,13 +173,6 @@ export class MemoryCredentialStore implements CredentialStore {
   delete(key: string): void {
     delete this.entries[key];
   }
-}
-
-/**
- * Convenience: default path for berry-claw style products.
- */
-export function defaultCredentialFilePath(): string {
-  return join(homedir(), '.berry-claw', 'credentials.json');
 }
 
 async function writeJsonAtomic(path: string, data: Record<string, string>): Promise<void> {

@@ -247,6 +247,7 @@ export class AnthropicProvider implements Provider {
       medium: 16000,
       high: 32000,
       max: 64000,
+      xhigh: 64000,
     };
     const budget = map[effort] ?? 16000;
     // Cap at maxTokens - 1 so there's room for output

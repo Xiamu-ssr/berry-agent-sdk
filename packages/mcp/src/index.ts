@@ -9,3 +9,7 @@ export type { MCPClientConfig, MCPTransportConfig, MCPToolOptions } from './type
 export { createMCPTools } from './adapter.js';
 export { MCPToolCenter, createMCPCenterTools } from './center.js';
 export type { MCPServerToolInfo, MCPCenterToolOptions } from './center.js';
+
+// Configuration cascade (load N `.mcp.json` files, field-level merge).
+export { loadMCPLayer, loadMergedMCPConfig, mergeMCPConfigs } from './config.js';
+export type { MCPServerConfig, MCPLayerSpec, LoadMergedMCPConfigOptions } from './config.js';

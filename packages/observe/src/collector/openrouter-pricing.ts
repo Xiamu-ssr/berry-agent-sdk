@@ -4,10 +4,8 @@
 // Pure utility: fetches live model pricing from OpenRouter and normalises
 // it into the SDK's per-million-tokens unit.
 //
-// There is NO caching here.  The caller (e.g. berry-claw) decides where
-// and how to store the result.  In berry-claw the result is merged into
-// `manager.pricingOverrides` which is the single source of truth for
-// cost calculation.
+// There is NO caching here. The caller decides where and how to store the
+// result, then passes the merged price table to observe cost calculation.
 //
 // OpenRouter pricing unit: per token (e.g. 0.00000174 USD / token)
 // SDK pricing unit:        per million tokens (e.g. 1.74 USD / M tokens)

@@ -2,6 +2,8 @@
 // Berry Agent SDK — Core Type Definitions
 // ============================================================
 
+import type { SkillDirSpec } from './skills/types.js';
+
 // ----- Messages (Internal Format) -----
 // This is Berry's canonical message format.
 // Provider adapters convert to/from wire format.
@@ -55,6 +57,15 @@ export interface Message {
 
 // ----- System Prompt -----
 
+/**
+ * Cache stability hint for system prompt blocks.
+ *
+ * - 'stable'  — Content that does not change between turns (env, AGENTS.md).
+ *               Anthropic provider places a cache_control breakpoint at the
+ *               last stable block (lastStableIndex), maximizing prefix reuse.
+ * - 'dynamic' — Content that may change between turns (skill index, runtime state).
+ *               A second breakpoint is placed at the end of the full system prompt.
+ */
 export type SystemPromptCacheScope = 'stable' | 'dynamic';
 
 /**
@@ -71,10 +82,7 @@ export interface SystemPromptBlock {
 
 export type SystemPromptInput = string | SystemPromptBlock | Array<string | SystemPromptBlock>;
 
-/**
- * Normalize legacy string/string[] inputs into structured prompt blocks while
- * preserving order. String inputs default to `stable`.
- */
+/** Normalize plain string inputs into structured prompt blocks while preserving order. */
 export function normalizeSystemPrompt(
   prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
   defaultCache: SystemPromptCacheScope = 'stable',
@@ -93,7 +101,7 @@ export function normalizeSystemPrompt(
   });
 }
 
-/** Flatten structured/legacy prompt blocks down to text only, preserving order. */
+/** Flatten structured prompt blocks down to text only, preserving order. */
 export function flattenSystemPrompt(
   prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
 ): string[] {
@@ -115,7 +123,7 @@ export enum ToolGroup {
   Search = 'search',
   /** Internet access: web_search, web_fetch, browser */
   Web = 'web',
-  /** Agent knowledge persistence: save_memory, save_discovery */
+  /** Agent knowledge persistence: save_memory, memory_search, memory_get */
   Memory = 'memory',
   /** Multi-agent collaboration: spawn_teammate, message_leader, etc. */
   Team = 'team',
@@ -200,7 +208,7 @@ export interface ProviderConfig {
    * - Anthropic: mapped to thinking budget_tokens
    * - OpenAI: mapped to reasoning_effort
    * - Others (via OpenAI compat): passed as reasoning_effort if supported */
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
 }
 
 /**
@@ -244,6 +252,15 @@ export interface ProviderResolver {
 
 /** Convenience: input accepted by Agent.provider / AgentCreateConfig.provider. */
 export type ProviderInput = ProviderConfig | ProviderResolver;
+
+/**
+ * Product-supplied model reference resolver. Core persists model refs as
+ * strings in `agent.json`, but it deliberately does not know about registry
+ * schemas such as `@berry-agent/models`. Hosts that use tiers/failover pass a
+ * resolver here; smaller hosts can omit it and core treats refs as bare model
+ * ids on the current provider.
+ */
+export type ModelRefResolver = (modelRef: string) => ProviderInput;
 
 /** Narrow a ProviderInput into a ProviderResolver form (even for static configs). */
 export function toProviderResolver(input: ProviderInput): ProviderResolver {
@@ -326,15 +343,28 @@ export interface AgentConfig {
    * failover implementation). Static configs still work unchanged.
    */
   provider: ProviderInput;
+  /**
+   * Model reference string (e.g. "tier:strong") seeded into agent.json on
+   * first launch. On subsequent launches the on-disk `model` field is
+   * authoritative. Hosts can pass `modelResolver` to resolve tier/model/raw
+   * refs into a provider config or resolver.
+   */
+  model?: string;
+  /** Resolve model refs from agent.json / switchModel into ProviderInput. */
+  modelResolver?: ModelRefResolver;
   /** Unified reasoning effort level (injected into provider config). */
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
   /** Optional injected provider instance (useful for tests/custom providers) */
   providerInstance?: Provider;
-  /** System prompt — string, structured block, or ordered array of either. */
-  systemPrompt: SystemPromptInput;
   tools?: ToolRegistration[];
-  /** Directories containing skills (each subdirectory has a SKILL.md). */
-  skillDirs?: string[];
+  /**
+   * Directories containing skills (each subdirectory has a SKILL.md).
+   * Plain string entries get no provenance defaults; {@link SkillDirSpec}
+   * entries let the host product stamp a `source` / `authorAgent` onto
+   * every skill discovered under that directory (when the skill's
+   * frontmatter doesn't declare those fields explicitly).
+   */
+  skillDirs?: Array<string | SkillDirSpec>;
   /**
    * Skill names to exclude from loading. Applied after discovery from
    * `skillDirs`, before dedup. Generic runtime filter — the product
@@ -345,6 +375,14 @@ export interface AgentConfig {
   cwd?: string;
   /** Compaction config */
   compaction?: CompactionConfig;
+  /** SDK prompt pack id/object for base behavior, compaction, and memory flush prompts. */
+  promptPack?: import('./prompts.js').PromptPackInput;
+  /**
+   * Optional prompt-pack data directory. When set, the SDK seeds built-in
+   * prompt packs into this directory on first use and resolves string pack ids
+   * from disk before falling back to built-ins.
+   */
+  promptPackDir?: string;
   /** Session store (default: in-memory) */
   sessionStore?: SessionStore;
   /** Event handler for streaming / logging */
@@ -367,30 +405,30 @@ export interface AgentConfig {
   toolGuard?: ToolGuard;
   /**
    * Event log store for append-only session event recording.
-   * When set, every action in query() is appended to the event log,
-   * and context windows are rebuilt from the log via ContextStrategy.
-   * When not set, behavior is identical to the original messages[] approach.
+   * When set, every action in query() is appended to the event log.
+   * Provider context still comes from messages.json; the event log is for
+   * audit, UI timelines, and crash detection.
    */
   eventLogStore?: import('./event-log/types.js').EventLogStore;
   /**
-   * Agent workspace directory. When set, enables event log, memory, and workspace features.
-   * Auto-initializes workspace structure on first use (unless autoInit is false).
+   * Required — structured directory layout for this agent. The SDK uses it
+   * as the single source of truth for every on-disk path it owns
+   * (FileSessionStore, FileEventLogStore, FileAgentMemory, skill loader,
+   * agent-local MCP, agent.json). Products pick the root; the SDK decides
+   * the subpaths.
+   *
+   * AGENTS.md §agent.json — configuration lives on disk, no in-memory
+   * overrides. A fresh home gets seeded from the `provider` / `compaction` /
+   * `skillDirs` constructor fields on first launch; subsequent launches read
+   * agent.json directly and ignore those fields.
    */
-  workspace?: string;
+  home: import('./agent-home.js').AgentHome;
   /** Pluggable MemoryProvider — contributes memory tools (search, get, …) to the agent. */
   memory?: import('./memory/provider.js').MemoryProvider;
   /** Project root directory (optional binding for shared project context). */
   project?: string;
   /** Enable built-in delegate tool (default: true for top-level agents, always false for sub-agents) */
   enableDelegate?: boolean;
-  /**
-   * Enable built-in spawn_agent tool.
-   * @deprecated No longer has any effect. spawn_agent was removed from core;
-   * persistent sub-agent creation moved to @berry-agent/team as
-   * `spawn_teammate` (leader-only). The field is kept for backward-compat
-   * typing; pass `false` or omit — either is a no-op now.
-   */
-  enableSpawn?: boolean;
   /** Custom compaction strategy (overrides the default 7-layer pipeline). */
   compactionStrategy?: import('./compaction/types.js').CompactionStrategy;
   /** Called at the start of each query (after session resolution). */
@@ -429,25 +467,28 @@ export interface AgentCreateConfig {
   /** Thinking budget (Anthropic). Takes precedence over reasoningEffort. */
   thinkingBudget?: number;
   /** Unified reasoning effort level (provider-mapped). */
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
 
   // --- Agent config ---
-  /** System prompt (default: generic helpful assistant). */
-  systemPrompt?: SystemPromptInput;
+  // System prompt is NOT a constructor parameter. It is loaded from
+  // `<home.root>/AGENTS.md` (plus per-project AGENTS.md and the skill index),
+  // per AGENTS.md §Context.
   /** Tools to register. */
   tools?: ToolRegistration[];
-  /** Skill directories. */
-  skillDirs?: string[];
+  /** Skill directories (plain path or {@link SkillDirSpec} with defaults). */
+  skillDirs?: Array<string | SkillDirSpec>;
   /** Skill names to exclude from loading. */
   disabledSkills?: string[];
   /** Working directory (default: process.cwd()). */
   cwd?: string;
-  /** Session store (default: FileSessionStore at `{cwd}/.berry-sessions/`). */
+  /** Session store (default: FileSessionStore at `{home.root}/sessions/`). */
   sessionStore?: SessionStore;
-  /** Custom sessions directory (ignored if sessionStore is set). */
-  sessionsDir?: string;
   /** Compaction config (defaults applied automatically). */
   compaction?: CompactionConfig;
+  /** SDK prompt pack id/object for base behavior, compaction, and memory flush prompts. */
+  promptPack?: import('./prompts.js').PromptPackInput;
+  /** Optional prompt-pack data directory. See {@link AgentConfig.promptPackDir}. */
+  promptPackDir?: string;
   /** Tool guard. */
   toolGuard?: ToolGuard;
   /**
@@ -455,11 +496,8 @@ export interface AgentCreateConfig {
    * When not set, behavior is identical to the original messages[] approach.
    */
   eventLogStore?: import('./event-log/types.js').EventLogStore;
-  /**
-   * Agent workspace directory. When set, enables event log, memory, and workspace features.
-   * Auto-initializes workspace structure on first use.
-   */
-  workspace?: string;
+  /** Required — structured directory layout. See {@link AgentConfig.home}. */
+  home: import('./agent-home.js').AgentHome;
   /** Pluggable MemoryProvider — contributes memory tools (search, get, …) to the agent. */
   memory?: import('./memory/provider.js').MemoryProvider;
   /** Project root directory (optional binding for shared project context). */
@@ -592,31 +630,6 @@ export interface DelegateResult {
   toolCalls: number;
 }
 
-// ----- Spawn (persistent sub-agent) -----
-
-export interface SpawnConfig {
-  /** Custom sub-agent ID */
-  id?: string;
-  /** System prompt (required for spawn, since sub-agent is independent) */
-  systemPrompt: SystemPromptInput;
-  /** Tools — if not set, inherits all from parent */
-  tools?: ToolRegistration[];
-  /** Inherit parent's tools in addition to any specified */
-  inheritTools?: boolean;
-  /** Override model */
-  model?: string;
-  /** Override tool guard — if not set, inherits parent's */
-  toolGuard?: ToolGuard;
-  /** Override compaction config */
-  compaction?: CompactionConfig;
-  /** Max turns per query */
-  maxTurns?: number;
-  /** Override cwd */
-  cwd?: string;
-  /** Override session store — if not set, inherits parent's */
-  sessionStore?: SessionStore;
-}
-
 // ----- Middleware -----
 
 export interface MiddlewareContext {
@@ -624,6 +637,31 @@ export interface MiddlewareContext {
   model: string;
   provider: string;
   cwd: string;
+}
+
+/**
+ * Per-invocation context for the compaction middleware hooks. Observe
+ * collectors use this to annotate their own timelines — compaction is a
+ * natural turn-boundary event.
+ */
+export interface CompactionContext {
+  /** Which pipeline ran. `soft` = cheap layers only; `hard` = full layer set + summarize. */
+  level: 'soft' | 'hard';
+  /**
+   * Why compaction fired. `threshold` = input tokens crossed the soft/hard
+   * bound; `overflow_retry` = a prompt-too-long API response forced a mid-loop
+   * shrink-and-retry.
+   */
+  reason: 'threshold' | 'overflow_retry';
+  /** Input tokens reported by the last API response (or estimate if unavailable). */
+  tokensBefore: number;
+}
+
+/** Summary of what compaction actually did. Layers applied may be empty if no layer matched. */
+export interface CompactionOutcome {
+  tokensFreed: number;
+  layersApplied: string[];
+  durationMs: number;
 }
 
 export interface Middleware {
@@ -660,6 +698,27 @@ export interface Middleware {
     toolName: string,
     input: Record<string, unknown>,
     result: ToolResult,
+    context: MiddlewareContext,
+  ) => Promise<void> | void;
+
+  /**
+   * Called right before the compaction pipeline runs. Purely observational —
+   * cannot cancel compaction (compaction is driven by the agent's own
+   * token-pressure logic and canceling it would risk prompt-too-long errors).
+   */
+  onBeforeCompact?: (
+    compact: CompactionContext,
+    context: MiddlewareContext,
+  ) => Promise<void> | void;
+
+  /**
+   * Called after compaction completes. Observe collectors use this for timing
+   * and savings reports. Fires even when no layer actually modified messages
+   * (in which case `outcome.layersApplied` is empty and `tokensFreed` is 0).
+   */
+  onAfterCompact?: (
+    compact: CompactionContext,
+    outcome: CompactionOutcome,
     context: MiddlewareContext,
   ) => Promise<void> | void;
 }
@@ -722,18 +781,21 @@ export type RetryReason = 'stream_idle_timeout' | 'transient_error';
 // ----- Agent Status -----
 
 /**
- * Fine-grained agent status for UI consumption.
- * Transitions: idle → thinking → (tool_executing | compacting | memory_flushing) → thinking → ... → idle
+ * Coarse agent lifecycle status. Only four states — everything else
+ * (thinking / compacting / memory flush / delegating / tool execution)
+ * lives under `tool_use`, distinguished via the `detail` string on the
+ * status_change event.
+ *
+ *   idle ⇄ tool_use
+ *   idle ⇄ sleeping
+ *     ↓
+ *   destroyed (terminal)
  */
 export type AgentStatus =
-  | 'idle'               // Not running a query
-  | 'thinking'           // Waiting for LLM response
-  | 'tool_executing'     // Executing tool calls
-  | 'compacting'         // Running compaction pipeline
-  | 'memory_flushing'    // Pre-compact memory flush
-  | 'delegating'         // Running a delegate sub-query
-  | 'sleeping'           // Suspended by sleep tool; interject() will wake
-  | 'error';             // Query failed (transient, returns to idle)
+  | 'idle'          // Not running a turn
+  | 'tool_use'      // Running a turn (LLM call, tool execution, compaction, memory flush, delegate — all collapse here)
+  | 'sleeping'      // Suspended by the sleep tool; interject() will wake
+  | 'destroyed';    // Terminal; instance is unusable — create a fresh Agent to continue
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
 
@@ -750,8 +812,8 @@ export type AgentEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; thinking: string }
   | { type: 'api_response'; usage: TokenUsage; stopReason: string; model: string }
-  | { type: 'tool_call'; name: string; input: unknown }
-  | { type: 'tool_result'; name: string; isError: boolean }
+  | { type: 'tool_call'; name: string; input: unknown; toolUseId?: string }
+  | { type: 'tool_result'; name: string; isError: boolean; toolUseId?: string; output?: unknown }
   | { type: 'guard_decision'; toolName: string; input: Record<string, unknown>; decision: ToolGuardDecision; callIndex: number; durationMs: number }
   | { type: 'compaction'; layersApplied: CompactionLayer[]; tokensFreed: number;
       triggerReason: 'threshold' | 'soft_threshold' | 'overflow_retry';

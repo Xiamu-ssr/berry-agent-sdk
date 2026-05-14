@@ -6,13 +6,16 @@
 // Stage 2: CoT reasoning (only if Stage 1 flags)
 // Same prompt for both stages → Stage 2 is ~100% cache hit from Stage 1
 
-import type { Provider, ProviderConfig, ToolGuard, Message } from '@berry-agent/core';
+import type { Provider, ToolGuard, Message } from '@berry-agent/core';
+import { createProvider, toProviderResolver } from '@berry-agent/core';
+import { selectProvider } from '@berry-agent/models';
 import type {
   ClassifierConfig,
   ClassifierDecision,
   BackpressureState,
   EnvironmentConfig,
 } from '../types.js';
+import { classifierConfigFromSdk } from '../from-sdk-config.js';
 import { buildClassifierTranscript, formatTranscriptForClassifier } from './transcript-builder.js';
 
 /** Default block rules (inspired by CC auto mode's 20+ rules). */
@@ -127,16 +130,44 @@ function buildEnvironmentSection(env?: EnvironmentConfig): string {
 /**
  * Create a two-stage LLM transcript classifier as a ToolGuard.
  *
+ * The classifier resolves its LLM provider from the models registry using
+ * a model reference string (e.g. 'tier:fast', 'model:claude-sonnet-4-20250514').
+ * This eliminates the need to directly construct provider instances — the
+ * registry and `createProvider` handle that.
+ *
  * Usage:
  * ```ts
  * const guard = createClassifierGuard({
- *   provider: { type: 'anthropic', apiKey: '...', model: 'claude-sonnet-4-20250514' },
+ *   modelRef: 'tier:fast',
+ *   registry: myModelsRegistry,
  *   environment: { projectDir: '/my/project' },
  * });
  * const agent = new Agent({ toolGuard: guard });
  * ```
  */
 export function createClassifierGuard(config: ClassifierConfig): ToolGuard {
+  // Auto-fill from SDK config when modelRef/registry are not explicitly provided.
+  if (!config.modelRef || !config.registry) {
+    if (config.sdkConfigPath) {
+      const sdk = classifierConfigFromSdk(config.sdkConfigPath);
+      config = {
+        ...config,
+        modelRef: config.modelRef ?? sdk.modelRef,
+        registry: config.registry ?? sdk.registry,
+        blockRules: config.blockRules ?? sdk.blockRules,
+        allowExceptions: config.allowExceptions ?? sdk.allowExceptions,
+        skipStage2: config.skipStage2 ?? sdk.skipStage2,
+        maxConsecutiveDenials: config.maxConsecutiveDenials ?? sdk.maxConsecutiveDenials,
+        maxTotalDenials: config.maxTotalDenials ?? sdk.maxTotalDenials,
+      };
+    } else if (!config.modelRef || !config.registry) {
+      throw new Error(
+        'createClassifierGuard: either modelRef + registry must be provided, ' +
+          'or sdkConfigPath must point to a berry-sdk.json with safe.classifier.model.',
+      );
+    }
+  }
+
   let provider: Provider | null = config.providerInstance ?? null;
   const systemPrompt = buildClassifierPrompt(
     config.environment,
@@ -158,14 +189,11 @@ export function createClassifierGuard(config: ClassifierConfig): ToolGuard {
     return state;
   }
 
-  async function getProvider(): Promise<Provider> {
+  function getProvider(): Provider {
     if (provider) return provider;
-    // Lazy-create provider
-    const { AnthropicProvider, OpenAIProvider } = await import('@berry-agent/core');
-    const cfg = config.provider;
-    provider = cfg.type === 'anthropic'
-      ? new AnthropicProvider(cfg)
-      : new OpenAIProvider(cfg);
+    const input = selectProvider(config.modelRef!, config.registry!);
+    const providerConfig = toProviderResolver(input).resolve();
+    provider = createProvider(providerConfig);
     return provider;
   }
 
@@ -189,7 +217,7 @@ export function createClassifierGuard(config: ClassifierConfig): ToolGuard {
 
     // Call classifier
     const decision = await classifyAction(
-      await getProvider(),
+      getProvider(),
       systemPrompt,
       currentAction,
       config.skipStage2 ?? false,

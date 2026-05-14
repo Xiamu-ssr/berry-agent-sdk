@@ -8,7 +8,11 @@ import type {
   ToolRegistration,
   TokenUsage,
   Middleware,
+  CompactionContext,
+  CompactionOutcome,
+  CompactionStrategy,
 } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 function makeUsage(): TokenUsage {
   return { inputTokens: 100, outputTokens: 50 };
@@ -48,13 +52,14 @@ describe('middleware', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base prompt.',
+      _systemPromptOverride: 'Base prompt.',
       middleware: [mw],
-    });
+    } as any);
 
-    await agent.query('Hello');
+    await agent.send('Hello');
 
     expect(capturedRequests).toHaveLength(1);
     // The original didn't have the injected text
@@ -78,13 +83,14 @@ describe('middleware', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'Base.',
       middleware: [mw],
     });
 
-    await agent.query('Hi');
+    await agent.send('Hi');
 
     expect(usages).toHaveLength(1);
     expect(usages[0]!.inputTokens).toBe(42);
@@ -127,6 +133,7 @@ describe('middleware', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'Base.',
@@ -134,7 +141,7 @@ describe('middleware', () => {
       middleware: [mw],
     });
 
-    await agent.query('Echo something');
+    await agent.send('Echo something');
 
     expect(executedInput).toEqual({ value: 'modified_by_middleware' });
   });
@@ -172,6 +179,7 @@ describe('middleware', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'Base.',
@@ -179,7 +187,7 @@ describe('middleware', () => {
       middleware: [mw],
     });
 
-    await agent.query('Read file');
+    await agent.send('Read file');
 
     expect(observedResults).toEqual(['file content']);
   });
@@ -205,14 +213,201 @@ describe('middleware', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'Base.',
       middleware: [mw1, mw2],
     });
 
-    await agent.query('Hi');
+    await agent.send('Hi');
 
     expect(order).toEqual(['mw1-before', 'mw2-before', 'mw1-after', 'mw2-after']);
+  });
+
+  it('onBeforeCompact / onAfterCompact fire around threshold-triggered compaction', async () => {
+    // First reply reports high inputTokens to push session past the hard
+    // threshold; subsequent replies are small so the second send settles.
+    let providerCalls = 0;
+    const provider: Provider = {
+      type: 'anthropic' as const,
+      async chat(_req: ProviderRequest): Promise<ProviderResponse> {
+        providerCalls++;
+        if (providerCalls === 1) {
+          return {
+            content: [{ type: 'text', text: 'reply 1' }],
+            stopReason: 'end_turn',
+            usage: { inputTokens: 180_000, outputTokens: 50 },
+          };
+        }
+        return {
+          content: [{ type: 'text', text: 'reply ' + providerCalls }],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 500, outputTokens: 10 },
+        };
+      },
+    };
+
+    // Strategy that actually shortens messages so tokensFreed > 0 and we can
+    // observe the outcome shape in onAfterCompact.
+    const strategy: CompactionStrategy = {
+      async compact(messages) {
+        return {
+          messages: messages.map((m, i) => (i === 0 ? { ...m, content: 'x' } : m)),
+          layersApplied: ['merge_messages'],
+          tokensFreed: 1,
+        };
+      },
+    };
+
+    const beforeCalls: CompactionContext[] = [];
+    const afterCalls: Array<{ ctx: CompactionContext; outcome: CompactionOutcome }> = [];
+    const mw: Middleware = {
+      onBeforeCompact: (ctx) => { beforeCalls.push(ctx); },
+      onAfterCompact: (ctx, outcome) => { afterCalls.push({ ctx, outcome }); },
+    };
+
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'Base.',
+      middleware: [mw],
+      compaction: { contextWindow: 200_000, threshold: 150_000 },
+      compactionStrategy: strategy,
+    } as any);
+
+    const first = await agent.send('first');
+    // Second call on same session will see lastInputTokens=180k > threshold=150k
+    // → triggers soft/hard compaction at turn entry.
+    await agent.send('second', { resume: first.sessionId });
+
+    expect(beforeCalls.length).toBeGreaterThan(0);
+    expect(afterCalls.length).toBe(beforeCalls.length);
+
+    // First compaction is threshold-driven at turn entry.
+    const firstBefore = beforeCalls[0]!;
+    expect(firstBefore.reason).toBe('threshold');
+    expect(firstBefore.level === 'soft' || firstBefore.level === 'hard').toBe(true);
+    expect(firstBefore.tokensBefore).toBe(180_000);
+
+    // Outcome shape for first after-call.
+    const firstAfter = afterCalls[0]!;
+    expect(firstAfter.ctx).toEqual(firstBefore);
+    expect(firstAfter.outcome.tokensFreed).toBeGreaterThan(0);
+    expect(firstAfter.outcome.layersApplied).toContain('merge_messages');
+    expect(typeof firstAfter.outcome.durationMs).toBe('number');
+  });
+
+  it('onBeforeCompact / onAfterCompact fire with reason=overflow_retry on PTL recovery', async () => {
+    let callCount = 0;
+    const ptlProvider: Provider = {
+      type: 'anthropic' as const,
+      async chat(_req: ProviderRequest): Promise<ProviderResponse> {
+        callCount++;
+        if (callCount === 1) {
+          const err = new Error('prompt is too long: 250000 tokens > 200000 maximum');
+          (err as any).status = 400;
+          throw err;
+        }
+        return {
+          content: [{ type: 'text', text: 'recovered' }],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 50, outputTokens: 10 },
+        };
+      },
+    };
+
+    const strategy: CompactionStrategy = {
+      async compact(messages) {
+        return {
+          messages: messages.map((m, i) => (i === 0 ? { ...m, content: 'x' } : m)),
+          layersApplied: ['overflow_shrink'],
+          tokensFreed: 5,
+        };
+      },
+    };
+
+    const beforeCalls: CompactionContext[] = [];
+    const afterCalls: Array<{ ctx: CompactionContext; outcome: CompactionOutcome }> = [];
+    const mw: Middleware = {
+      onBeforeCompact: (ctx) => { beforeCalls.push(ctx); },
+      onAfterCompact: (ctx, outcome) => { afterCalls.push({ ctx, outcome }); },
+    };
+
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: ptlProvider,
+      systemPrompt: 'Base.',
+      middleware: [mw],
+      compaction: { contextWindow: 1000, threshold: 500 },
+      compactionStrategy: strategy,
+    } as any);
+
+    const result = await agent.send('trigger ptl');
+    expect(result.text).toBe('recovered');
+
+    // PTL overflow_retry must have surfaced via the hooks.
+    const overflowBefore = beforeCalls.find((c) => c.reason === 'overflow_retry');
+    expect(overflowBefore).toBeDefined();
+    expect(overflowBefore!.level).toBe('hard');
+
+    const overflowAfter = afterCalls.find((c) => c.ctx.reason === 'overflow_retry');
+    expect(overflowAfter).toBeDefined();
+    expect(overflowAfter!.outcome.layersApplied).toContain('overflow_shrink');
+    expect(overflowAfter!.outcome.tokensFreed).toBeGreaterThan(0);
+  });
+
+  it('errors thrown in onBeforeCompact / onAfterCompact are swallowed', async () => {
+    let providerCalls = 0;
+    const provider: Provider = {
+      type: 'anthropic' as const,
+      async chat(_req: ProviderRequest): Promise<ProviderResponse> {
+        providerCalls++;
+        if (providerCalls === 1) {
+          return {
+            content: [{ type: 'text', text: 'reply 1' }],
+            stopReason: 'end_turn',
+            usage: { inputTokens: 180_000, outputTokens: 50 },
+          };
+        }
+        return {
+          content: [{ type: 'text', text: 'reply 2' }],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 500, outputTokens: 10 },
+        };
+      },
+    };
+
+    const strategy: CompactionStrategy = {
+      async compact(messages) {
+        return {
+          messages: messages.map((m, i) => (i === 0 ? { ...m, content: 'x' } : m)),
+          layersApplied: ['merge_messages'],
+          tokensFreed: 1,
+        };
+      },
+    };
+
+    const mw: Middleware = {
+      onBeforeCompact: () => { throw new Error('boom before'); },
+      onAfterCompact: () => { throw new Error('boom after'); },
+    };
+
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
+      providerInstance: provider,
+      systemPrompt: 'Base.',
+      middleware: [mw],
+      compaction: { contextWindow: 200_000, threshold: 150_000 },
+      compactionStrategy: strategy,
+    } as any);
+
+    const first = await agent.send('first');
+    // Second send should complete successfully even though both hooks throw.
+    const res = await agent.send('second', { resume: first.sessionId });
+    expect(res.text).toBe('reply 2');
   });
 });

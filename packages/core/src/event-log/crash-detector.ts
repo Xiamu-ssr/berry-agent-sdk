@@ -6,6 +6,7 @@
 // counts as a "crash" — the agent, collector, and any analyzer
 // must call these helpers instead of re-implementing the logic.
 
+import type { Message } from '../types.js';
 import type { SessionEvent } from './types.js';
 import { CRASH_KIND, type CrashKind } from './constants.js';
 
@@ -34,15 +35,32 @@ export interface CrashDetectionResult {
 /**
  * Scan an event log for crash artifacts.
  *
- * Current detection: tool_use_start without matching tool_use_end.
- * Future kinds should be added here (e.g., api_request without api_response).
+ * messages.json is authoritative: a tool call is "finished" iff its tool_result
+ * has been committed to the session's messages[]. An event log entry of
+ * `tool_use_end` without a committed `tool_result` means the process died
+ * between the tool returning and the session being saved — the side effects
+ * of the tool are indeterminate from the conversation's point of view, so
+ * we still treat it as orphaned.
  *
- * @param events  Events from an EventLogStore (assumed ordered by timestamp).
- * @returns       Detection result. Always defined; `.crashed` is false if clean.
+ * @param events              Events from an EventLogStore (ordered by timestamp).
+ * @param committedMessages   Messages currently persisted in messages.json.
+ * @returns                   Detection result. `.crashed` false if clean.
  */
-export function detectCrashArtifacts(events: readonly SessionEvent[]): CrashDetectionResult {
+export function detectCrashArtifacts(
+  events: readonly SessionEvent[],
+  committedMessages: readonly Message[] = [],
+): CrashDetectionResult {
   const toolStarts = new Map<string, OrphanedToolInfo>();
   const finishedIds = new Set<string>();
+
+  // Any tool_result committed to messages.json is authoritative proof the
+  // tool call finished and was acknowledged by the conversation.
+  for (const msg of committedMessages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === 'tool_result') finishedIds.add(block.toolUseId);
+    }
+  }
 
   for (const ev of events) {
     if (ev.type === 'tool_use_start') {
@@ -54,8 +72,6 @@ export function detectCrashArtifacts(events: readonly SessionEvent[]): CrashDete
         startedAt: ev.timestamp,
         startEventId: ev.id,
       });
-    } else if (ev.type === 'tool_use_end') {
-      finishedIds.add(ev.toolUseId);
     }
   }
 

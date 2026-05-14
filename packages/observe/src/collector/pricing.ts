@@ -3,8 +3,7 @@
 // ============================================================
 //
 // Single source of truth for cost calculation:
-//   1. `overrides` parameter — caller-provided pricing map (e.g. berry-claw's
-//      `manager.pricingOverrides` which contains built-in + OpenRouter prices).
+//   1. `overrides` parameter — caller-provided pricing map.
 //   2. `MODEL_PRICING` — built-in fallback table (6 common models).
 //
 // OpenRouter integration is the caller's responsibility: fetch the live price
@@ -29,6 +28,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'claude-3-5-sonnet-20241022': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   'gpt-4o': { input: 2.5, output: 10 },
   'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5 },
+  'openai/gpt-5.5': { input: 5, output: 30, cacheRead: 0.5 },
+  'gpt-5.5-pro': { input: 30, output: 180 },
+  'openai/gpt-5.5-pro': { input: 30, output: 180 },
   'o3-mini': { input: 1.1, output: 4.4 },
 };
 

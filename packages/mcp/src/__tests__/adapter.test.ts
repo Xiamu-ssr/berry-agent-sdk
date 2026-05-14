@@ -76,6 +76,54 @@ describe('createMCPTools', () => {
     expect(tools.map(t => t.definition.name)).toEqual(['fs_read_file', 'fs_write_file', 'fs_search']);
   });
 
+  it('autoPrefix applies when upstream names do NOT already carry it', async () => {
+    // sampleTools = read_file / write_file / search — no "skylark" baked in.
+    const client = createFakeMCPClient(sampleTools);
+    const tools = await createMCPTools(client, { autoPrefix: 'skylark_' });
+    expect(tools.map(t => t.definition.name)).toEqual([
+      'skylark_read_file',
+      'skylark_write_file',
+      'skylark_search',
+    ]);
+  });
+
+  it('autoPrefix SKIPS when every upstream name already starts with the same identifier', async () => {
+    // Mirrors the real skylark-mcp case that motivated this feature.
+    const selfPrefixed: MCPToolInfo[] = [
+      { name: 'skylark_doc_detail', description: '', inputSchema: { type: 'object' } },
+      { name: 'skylark_search', description: '', inputSchema: { type: 'object' } },
+    ];
+    const client = createFakeMCPClient(selfPrefixed);
+    const tools = await createMCPTools(client, { autoPrefix: 'skylark_' });
+    expect(tools.map(t => t.definition.name)).toEqual(['skylark_doc_detail', 'skylark_search']);
+  });
+
+  it('autoPrefix treats `-` and `_` as equivalent separators (case-insensitive)', async () => {
+    const hyphenated: MCPToolInfo[] = [
+      { name: 'Product-Query-search', description: '', inputSchema: { type: 'object' } },
+      { name: 'product-query-get', description: '', inputSchema: { type: 'object' } },
+    ];
+    const client = createFakeMCPClient(hyphenated);
+    const tools = await createMCPTools(client, { autoPrefix: 'product-query_' });
+    // Sanitizer rewrites the provider-disallowed nothing here; hyphens are legal.
+    expect(tools.map(t => t.definition.name)).toEqual([
+      'Product-Query-search',
+      'product-query-get',
+    ]);
+  });
+
+  it('explicit prefix="" overrides autoPrefix (user opts out)', async () => {
+    const client = createFakeMCPClient(sampleTools);
+    const tools = await createMCPTools(client, { prefix: '', autoPrefix: 'skylark_' });
+    expect(tools.map(t => t.definition.name)).toEqual(['read_file', 'write_file', 'search']);
+  });
+
+  it('autoPrefix applied to empty tool lists falls through to the raw value', async () => {
+    const client = createFakeMCPClient([]);
+    const tools = await createMCPTools(client, { autoPrefix: 'x_' });
+    expect(tools).toEqual([]);
+  });
+
   it('filters tools with include list', async () => {
     const client = createFakeMCPClient(sampleTools);
     const tools = await createMCPTools(client, { include: ['read_file', 'search'] });

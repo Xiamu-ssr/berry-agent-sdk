@@ -118,12 +118,12 @@ describe('FileMemoryProvider', () => {
     expect(stale.some((r) => r.snippet.includes('alpha'))).toBe(false);
   });
 
-  it('exposes memory_search and memory_get as tools', async () => {
+  it('exposes save_memory, memory_search and memory_get as tools', async () => {
     write(ws, 'MEMORY.md', 'Provider tests verify tool registration.');
     provider = createFileMemoryProvider({ workspaceDir: ws });
     const tools = provider.tools();
     const names = tools.map((t) => t.definition.name).sort();
-    expect(names).toEqual(['memory_get', 'memory_search']);
+    expect(names).toEqual(['memory_get', 'memory_search', 'save_memory']);
 
     const searchTool = tools.find((t) => t.definition.name === 'memory_search')!;
     const out = await searchTool.execute(
@@ -137,14 +137,57 @@ describe('FileMemoryProvider', () => {
     expect(parsed.results.length).toBeGreaterThan(0);
   });
 
-  it('indexes project knowledge files under a separate projectDir', async () => {
+  it('save_memory appends to MEMORY.md with a timestamp header', async () => {
+    write(ws, 'MEMORY.md', '');
+    provider = createFileMemoryProvider({ workspaceDir: ws });
+    const saveTool = provider.tools().find((t) => t.definition.name === 'save_memory')!;
+
+    const result = await saveTool.execute(
+      { content: 'user prefers tabs' },
+      { cwd: ws },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('Saved');
+    const mem = fs.readFileSync(path.join(ws, 'MEMORY.md'), 'utf-8');
+    expect(mem).toContain('user prefers tabs');
+    // Timestamp header format: ## <iso>
+    expect(mem).toMatch(/\n## \d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('save_memory rejects empty content', async () => {
+    write(ws, 'MEMORY.md', '');
+    provider = createFileMemoryProvider({ workspaceDir: ws });
+    const saveTool = provider.tools().find((t) => t.definition.name === 'save_memory')!;
+
+    const result = await saveTool.execute({ content: '   ' }, { cwd: ws });
+
+    expect(result.isError).toBe(true);
+    const mem = fs.readFileSync(path.join(ws, 'MEMORY.md'), 'utf-8');
+    expect(mem).toBe('');
+  });
+
+  it('save_memory creates MEMORY.md if it does not yet exist', async () => {
+    // No pre-existing MEMORY.md on disk.
+    provider = createFileMemoryProvider({ workspaceDir: ws });
+    const saveTool = provider.tools().find((t) => t.definition.name === 'save_memory')!;
+
+    const result = await saveTool.execute({ content: 'first entry' }, { cwd: ws });
+
+    expect(result.isError).toBeFalsy();
+    const mem = fs.readFileSync(path.join(ws, 'MEMORY.md'), 'utf-8');
+    expect(mem).toContain('first entry');
+  });
+
+  it('indexes project AGENTS.md under a separate projectDir', async () => {
     write(ws, 'MEMORY.md', 'Personal note about dark roast coffee.');
 
     // Separate project directory — simulates teammates pointing at a shared
-    // project path while each having their own workspace.
+    // project path while each having their own workspace. Only AGENTS.md is
+    // recognized: it is the single, human-maintained source of project-level
+    // knowledge visible to every agent bound to this project.
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'berry-mem-proj-'));
     try {
-      fs.writeFileSync(path.join(proj, '.berry-discoveries.md'), 'TEAM DISCOVERY: use rayon for parallelism.');
       fs.writeFileSync(path.join(proj, 'AGENTS.md'), 'Project spec lives here. No secrets in logs.');
 
       provider = createFileMemoryProvider({ workspaceDir: ws, projectDir: proj });
@@ -153,17 +196,14 @@ describe('FileMemoryProvider', () => {
       const personal = await provider.search('dark roast coffee');
       expect(personal.some((r) => r.path === 'MEMORY.md')).toBe(true);
 
-      // Project discoveries surface with a project/ prefix so consumers can
+      // Project AGENTS.md surfaces with a project/ prefix so consumers can
       // distinguish shared knowledge from personal notes.
-      const shared = await provider.search('rayon parallelism');
-      expect(shared.some((r) => r.path === 'project/.berry-discoveries.md')).toBe(true);
-
       const spec = await provider.search('no secrets in logs');
       expect(spec.some((r) => r.path === 'project/AGENTS.md')).toBe(true);
 
       // Excerpt reads resolve via project/ prefix too.
-      const excerpt = await provider.get({ path: 'project/.berry-discoveries.md' });
-      expect(excerpt.text).toContain('rayon');
+      const excerpt = await provider.get({ path: 'project/AGENTS.md' });
+      expect(excerpt.text).toContain('Project spec lives here');
     } finally {
       fs.rmSync(proj, { recursive: true, force: true });
     }

@@ -1,8 +1,10 @@
 // ============================================================
 // Berry Agent SDK — Context Builder (Event Log → Messages)
 // ============================================================
-// Converts the append-only event log into a provider-ready Message[].
-// The default strategy:
+// Converts the append-only event log into a Message[] for recovery tooling and
+// legacy hosts. Core Agent provider calls do NOT use this as context source:
+// messages.json is authoritative, while events.jsonl is audit/UI history.
+// The strategy:
 //   1. Find the last compaction_marker, start from there
 //   2. Convert user_message/assistant_message/tool_use/tool_result → Message format
 //   3. Skip non-conversation events (metadata, api_call, query_start, query_end, etc.)
@@ -53,7 +55,7 @@ export class DefaultContextStrategy implements ContextStrategy {
       }
     }
 
-    // Fallback: no snapshot found — use legacy compaction_marker logic
+    // Fallback: no snapshot found — start after the latest compaction marker.
     let startIndex = 0;
     if (snapshotIndex < 0) {
       for (let i = events.length - 1; i >= 0; i--) {

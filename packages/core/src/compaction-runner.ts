@@ -24,6 +24,7 @@ import {
   DEFAULT_SOFT_LAYERS,
   COMPACTION_TRIGGER_REASON,
 } from './constants.js';
+import { DEFAULT_PROMPT_PACK, type PromptPack } from './prompts.js';
 
 /**
  * Determine the current full-context token count for compaction decisions.
@@ -76,11 +77,7 @@ export function shouldHardCompact(params: {
   return currentContextTokens(params) > hardThreshold;
 }
 
-/**
- * @deprecated Use shouldSoftCompact() or shouldHardCompact() instead.
- * Unified compaction check: returns 'hard' if over hard threshold,
- * 'soft' if over soft threshold, 'none' otherwise.
- */
+/** Unified compaction check: returns 'hard', 'soft', or 'none'. */
 export function shouldCompact(params: {
   session: Session;
   systemPrompt: SystemPromptBlock[];
@@ -98,6 +95,7 @@ export interface RunCompactionParams {
   compactLevel: 'soft' | 'hard';
   provider: Provider;
   systemPrompt: SystemPromptBlock[];
+  promptPack?: PromptPack;
   allowedTools: ToolRegistration[];
   emit: (event: AgentEvent) => void;
   appendEvent: (event: SessionEvent) => Promise<void>;
@@ -127,6 +125,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
     appendEvent,
     makeBase,
   } = params;
+  const promptPack = params.promptPack ?? DEFAULT_PROMPT_PACK;
 
   const ctxWindow = compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const messageTokensBefore = estimateTokens(session.messages);
@@ -155,7 +154,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
   };
   const result = params.compactionStrategy
     ? await params.compactionStrategy.compact(session.messages, compactCfg, { contextWindow: ctxWindow })
-    : await compact(session.messages, compactCfg, provider, forkCtx);
+    : await compact(session.messages, compactCfg, provider, forkCtx, promptPack);
   const compactDuration = Date.now() - compactStart;
   // contextAfter in full-input terms: system+tools overhead + compressed message tokens
   const messageTokensAfter = estimateTokens(result.messages);
@@ -205,6 +204,7 @@ export interface PreCompactMemoryFlushParams {
   memory: AgentMemory;
   provider: Provider;
   systemPrompt: SystemPromptBlock[];
+  promptPack?: PromptPack;
   emit: (event: AgentEvent) => void;
   appendEvent: (event: SessionEvent) => Promise<void>;
   makeBase: () => { id: string; timestamp: number; sessionId: string; turnId?: string };
@@ -215,6 +215,7 @@ export interface PreCompactMemoryFlushParams {
  */
 export async function preCompactMemoryFlush(params: PreCompactMemoryFlushParams): Promise<void> {
   const { session, memory, provider, systemPrompt, emit, appendEvent, makeBase } = params;
+  const promptPack = params.promptPack ?? DEFAULT_PROMPT_PACK;
 
   const flushStart = Date.now();
   let charsSaved = 0;
@@ -225,7 +226,7 @@ export async function preCompactMemoryFlush(params: PreCompactMemoryFlushParams)
         ...session.messages,
         {
           role: 'user' as const,
-          content: 'Before context compaction, save important notes, decisions, and context from this conversation to memory. Be concise but capture key information that would be needed in future sessions. Output only the notes to save, nothing else.',
+          content: promptPack.memoryFlush,
           createdAt: Date.now(),
         },
       ],
@@ -236,7 +237,7 @@ export async function preCompactMemoryFlush(params: PreCompactMemoryFlushParams)
       if (block.type === 'text') notes.push(block.text);
     }
     const text = notes.join('\n').trim();
-    if (text) {
+    if (text && text.toUpperCase() !== 'NO_DURABLE_MEMORY') {
       await memory.append(text);
       charsSaved = text.length;
     }

@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/core",
-  "version": "0.3.0-alpha.1",
+  "version": "0.5.0-alpha.0",
   "description": "Pure-library Agent SDK with compaction, cache optimization, and multi-provider support",
   "type": "module",
   "main": "dist/index.js",
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "@berry-agent/prompt-pack": "^0.5.0-alpha.0",
     "gray-matter": "^4.0.3",
     "openai": "^5.0.0"
   },

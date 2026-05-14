@@ -75,7 +75,7 @@ export class Analyzer {
   // ===== Cost Analysis =====
 
   costBreakdown(filter?: string | DimensionFilter): CostBreakdown {
-    // Accept either a bare sessionId string (backward compat) or DimensionFilter
+    // Accept either a bare sessionId string or a DimensionFilter.
     const f: DimensionFilter = typeof filter === 'string' ? { sessionId: filter } : (filter ?? {});
     const where = buildLlmWhere(f);
     const base = this.db.db.select({

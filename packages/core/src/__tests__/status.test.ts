@@ -1,10 +1,15 @@
 // ============================================================
-// Agent Status — runtime state machine
+// Agent Status — runtime state machine (4-state)
 // ============================================================
+// Post-AGENTS.md refactor: status is one of
+//   idle | tool_use | sleeping | destroyed
+// Substates (thinking / tool_executing / delegating / compacting / ...)
+// live in `detail`, not as distinct statuses.
 
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
-import type { ProviderConfig, Message, AgentEvent, ToolRegistration, Provider, ProviderResponse } from '../types.js';
+import type { ProviderConfig, AgentEvent, ToolRegistration, Provider, ProviderResponse } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 /**
  * Minimal in-memory provider used to drive the agent through known states.
@@ -59,6 +64,7 @@ describe('Agent status machine', () => {
     const provider = new FakeProvider();
     const events = opts?.events ?? [];
     const agent = new Agent({
+      home: tmpHome(),
       provider: providerConfig,
       providerInstance: provider,
       systemPrompt: 'test',
@@ -73,19 +79,20 @@ describe('Agent status machine', () => {
     expect(agent.status).toBe('idle');
   });
 
-  it('transitions: idle -> thinking -> idle on plain reply', async () => {
+  it('transitions: idle -> tool_use(thinking) -> idle on plain reply', async () => {
     const { agent, provider, events } = makeAgent();
     provider.enqueue([textReply('hello')]);
 
-    await agent.query('hi');
+    await agent.send('hi');
 
     expect(agent.status).toBe('idle');
 
-    const statusChanges = events.filter(e => e.type === 'status_change').map(e => (e as any).status);
-    expect(statusChanges).toEqual(['thinking', 'idle']);
+    const statusChanges = events.filter(e => e.type === 'status_change') as any[];
+    expect(statusChanges.map(e => e.status)).toEqual(['tool_use', 'idle']);
+    expect(statusChanges[0].detail).toBe('thinking');
   });
 
-  it('transitions: thinking -> tool_executing -> thinking -> idle with tool call', async () => {
+  it('transitions through tool_use substates with tool call', async () => {
     const tool: ToolRegistration = {
       definition: { name: 'noop', description: 'no-op', inputSchema: { type: 'object', properties: {} } },
       execute: async () => ({ content: 'ok' }),
@@ -96,14 +103,16 @@ describe('Agent status machine', () => {
       textReply('done'),
     ]);
 
-    await agent.query('run noop');
+    await agent.send('run noop');
 
-    const statusChanges = events.filter(e => e.type === 'status_change').map(e => (e as any).status);
-    expect(statusChanges).toEqual(['thinking', 'tool_executing', 'thinking', 'idle']);
+    const statusChanges = events.filter(e => e.type === 'status_change') as any[];
+    // Every non-idle status is 'tool_use'; details reflect substate.
+    expect(statusChanges.map(e => e.status)).toEqual(['tool_use', 'tool_use', 'tool_use', 'idle']);
+    expect(statusChanges.map(e => e.detail)).toEqual(['thinking', 'noop', 'thinking', undefined]);
     expect(agent.status).toBe('idle');
   });
 
-  it('status_detail lists active tool names during tool_executing', async () => {
+  it('status detail names the executing tool during tool_use', async () => {
     const tool: ToolRegistration = {
       definition: { name: 'noop', description: 'n', inputSchema: { type: 'object', properties: {} } },
       execute: async () => ({ content: 'ok' }),
@@ -111,57 +120,47 @@ describe('Agent status machine', () => {
     const { agent, provider, events } = makeAgent({ tools: [tool] });
     provider.enqueue([toolCallReply('noop', {}), textReply('done')]);
 
-    await agent.query('x');
+    await agent.send('x');
 
     const toolExecEvent = events.find(
-      e => e.type === 'status_change' && (e as any).status === 'tool_executing',
+      e => e.type === 'status_change' && (e as any).status === 'tool_use' && (e as any).detail === 'noop',
     );
     expect(toolExecEvent).toBeDefined();
-    expect((toolExecEvent as any).detail).toBe('noop');
   });
 
-  it('transitions to error on provider failure (and stays error after query)', async () => {
-    const { agent, provider, events } = makeAgent();
-    // Queue nothing — will throw "no responses queued"
+  it('on provider failure, agent returns to idle after throwing', async () => {
+    const { agent, events } = makeAgent();
+    // Queue nothing — chat() will throw "no responses queued"
 
-    await expect(agent.query('fail')).rejects.toThrow();
+    await expect(agent.send('fail')).rejects.toThrow();
 
-    expect(agent.status).toBe('error');
-    expect(agent.statusDetail).toContain('no responses queued');
-
-    const statusChanges = events.filter(e => e.type === 'status_change').map(e => (e as any).status);
-    expect(statusChanges).toContain('error');
-    // After error, status is preserved (not forced to idle)
-    expect(statusChanges[statusChanges.length - 1]).toBe('error');
-  });
-
-  it('subsequent successful query resets error -> thinking -> idle', async () => {
-    const { agent, provider, events } = makeAgent();
-
-    // First query: fails
-    await expect(agent.query('fail')).rejects.toThrow();
-    expect(agent.status).toBe('error');
-
-    // Second query: succeeds
-    provider.enqueue([textReply('ok')]);
-    await agent.query('hi');
-
+    // 4-state machine: no dedicated 'error' status; finally block forces idle.
     expect(agent.status).toBe('idle');
 
     const statusChanges = events.filter(e => e.type === 'status_change').map(e => (e as any).status);
-    // Should include the recovery: error -> thinking -> idle
-    const errorIdx = statusChanges.indexOf('error');
-    expect(statusChanges.slice(errorIdx + 1)).toEqual(['thinking', 'idle']);
+    expect(statusChanges[statusChanges.length - 1]).toBe('idle');
+  });
+
+  it('subsequent successful send works after a failed one', async () => {
+    const { agent, provider } = makeAgent();
+
+    await expect(agent.send('fail')).rejects.toThrow();
+    expect(agent.status).toBe('idle');
+
+    provider.enqueue([textReply('ok')]);
+    const r = await agent.send('hi');
+    expect(r.text).toBe('ok');
+    expect(agent.status).toBe('idle');
   });
 
   it('setStatus de-duplicates identical transitions', async () => {
     const { agent, provider, events } = makeAgent();
     provider.enqueue([textReply('ok')]);
 
-    await agent.query('hi');
+    await agent.send('hi');
 
     const statusChanges = events.filter(e => e.type === 'status_change');
-    // Exactly one idle -> thinking -> idle sequence, no repeats
+    // tool_use(thinking) -> idle : exactly two transitions
     expect(statusChanges.length).toBe(2);
   });
 });

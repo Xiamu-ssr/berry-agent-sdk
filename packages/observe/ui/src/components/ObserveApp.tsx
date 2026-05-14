@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BarChart3, DollarSign, Zap, Shield, Layers, Cpu, MessageSquare, Bot } from 'lucide-react';
+import { ObserveFetcherContext } from '../hooks/useObserve';
 import { GlobalDashboard } from './GlobalDashboard';
 import { CostTrend } from './CostTrend';
 import { CacheEfficiency } from './CacheEfficiency';
@@ -31,6 +32,13 @@ type View =
 
 interface Props {
   baseUrl: string;
+  /**
+   * Optional authenticated fetch wrapper. When provided, every
+   * `useObserveApi` call inside this subtree goes through it instead of
+   * `window.fetch` — lets host apps attach bearer tokens etc. without
+   * forking the whole component tree.
+   */
+  fetcher?: typeof fetch;
 }
 
 type BreadcrumbItem = { label: string; view: View };
@@ -55,7 +63,7 @@ function getBreadcrumbs(view: View): BreadcrumbItem[] {
   }
 }
 
-export function ObserveApp({ baseUrl }: Props) {
+export function ObserveApp({ baseUrl, fetcher }: Props) {
   const [view, setView] = useState<View>({ page: 'overview' });
 
   // Detect dark mode from parent app (check .dark class or data-theme on root).
@@ -84,7 +92,7 @@ export function ObserveApp({ baseUrl }: Props) {
 
   const breadcrumbs = getBreadcrumbs(view);
 
-  return (
+  const tree = (
     <div className={`flex h-full bg-gray-50 dark:bg-gray-900 ${isDark ? 'dark' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
       {/* Sidebar */}
       <div className="w-48 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col py-4">
@@ -210,6 +218,10 @@ export function ObserveApp({ baseUrl }: Props) {
       </div>
     </div>
   );
+
+  return fetcher ? (
+    <ObserveFetcherContext.Provider value={fetcher}>{tree}</ObserveFetcherContext.Provider>
+  ) : tree;
 }
 
 function NavItem({ icon, label, active, onClick }: {

@@ -13,6 +13,13 @@ export interface MCPClientConfig {
     name: string;
     version: string;
   };
+  /**
+   * Hard timeout (ms) for `connect()` and `listTools()`. The underlying
+   * `@modelcontextprotocol/sdk` has a 60s default baked into `initialize`,
+   * which is too long for cold-start hosts that want to skip unhealthy
+   * servers and move on. Defaults to 10_000.
+   */
+  connectTimeoutMs?: number;
 }
 
 /** Transport configuration — stdio (local process) or HTTP (remote). */
@@ -42,8 +49,20 @@ export interface StreamableHttpTransportConfig {
 
 /** Options for tool creation from MCP. */
 export interface MCPToolOptions {
-  /** Prefix to add to tool names (avoids conflicts between multiple servers). */
+  /**
+   * Explicit prefix to add to every tool name. When set, always applied
+   * verbatim (including the empty string meaning "no prefix"). Takes
+   * precedence over `autoPrefix`.
+   */
   prefix?: string;
+  /**
+   * Fallback prefix used only when `prefix` is undefined. The adapter checks
+   * whether every upstream tool's name already starts with this prefix
+   * (case-insensitive, either `_` or `-` separator); if so it skips prefixing
+   * to avoid double-prefix ugliness (e.g. `skylark_skylark_doc_detail`).
+   * Otherwise the value is applied literally.
+   */
+  autoPrefix?: string;
   /** Only include these tool names (after prefix). */
   include?: string[];
   /** Exclude these tool names (after prefix). */

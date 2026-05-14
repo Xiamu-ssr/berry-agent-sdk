@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/memory-file",
-  "version": "0.4.0-alpha.1",
+  "version": "0.5.0-alpha.0",
   "description": "File-backed MemoryProvider for Berry Agent SDK — SQLite FTS5 over MEMORY.md and memory/*.md",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@berry-agent/core": ">=0.3.0-alpha.0"
+    "@berry-agent/core": "^0.5.0-alpha.0"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0"

@@ -10,6 +10,7 @@ import type {
   Session,
   AgentEvent,
 } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 // ===== Test Helpers =====
 
@@ -49,6 +50,7 @@ describe('delegate', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
       systemPrompt: 'You are a coding assistant.',
@@ -89,6 +91,7 @@ describe('delegate', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
       systemPrompt: 'You are a coding assistant.',
@@ -115,12 +118,13 @@ describe('delegate', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: mainProvider,
       systemPrompt: 'You are helpful.',
     });
 
-    await agent.query('Hi');
+    await agent.send('Hi');
 
     // Now swap provider for the delegate call
     const delegateProvider = new SequenceProvider([
@@ -153,10 +157,11 @@ describe('delegate', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
-      systemPrompt: 'Base prompt.',
-    });
+      _systemPromptOverride: 'Base prompt.',
+    } as any);
 
     await agent.delegate('Do something', {
       appendSystemPrompt: 'Extra skill instructions here.',
@@ -195,6 +200,7 @@ describe('delegate', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
       systemPrompt: 'Base.',
@@ -210,86 +216,4 @@ describe('delegate', () => {
   });
 });
 
-// ===== spawn() =====
-
-describe('spawn', () => {
-  it('creates a child agent that inherits tools', async () => {
-    const parentProvider = new SequenceProvider([]);
-    const readFileTool: ToolRegistration = {
-      definition: {
-        name: 'read_file',
-        description: 'Read a file',
-        inputSchema: { type: 'object', properties: {} },
-      },
-      execute: async () => ({ content: 'data' }),
-    };
-
-    const agent = new Agent({
-      provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
-      providerInstance: parentProvider,
-      systemPrompt: 'Parent prompt.',
-      tools: [readFileTool],
-    });
-
-    const child = agent.spawn({
-      systemPrompt: 'Child prompt.',
-    });
-
-    expect(agent.children.size).toBe(1);
-    // Child has parent's tools
-    expect((child as any).tools.has('read_file')).toBe(true);
-    // Child is a sub-agent
-    expect(child.isSubAgent).toBe(true);
-  });
-
-  it('sub-agents cannot spawn further sub-agents', () => {
-    const agent = new Agent({
-      provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
-      providerInstance: new SequenceProvider([]),
-      systemPrompt: 'Parent.',
-    });
-
-    const child = agent.spawn({ systemPrompt: 'Child.' });
-    expect(() => child.spawn({ systemPrompt: 'Grandchild.' })).toThrow(
-      'Sub-agents cannot spawn further sub-agents',
-    );
-  });
-
-  it('destroyChild removes the sub-agent', () => {
-    const agent = new Agent({
-      provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
-      providerInstance: new SequenceProvider([]),
-      systemPrompt: 'Parent.',
-    });
-
-    const child = agent.spawn({ id: 'worker', systemPrompt: 'Worker.' });
-    expect(agent.children.size).toBe(1);
-    expect(agent.destroyChild('worker')).toBe(true);
-    expect(agent.children.size).toBe(0);
-  });
-
-  it('child can query independently', async () => {
-    const childProvider = new SequenceProvider([
-      {
-        content: [{ type: 'text', text: 'child response' }],
-        stopReason: 'end_turn',
-        usage: makeUsage(),
-      },
-    ]);
-
-    const agent = new Agent({
-      provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
-      providerInstance: new SequenceProvider([]),
-      systemPrompt: 'Parent.',
-    });
-
-    const child = agent.spawn({
-      systemPrompt: 'You are a research assistant.',
-    });
-    // Inject provider for child
-    (child as any).provider = childProvider;
-
-    const result = await child.query('Find papers on AI');
-    expect(result.text).toBe('child response');
-  });
-});
+// spawn() was removed from core; persistent sub-agents moved to @berry-agent/team.

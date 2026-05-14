@@ -82,7 +82,7 @@ describe('resolveClaudeCodeRelativePath', () => {
   });
 });
 
-describe('resolveScopedPath (legacy)', () => {
+describe('resolveScopedPath', () => {
   const baseDir = '/Users/test/project';
 
   it('resolves relative path within baseDir', () => {

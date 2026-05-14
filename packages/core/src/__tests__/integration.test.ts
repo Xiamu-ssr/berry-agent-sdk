@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 
 import { Agent } from '../agent.js';
 import type { AgentConfig, QueryResult, ToolRegistration, AgentEvent } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 // Load .env.local from repo root
 config({ path: resolve(__dirname, '../../../../.env.local') });
@@ -34,6 +35,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
 
   beforeAll(() => {
     agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -53,7 +55,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // 1. Basic query — single turn, text response
   // ============================================================
   it('answers a simple question', async () => {
-    const result = await agent.query('What is 2 + 3? Reply with just the number.');
+    const result = await agent.send('What is 2 + 3? Reply with just the number.');
 
     expect(result.text).toBeTruthy();
     expect(result.text).toContain('5');
@@ -85,6 +87,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     };
 
     const toolAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -96,7 +99,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     });
 
     const events: AgentEvent[] = [];
-    const result = await toolAgent.query(
+    const result = await toolAgent.send(
       'Use the add_numbers tool to compute 17 + 25, then tell me the result.',
       { onEvent: (e) => events.push(e) },
     );
@@ -122,6 +125,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // ============================================================
   it('resumes a session and remembers context', async () => {
     const sessionAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -132,11 +136,11 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     });
 
     // First turn
-    const r1 = await sessionAgent.query('My name is Alice. Remember it.');
+    const r1 = await sessionAgent.send('My name is Alice. Remember it.');
     expect(r1.sessionId).toBeTruthy();
 
     // Second turn — resume session
-    const r2 = await sessionAgent.query('What is my name?', {
+    const r2 = await sessionAgent.send('What is my name?', {
       resume: r1.sessionId,
     });
 
@@ -149,6 +153,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // ============================================================
   it('streams text deltas', async () => {
     const streamAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -159,7 +164,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     });
 
     const deltas: string[] = [];
-    const result = await streamAgent.query('Say "hello world" and nothing else.', {
+    const result = await streamAgent.send('Say "hello world" and nothing else.', {
       stream: true,
       onEvent: (e) => {
         if (e.type === 'text_delta') {
@@ -181,6 +186,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // ============================================================
   it('triggers compaction when context exceeds threshold', async () => {
     const compactAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -196,19 +202,19 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     });
 
     // Turn 1: seed with content
-    const r1 = await compactAgent.query(
+    const r1 = await compactAgent.send(
       'Write a detailed paragraph about the Apollo 11 moon landing.',
     );
 
     // Turn 2: adds more context, after which lastInputTokens ~ 500-1000
-    const r2 = await compactAgent.query(
+    const r2 = await compactAgent.send(
       'Now write a paragraph about the Voyager missions.',
       { resume: r1.sessionId },
     );
 
     // Turn 3: shouldCompact sees lastInputTokens from turn 2 (~1000+) > threshold (100)
     const events: AgentEvent[] = [];
-    const r3 = await compactAgent.query(
+    const r3 = await compactAgent.send(
       'What were we discussing?',
       {
         resume: r2.sessionId,
@@ -231,6 +237,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // ============================================================
   it('tracks cumulative usage across turns', async () => {
     const usageAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -240,11 +247,11 @@ describe.skipIf(!canRun)('integration (real API)', () => {
       systemPrompt: 'You are a helpful assistant. Be concise.',
     });
 
-    const r1 = await usageAgent.query('Say "hi".');
+    const r1 = await usageAgent.send('Say "hi".');
     expect(r1.totalUsage.inputTokens).toBeGreaterThan(0);
     expect(r1.totalUsage.outputTokens).toBeGreaterThan(0);
 
-    const r2 = await usageAgent.query('Say "bye".', { resume: r1.sessionId });
+    const r2 = await usageAgent.send('Say "bye".', { resume: r1.sessionId });
     // Cumulative should be larger than single turn
     expect(r2.totalUsage.inputTokens).toBeGreaterThan(r1.totalUsage.inputTokens);
     expect(r2.totalUsage.outputTokens).toBeGreaterThan(r1.totalUsage.outputTokens);
@@ -255,6 +262,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
   // ============================================================
   it('respects abort signal', async () => {
     const abortAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -270,7 +278,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
     setTimeout(() => controller.abort(), 100);
 
     await expect(
-      abortAgent.query('Write a 500-word essay about artificial intelligence.', {
+      abortAgent.send('Write a 500-word essay about artificial intelligence.', {
         abortSignal: controller.signal,
       }),
     ).rejects.toThrow();

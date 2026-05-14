@@ -30,6 +30,7 @@ import {
   SUMMARIZE_MIN_MESSAGES,
   SUMMARIZE_RECENT_RATIO,
 } from '../constants.js';
+import { DEFAULT_PROMPT_PACK, type PromptPack } from '../prompts.js';
 
 export interface CompactionResult {
   messages: Message[];
@@ -71,6 +72,7 @@ export async function compact(
   config: CompactionConfig,
   provider: Provider,
   forkContext?: ForkContext,
+  promptPack: PromptPack = DEFAULT_PROMPT_PACK,
 ): Promise<CompactionResult> {
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const threshold = config.threshold ?? Math.floor(contextWindow * DEFAULT_COMPACTION_RATIO);
@@ -87,7 +89,7 @@ export async function compact(
 
     const beforeLen = current.length;
     const before = currentTokens;
-    current = await applyLayer(layer, current, config, provider, forkContext);
+    current = await applyLayer(layer, current, config, provider, forkContext, promptPack);
     currentTokens = estimateTokens(current);
 
     // Detect change: token count decreased OR message count changed.
@@ -111,13 +113,14 @@ async function applyLayer(
   config: CompactionConfig,
   provider: Provider,
   forkContext?: ForkContext,
+  promptPack: PromptPack = DEFAULT_PROMPT_PACK,
 ): Promise<Message[]> {
   switch (layer) {
     case 'clear_thinking':      return clearThinkingBlocks(messages);
     case 'truncate_tool_results': return truncateToolResults(messages);
     case 'clear_tool_pairs':    return clearOldToolPairs(messages);
     case 'merge_messages':      return mergeConsecutiveMessages(messages);
-    case 'summarize':           return await summarizeOldMessages(messages, provider, forkContext);
+    case 'summarize':           return await summarizeOldMessages(messages, provider, forkContext, promptPack);
     case 'trim_assistant':      return trimAssistantMessages(messages);
     case 'truncate_oldest':     return truncateOldest(messages);
     default:                    return messages;
@@ -252,40 +255,8 @@ function mergeConsecutiveMessages(messages: Message[]): Message[] {
 }
 
 // ===== Layer 5: Summarize Old Messages (LLM call) =====
-// Structured prompt adapted from CC source (compact/prompt.ts).
-// Key: strip images/docs before summarizing, use structured 9-section output.
-
-const COMPACT_SYSTEM_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
-
-const COMPACT_PROMPT = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
-
-Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
-This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
-
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
-
-1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
-   - The user's explicit requests and intents
-   - Your approach to addressing the user's requests
-   - Key decisions, technical concepts and code patterns
-   - Specific details like file names, code snippets, function signatures, file edits
-   - Errors that you ran into and how you fixed them
-   - Pay special attention to specific user feedback
-2. Double-check for technical accuracy and completeness.
-
-Your summary should include the following sections:
-
-1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
-2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
-3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable.
-4. Errors and fixes: List all errors encountered and how they were fixed.
-5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
-6. All user messages: List ALL user messages that are not tool results.
-7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
-8. Current Work: Describe precisely what was being worked on immediately before this summary request.
-9. Optional Next Step: List the next step related to the most recent work. Include direct quotes from the most recent conversation.
-
-REMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> block followed by a <summary> block. Tool calls will be rejected and you will fail the task.`;
+// Key: strip images/docs before summarizing, then produce a structured
+// continuation artifact from the SDK prompt pack.
 
 /**
  * Format compact summary: strip <analysis> scratchpad, extract <summary> content.
@@ -361,6 +332,7 @@ async function summarizeOldMessages(
   messages: Message[],
   provider: Provider,
   forkContext?: ForkContext,
+  promptPack: PromptPack = DEFAULT_PROMPT_PACK,
 ): Promise<Message[]> {
   if (messages.length <= SUMMARIZE_MIN_MESSAGES) return messages;
 
@@ -372,7 +344,12 @@ async function summarizeOldMessages(
   const strippedMessages = stripImagesFromMessages(oldMessages);
   const conversationMessages: Message[] = [
     ...strippedMessages,
-    { role: 'user' as const, content: COMPACT_PROMPT },
+    {
+      role: 'user' as const,
+      content: promptPack.compactSummary
+        .replaceAll('{{prompt_pack_version}}', promptPack.version)
+        .replaceAll('berry.prompt-pack.v1', promptPack.version),
+    },
   ];
 
   // When forkContext is provided, we "fork" the API call:
@@ -380,9 +357,9 @@ async function summarizeOldMessages(
   // Because the system prompt + tools are identical to the main conversation,
   // the provider's prompt cache is reused (Anthropic: ~96% cache hit).
   //
-  // Without forkContext, we use the standalone COMPACT_SYSTEM_PROMPT
+  // Without forkContext, we use the prompt-pack compactor system prompt
   // (cheaper but no cache sharing).
-  const systemPrompt = normalizeSystemPrompt(forkContext?.systemPrompt ?? [COMPACT_SYSTEM_PROMPT]);
+  const systemPrompt = normalizeSystemPrompt(forkContext?.systemPrompt ?? promptPack.compactSystem);
 
   try {
     const summaryResponse = await provider.chat({
@@ -397,14 +374,13 @@ async function summarizeOldMessages(
 
     const formattedSummary = formatCompactSummary(rawSummary);
 
-    // Post-compact user message (same structure as CC's getCompactUserSummaryMessage)
-    const summaryUserMessage = `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+    // Post-compact user message. This becomes the synthetic prefix for future
+    // provider calls, while events.jsonl keeps the full human/audit timeline.
+    const summaryUserMessage = `${promptPack.handoffResumePrefix}
 
 ${formattedSummary}
 
-Recent messages are preserved verbatim.
-
-Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.`;
+${promptPack.handoffResumeSuffix}`;
 
     return [
       {

@@ -50,8 +50,7 @@ export class TeamStore {
     await this.ensureDir();
     const path = join(this.berryDir, TEAM_FILE);
     // Write to temp then rename = atomic on POSIX; prevents partial writes
-    // corrupting the file if the process dies mid-save (the same pitfall
-    // that bit us in berry-claw ConfigManager last week).
+    // corrupting the file if the process dies mid-save.
     const tmp = `${path}.tmp`;
     await writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
     const { rename } = await import('node:fs/promises');

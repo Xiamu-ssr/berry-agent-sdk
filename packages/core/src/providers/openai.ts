@@ -260,7 +260,8 @@ export class OpenAIProvider implements Provider {
       low: 'low',
       medium: 'medium',
       high: 'high',
-      max: 'high', // OpenAI SDK 5.x defines up to 'high'; 'xhigh' may come later
+      max: 'xhigh',
+      xhigh: 'xhigh',
     };
     return map[effort];
   }

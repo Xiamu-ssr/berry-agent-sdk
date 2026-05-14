@@ -28,7 +28,7 @@ export class AgentScope {
 
   /**
    * Convenience constructor from a single root string.
-   * Used for backward compatibility where only projectRoot is known.
+   * Used by simple integrations where workspace and project are the same path.
    */
   static fromRoot(root: string): AgentScope {
     return new AgentScope(root, root);

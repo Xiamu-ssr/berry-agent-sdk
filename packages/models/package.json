@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/models",
-  "version": "0.1.0-alpha.0",
+  "version": "0.5.0-alpha.0",
   "description": "Provider presets, model aggregation, failover resolvers, and tier shortcuts for Berry Agent SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -19,12 +19,13 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@berry-agent/core": ">=0.3.0-alpha.1"
+    "@berry-agent/core": "^0.5.0-alpha.0"
   },
   "devDependencies": {
     "@berry-agent/core": "*",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "zod": "^3.24.0"
   },
   "license": "MIT"
 }

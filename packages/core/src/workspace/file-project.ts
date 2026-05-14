@@ -2,17 +2,17 @@
 // Berry Agent SDK — File-based Project Context
 // ============================================================
 
-import { readFile, appendFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProjectContext } from './types.js';
 
-/** Known project context filenames, checked in order. */
-const CONTEXT_FILES = ['AGENTS.md', 'PROJECT.md'] as const;
+/** The single project-level context file. Humans maintain it; agents read only. */
+const CONTEXT_FILE = 'AGENTS.md' as const;
 
 /**
  * File-based ProjectContext.
- * - `loadContext()` reads the first found of AGENTS.md or PROJECT.md.
- * - `appendDiscovery()` appends to `.berry-discoveries.md`.
+ * - `loadContext()` reads `{project}/AGENTS.md`.
+ * - No write path: project-level knowledge is team-shared and maintained by humans.
  */
 export class FileProjectContext implements ProjectContext {
   readonly root: string;
@@ -22,21 +22,12 @@ export class FileProjectContext implements ProjectContext {
   }
 
   async loadContext(): Promise<string> {
-    for (const filename of CONTEXT_FILES) {
-      try {
-        return await readFile(join(this.root, filename), 'utf-8');
-      } catch (err: unknown) {
-        if (isNotFound(err)) continue;
-        throw err;
-      }
+    try {
+      return await readFile(join(this.root, CONTEXT_FILE), 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFound(err)) return '';
+      throw err;
     }
-    return '';
-  }
-
-  async appendDiscovery(content: string): Promise<void> {
-    const header = `\n## ${new Date().toISOString()}\n\n`;
-    const discoveriesPath = join(this.root, '.berry-discoveries.md');
-    await appendFile(discoveriesPath, header + content + '\n', 'utf-8');
   }
 }
 

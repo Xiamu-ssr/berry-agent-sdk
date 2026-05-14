@@ -12,6 +12,15 @@ export {
   writeScopeGuard,
 } from './guards/rules.js';
 
+// Tier 1: Human-in-the-loop approval (pauses on listed tools)
+export { askList } from './guards/ask-list.js';
+export type {
+  AskBridge,
+  AskQuestion,
+  AskAnswer,
+  AskListOptions,
+} from './guards/ask-list.js';
+
 // Tier 2: LLM Transcript Classifier (reasoning-blind, two-stage)
 export {
   createClassifierGuard,
@@ -59,3 +68,10 @@ export type {
 } from './types.js';
 
 export type { SandboxConfig, SandboxProfile } from './sandbox/index.js';
+
+// Zod schema for SDK config namespace
+export { safeNamespaceSchema } from './schema.js';
+export type { SafeNamespaceConfig } from './schema.js';
+
+// SDK config integration
+export { classifierConfigFromSdk } from './from-sdk-config.js';

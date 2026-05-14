@@ -15,7 +15,9 @@ const tempDirs: string[] = [];
 async function makeStore(): Promise<{ store: FileEventLogStore; baseDir: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'berry-event-log-'));
   tempDirs.push(dir);
-  return { store: new FileEventLogStore(dir), baseDir: dir };
+  const sessionsDir = join(dir, 'sessions');
+  await mkdir(sessionsDir, { recursive: true });
+  return { store: new FileEventLogStore(sessionsDir), baseDir: dir };
 }
 
 let eventCounter = 0;
@@ -181,8 +183,7 @@ describe('FileEventLogStore', () => {
     await store.append('ses_crash', makeEvent('user_message', 'ses_crash', { content: 'valid' }));
 
     // Simulate crash: append incomplete JSON to the file
-    const sessionsDir = join(baseDir, '.berry', 'sessions');
-    const filePath = join(sessionsDir, 'ses_crash.jsonl');
+    const filePath = join(baseDir, 'sessions', 'ses_crash', 'events.jsonl');
     const raw = await readFile(filePath, 'utf-8');
     await writeFile(filePath, raw + '{"id":"broken","type":"user_', 'utf-8');
 

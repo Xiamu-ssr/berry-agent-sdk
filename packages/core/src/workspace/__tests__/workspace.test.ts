@@ -24,9 +24,9 @@ describe('initWorkspace', () => {
 
     // Verify all files exist
     await access(join(root, 'agent.json'));
-    await access(join(root, 'AGENT.md'));
+    await access(join(root, 'AGENTS.md'));
     await access(join(root, 'MEMORY.md'));
-    await access(join(root, '.berry', 'sessions'));
+    await access(join(root, 'sessions'));
   });
 
   it('returns agent metadata with correct fields', async () => {
@@ -142,30 +142,6 @@ describe('FileProjectContext', () => {
     await writeFile(join(root, 'AGENTS.md'), '# Agents\nTeam guidelines.');
     const content = await ctx.loadContext();
     expect(content).toBe('# Agents\nTeam guidelines.');
-  });
-
-  it('loadContext() reads PROJECT.md when AGENTS.md does not exist', async () => {
-    await writeFile(join(root, 'PROJECT.md'), '# Project\nProject info.');
-    const content = await ctx.loadContext();
-    expect(content).toBe('# Project\nProject info.');
-  });
-
-  it('loadContext() prefers AGENTS.md over PROJECT.md', async () => {
-    await writeFile(join(root, 'AGENTS.md'), 'agents content');
-    await writeFile(join(root, 'PROJECT.md'), 'project content');
-    const content = await ctx.loadContext();
-    expect(content).toBe('agents content');
-  });
-
-  it('appendDiscovery() creates .berry-discoveries.md and appends', async () => {
-    await ctx.appendDiscovery('Found: API uses REST v2');
-    await ctx.appendDiscovery('Found: Auth uses JWT');
-
-    const content = await readFile(join(root, '.berry-discoveries.md'), 'utf-8');
-    expect(content).toContain('Found: API uses REST v2');
-    expect(content).toContain('Found: Auth uses JWT');
-    // Should have timestamp headers
-    expect(content).toMatch(/## \d{4}-\d{2}-\d{2}T/);
   });
 
   it('root property reflects project directory', () => {

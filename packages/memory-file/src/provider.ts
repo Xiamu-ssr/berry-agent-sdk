@@ -9,6 +9,7 @@
  */
 
 import fs from 'node:fs';
+import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolRegistration } from '@berry-agent/core';
 import { chunkMarkdown } from './chunker.js';
@@ -19,11 +20,10 @@ export interface FileMemoryProviderOptions {
   /** Workspace root. MEMORY.md and memory/ are looked up here. */
   workspaceDir: string;
   /**
-   * Optional project root. When set, the provider also indexes shared
-   * knowledge files (`AGENTS.md`, `PROJECT.md`, `.berry-discoveries.md`)
-   * under this directory. Results surface with paths prefixed `project/`
-   * so consumers can distinguish them from personal memory. Intended use
-   * case: teammates searching for shared team knowledge.
+   * Optional project root. When set, the provider also indexes the shared
+   * `AGENTS.md` under this directory. Results surface with paths prefixed
+   * `project/` so consumers can distinguish them from personal memory.
+   * Intended use case: teammates searching for shared team knowledge.
    */
   projectDir?: string;
   /** Where the sqlite index lives. Defaults to `<workspaceDir>/.berry/memory.sqlite`. */
@@ -195,8 +195,44 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
     };
   }
 
+  async function saveMemory(content: string): Promise<void> {
+    const memoryPath = path.join(workspaceDir, 'MEMORY.md');
+    const header = `\n## ${new Date().toISOString()}\n\n`;
+    await appendFile(memoryPath, header + content + '\n', 'utf-8');
+  }
+
   function tools(): ToolRegistration[] {
     return [
+      {
+        definition: {
+          name: 'save_memory',
+          description:
+            'Append an entry to your personal MEMORY.md. Use this to save ' +
+            'decisions, preferences, context, or lessons that you want to recall in ' +
+            'future sessions. Private to you — teammates cannot read it. Keep ' +
+            'entries concise and self-contained (no dangling references to "above").',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'Markdown to append.' },
+            },
+            required: ['content'],
+          },
+        },
+        execute: async (input) => {
+          const content = typeof input.content === 'string' ? input.content.trim() : '';
+          if (!content) {
+            return { content: 'Error: content must be a non-empty string', isError: true };
+          }
+          try {
+            await saveMemory(content);
+            return { content: `Saved ${content.length} chars to MEMORY.md` };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { content: `Error saving to memory: ${message}`, isError: true };
+          }
+        },
+      },
       {
         definition: {
           name: 'memory_search',
@@ -309,11 +345,9 @@ function listMemoryFiles(workspaceDir: string, projectDir?: string): string[] {
   // with `project/` in the virtual index path so search results make it
   // obvious they're shared, and so consumers can filter by source.
   if (projectDir) {
-    for (const name of ['AGENTS.md', 'PROJECT.md', '.berry-discoveries.md']) {
-      const abs = path.join(projectDir, name);
-      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-        results.push(PROJECT_PREFIX + name);
-      }
+    const abs = path.join(projectDir, 'AGENTS.md');
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      results.push(PROJECT_PREFIX + 'AGENTS.md');
     }
   }
   return results;

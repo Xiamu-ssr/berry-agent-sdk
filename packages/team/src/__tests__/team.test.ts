@@ -7,7 +7,7 @@
  *   - Team state mutation / reload semantics
  *   - Leader-id drift detection on reopen
  *
- * Live leader/teammate Agent wiring is integration-tested from berry-claw.
+ * Live leader/teammate Agent wiring is integration-tested by host products.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -36,7 +36,7 @@ describe('TeamStore', () => {
   it('roundtrips a team state', async () => {
     const store = new TeamStore(project);
     const state: TeamState = {
-      name: 'berry-claw-dev',
+      name: 'sdk-dev-team',
       project,
       leaderId: 'orange',
       teammates: [],
@@ -53,7 +53,7 @@ describe('TeamStore', () => {
   it('persists teammate additions', async () => {
     const store = new TeamStore(project);
     const state: TeamState = {
-      name: 'berry-claw-dev',
+      name: 'sdk-dev-team',
       project,
       leaderId: 'orange',
       teammates: [

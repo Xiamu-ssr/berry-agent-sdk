@@ -6,7 +6,7 @@
 //   import { createFileTools, createShellTool, createShellTools, createSearchTools, createAllTools } from '@berry-agent/tools-common';
 //
 //   const agent = Agent.create({
-//     tools: createAllTools('/my/project'),
+//     tools: createAllTools(AgentScope.fromRoot('/my/project')),
 //     ...
 //   });
 
@@ -29,11 +29,15 @@ export { createWebSearchTool } from './web-search.js';
 export type { SearchProvider, SearchResult, WebSearchConfig, WebSearchProviderName, CredentialKeyMeta } from './web-search.js';
 export { WEB_SEARCH_CREDENTIAL_KEYS, WEB_SEARCH_CREDENTIAL_META } from './web-search.js';
 
+// Zod schema for SDK config namespace
+export { toolsCommonNamespaceSchema } from './schema.js';
+export type { ToolsCommonNamespaceConfig } from './schema.js';
+
 /**
  * Create all common tools (file + edit + shell + search) scoped to a project directory.
  *
- * Accepts either an AgentScope (preferred) or a project root string (backward compat).
- * When given a string, creates an AgentScope.fromRoot(projectRoot).
+ * Accepts either an AgentScope or a project root string. When given a string,
+ * creates an AgentScope.fromRoot(projectRoot).
  *
  * Paths are resolved in Claude Code style:
  *   "/path"     → relative to projectDir

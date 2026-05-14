@@ -6,7 +6,8 @@ Pure-library Agent SDK for building AI agents with TypeScript. No CLI dependency
 
 - **Agent loop** — tool-calling loop with automatic iteration + parallel execution
 - **Providers** — Anthropic (with prompt cache) + OpenAI-compatible
-- **Session Event Log** — append-only JSONL recording (crash-safe, never modified by compaction)
+- **Session Event Log** — append-only JSONL recording for audit/UI/crash detection; `messages.json` remains provider-context truth
+- **Prompt Pack** — built-in base agent, compaction, handoff, and durable-memory prompts, with host override support
 - **Compaction** — two-tier (soft 60% + hard 85%), 7-layer pipeline with forked cache sharing. See [docs/compaction.md](../../docs/compaction.md)
 - **Pre-compact memory flush** — saves important context to AgentMemory before hard compaction
 - **CompactionStrategy** — pluggable interface to replace the default pipeline
@@ -22,7 +23,7 @@ Pure-library Agent SDK for building AI agents with TypeScript. No CLI dependency
 - **Multi-modal** — image input support (base64)
 - **Streaming** — text + thinking deltas + 16 event types
 - **Stream idle timeout** — auto-abort stalled provider streams
-- **Agent Workspace** — independent directory per agent (agent.json + AGENT.md + MEMORY.md)
+- **Agent Workspace** — independent directory per agent (agent.json + AGENTS.md + MEMORY.md)
 - **Agent Memory** — persistent memory via AgentMemory interface (file/mem0/zep backends in `@berry-agent/memory`)
 - **MCP** — via `@berry-agent/mcp` adapter package
 
@@ -77,7 +78,7 @@ Use the append-only Event Log as the frontend source of truth, then convert it i
 ```typescript
 import { FileEventLogStore, toChatTimeline } from '@berry-agent/core';
 
-const log = new FileEventLogStore('./my-agent-workspace');
+const log = new FileEventLogStore('./my-agent-workspace/sessions');
 const events = await log.getEvents(sessionId);
 const timeline = toChatTimeline(events);
 
@@ -91,7 +92,9 @@ for (const item of timeline) {
 }
 ```
 
-`DefaultContextStrategy` still builds provider messages from **after the last `compaction_marker`** only. `toChatTimeline()` is for UI rendering, not for model context reconstruction.
+Provider calls read from `messages.json`: the Agent persists the in-memory session, reads it back, then sends that committed message array to the model. `events.jsonl` is not replayed into provider context; use `toChatTimeline()` for UI rendering and audit views.
+
+Each `api_request` event includes a lightweight `contextManifest` with the prompt pack version, `messages.json` source marker, message count, system block hashes, and tool hash. This is provenance for debugging and observability; it is not a second context source.
 
 ## Delegate (One-Shot Fork)
 

@@ -37,7 +37,7 @@ export interface TeamState {
   name: string;
   /** Absolute path to the project root this team is scoped to. */
   project: string;
-  /** Agent id of the leader. Exists in the host (berry-claw) agent registry. */
+  /** Agent id of the leader. Exists in the host agent registry. */
   leaderId: string;
   /** Registered teammates. */
   teammates: TeammateRecord[];

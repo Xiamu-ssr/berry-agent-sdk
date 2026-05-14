@@ -11,6 +11,7 @@ import type {
   Session,
   AgentEvent,
 } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 function cloneProviderRequest(request: ProviderRequest): ProviderRequest {
   return {
@@ -152,6 +153,7 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -162,7 +164,7 @@ describe('Agent', () => {
       tools: [echoTool],
     });
 
-    const result = await agent.query('Use the tool');
+    const result = await agent.send('Use the tool');
     const session = await agent.getSession(result.sessionId);
 
     expect(result.text).toBe('done');
@@ -209,6 +211,7 @@ describe('Agent', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -219,7 +222,7 @@ describe('Agent', () => {
       tools: [],
     });
 
-    const result = await agent.query('Try missing tool');
+    const result = await agent.send('Try missing tool');
     const session = await agent.getSession(result.sessionId);
     const toolResultMessage = (session as Session).messages[2];
 
@@ -245,21 +248,22 @@ describe('Agent', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: ['base prompt'],
-    });
+      _systemPromptOverride: ['base prompt'],
+    } as any);
 
     const prompt = [
       { type: 'image' as const, data: 'ZmFrZS1pbWFnZS1iYXNlNjQ=', mediaType: 'image/png' },
       { type: 'text' as const, text: 'Describe this image in one sentence.' },
     ];
 
-    const result = await agent.query(prompt);
+    const result = await agent.send(prompt);
     const session = await agent.getSession(result.sessionId);
 
     expect(result.text).toBe('got it');
@@ -279,19 +283,20 @@ describe('Agent', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: ['base prompt'],
-    });
+      _systemPromptOverride: ['base prompt'],
+    } as any);
 
     const created = await agent.createSession();
     const storedBeforeTurn = await agent.getSession(created.id);
     const idsBeforeTurn = await agent.listSessions();
-    const result = await agent.query('first turn', { resume: created.id });
+    const result = await agent.send('first turn', { resume: created.id });
     const storedAfterTurn = await agent.getSession(created.id);
 
     expect(result.sessionId).toBe(created.id);
@@ -324,21 +329,22 @@ describe('Agent', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: ['base prompt'],
-    });
+      _systemPromptOverride: ['base prompt'],
+    } as any);
 
-    const first = await agent.query('first');
-    const resumed = await agent.query('second', {
+    const first = await agent.send('first');
+    const resumed = await agent.send('second', {
       resume: first.sessionId,
       systemPrompt: ['override prompt'],
     });
-    const forked = await agent.query('fork prompt', { fork: first.sessionId });
+    const forked = await agent.send('fork prompt', { fork: first.sessionId });
 
     const originalSession = await agent.getSession(first.sessionId);
     const forkedSession = await agent.getSession(forked.sessionId);
@@ -359,6 +365,7 @@ describe('Agent', () => {
     const events: AgentEvent[] = [];
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -370,7 +377,7 @@ describe('Agent', () => {
     });
 
     const perQueryEvents: AgentEvent[] = [];
-    const result = await agent.query('stream this', {
+    const result = await agent.send('stream this', {
       stream: true,
       onEvent: (event) => perQueryEvents.push(event),
     });
@@ -390,6 +397,7 @@ describe('Agent', () => {
     const events: AgentEvent[] = [];
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -400,7 +408,7 @@ describe('Agent', () => {
       onEvent: (event) => events.push(event),
     });
 
-    const result = await agent.query('retry the stalled stream', { stream: true });
+    const result = await agent.send('retry the stalled stream', { stream: true });
 
     expect(result.text).toBe('ok');
     expect(provider.requests).toHaveLength(2);
@@ -437,6 +445,7 @@ describe('Agent', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -446,14 +455,14 @@ describe('Agent', () => {
       systemPrompt: 'base',
     });
 
-    const first = await agent.query('hello');
+    const first = await agent.send('hello');
     const session = await agent.getSession(first.sessionId);
 
     // After first call, lastInputTokens should be tracked
     expect(session?.metadata.lastInputTokens).toBe(1000);
 
     // Second call on same session
-    await agent.query('follow up', { resume: first.sessionId });
+    await agent.send('follow up', { resume: first.sessionId });
     const updated = await agent.getSession(first.sessionId);
     expect(updated?.metadata.lastInputTokens).toBe(2000);
   });
@@ -486,6 +495,7 @@ describe('Agent', () => {
     ])).flat();
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -510,6 +520,7 @@ describe('Agent', () => {
     );
 
     const setupAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -522,7 +533,7 @@ describe('Agent', () => {
     // Build up a session with many messages
     let sessionId = '';
     for (let i = 0; i < 10; i++) {
-      const r = await setupAgent.query(`Message ${i} ${'x'.repeat(500)}`, i === 0 ? undefined : { resume: sessionId });
+      const r = await setupAgent.send(`Message ${i} ${'x'.repeat(500)}`, i === 0 ? undefined : { resume: sessionId });
       sessionId = r.sessionId;
     }
 
@@ -530,6 +541,7 @@ describe('Agent', () => {
     // ...actually, easier to just test that isPromptTooLongError works and the agent retries
     const events: AgentEvent[] = [];
     const retryAgent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -544,7 +556,7 @@ describe('Agent', () => {
       onEvent: (e) => events.push(e),
     });
 
-    const result = await retryAgent.query('trigger ptl');
+    const result = await retryAgent.send('trigger ptl');
     // Should have recovered
     expect(result.text).toBe('recovered after compaction');
     expect(result.compacted).toBe(true);
@@ -580,6 +592,7 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -592,7 +605,7 @@ describe('Agent', () => {
       },
     });
 
-    const result = await agent.query('do something dangerous');
+    const result = await agent.send('do something dangerous');
     const session = await agent.getSession(result.sessionId);
     const toolResultMsg = (session as Session).messages[2];
 
@@ -638,6 +651,7 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -648,7 +662,7 @@ describe('Agent', () => {
       }),
     });
 
-    await agent.query('echo something');
+    await agent.send('echo something');
     expect(executedInput).toEqual({ value: 'sanitized' });
   });
 
@@ -693,6 +707,7 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -700,16 +715,18 @@ describe('Agent', () => {
       sessionStore: store as any,
     });
 
-    await agent.query('go');
+    await agent.send('go');
 
-    // Expect incremental saves after each tool turn + final save
-    // Turn 1: user + assistant(tool_use) + user(tool_result) → save (3 msgs)
-    // Turn 2: + assistant(tool_use) + user(tool_result) → save (5 msgs)
-    // Final: + assistant(text) → save (6 msgs)
-    expect(saveLog.length).toBe(3); // 2 incremental + 1 final
-    expect(saveLog[0]).toBe('save:3');  // after turn 1 tools
-    expect(saveLog[1]).toBe('save:5');  // after turn 2 tools
-    expect(saveLog[2]).toBe('save:6');  // final save
+    // messages.json is the provider-context source of truth:
+    // save before each LLM inference, save after each tool loop, save final.
+    expect(saveLog).toEqual([
+      'save:1', // before first inference
+      'save:3', // after turn 1 tools
+      'save:3', // before second inference
+      'save:5', // after turn 2 tools
+      'save:5', // before final inference
+      'save:6', // final save
+    ]);
   });
 
   it('stops after maxTurns when the provider keeps asking for tools', async () => {
@@ -739,6 +756,7 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         apiKey: 'test',
@@ -749,7 +767,7 @@ describe('Agent', () => {
       tools: [echoTool],
     });
 
-    const result = await agent.query('loop forever', { maxTurns: 1 });
+    const result = await agent.send('loop forever', { maxTurns: 1 });
     const session = await agent.getSession(result.sessionId);
 
     expect(provider.requests).toHaveLength(1);
@@ -814,20 +832,21 @@ describe('runtime memory/todo tools', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
       workspace: workspaceRoot,
     });
 
-    const first = await agent.query('write todo');
+    const first = await agent.send('write todo');
     const stored = await agent.getSession(first.sessionId);
     expect(stored?.metadata.todo?.items).toEqual([
       { text: 'Plan minimal feature', done: false },
       { text: 'Run targeted tests', done: true },
     ]);
 
-    await agent.query('read todo', { resume: first.sessionId });
+    await agent.send('read todo', { resume: first.sessionId });
     const resumed = await agent.getSession(first.sessionId);
     const toolResults = resumed ? getToolResultContents(resumed) : [];
 
@@ -845,6 +864,7 @@ describe('runtime memory/todo tools', () => {
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -882,6 +902,7 @@ describe('runtime memory/todo tools', () => {
     };
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -931,6 +952,7 @@ Review the code thoroughly. Check for:
     const provider = new SequenceProvider([]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -970,13 +992,14 @@ Review the code thoroughly. Check for:
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
       skillDirs: [skillDir],
     });
 
-    const result = await agent.query('Review this PR');
+    const result = await agent.send('Review this PR');
 
     expect(result.toolCalls).toBe(1);
     expect(result.text).toContain('I loaded the code review skill');
@@ -1011,13 +1034,14 @@ Review the code thoroughly. Check for:
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
       skillDirs: [skillDir],
     });
 
-    const result = await agent.query('load something');
+    const result = await agent.send('load something');
     const session = await agent.getSession(result.sessionId);
     const toolResultMsg = session!.messages.find(
       m => m.role === 'user' && Array.isArray(m.content) &&
@@ -1038,13 +1062,14 @@ Review the code thoroughly. Check for:
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
       skillDirs: [skillDir],
     });
 
-    await agent.query('hello');
+    await agent.send('hello');
 
     const req = provider.requests[0]!;
     const toolNames = req.tools.map(t => t.name);
@@ -1061,13 +1086,14 @@ Review the code thoroughly. Check for:
     ]);
 
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
       skillDirs: [skillDir],
     });
 
-    await agent.query('hello');
+    await agent.send('hello');
 
     const req = provider.requests[0]!;
     const fullSystemPrompt = flattenSystemPrompt(req.systemPrompt).join('\n');
@@ -1098,6 +1124,7 @@ Review the code thoroughly. Check for:
 
     const events: AgentEvent[] = [];
     const agent = new Agent({
+      home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
       systemPrompt: 'base',
@@ -1118,14 +1145,15 @@ Review the code thoroughly. Check for:
       ],
     });
 
-    await agent.query('use a tool');
+    await agent.send('use a tool');
 
     const statusEvents = events.filter((event): event is Extract<AgentEvent, { type: 'status_change' }> => event.type === 'status_change');
-    expect(statusEvents.map(event => event.status)).toContain('thinking');
-    expect(statusEvents.map(event => event.status)).toContain('tool_executing');
-    expect(statusEvents).toContainEqual(expect.objectContaining({ type: 'status_change', status: 'tool_executing', detail: 'echo' }));
+    // 4-state machine: thinking/tool_executing collapsed into `tool_use` with detail.
+    expect(statusEvents.map(event => event.status)).toContain('tool_use');
+    expect(statusEvents).toContainEqual(expect.objectContaining({ type: 'status_change', status: 'tool_use', detail: 'thinking' }));
+    expect(statusEvents).toContainEqual(expect.objectContaining({ type: 'status_change', status: 'tool_use', detail: 'echo' }));
     expect(statusEvents.at(-1)).toEqual(expect.objectContaining({ type: 'status_change', status: 'idle' }));
-    expect(agent.inspect().status).toBe('idle');
-    expect(agent.inspect().statusDetail).toBeUndefined();
+    expect(agent.snapshot().status).toBe('idle');
+    expect(agent.snapshot().statusDetail).toBeUndefined();
   });
 });

@@ -1,14 +1,14 @@
 /**
  * Team runtime — glues TeamStore (persistent state) to live Agent instances.
  *
- * Host wiring (berry-claw):
+ * Host wiring:
  *   1. Instantiate a Team with the leader's Agent and a project path.
  *   2. Mount team.leaderTools() onto the leader Agent.
  *   3. When leader calls `spawn_teammate`, Team creates a child Agent via
  *      `leader.spawn()` and mounts team.teammateTools() on it.
  *   4. Persist state in project/.berry/team.json on every mutation.
  *
- * This package does NOT own the host agent registry (berry-claw does); it
+ * This package does NOT own the host agent registry; it
  * only owns the *team relation* between agents. An agent can be a member of
  * at most one team at a time (enforced by the host).
  */
@@ -27,8 +27,8 @@ type TeammateAgents = Map<TeammateId, Agent>;
  * Host-provided factory that turns a teammate spec into a first-class Agent.
  *
  * Moved out of Team in v1.2 (2026-04-22): teammates are now *regular* agents
- * registered in the host's agent registry (so they show up in berry-claw's
- * Agents tab, have their own session store under `<agents_dir>/<id>/`, etc),
+ * registered in the host's agent registry (so they show up in the host UI,
+ * have their own session store under `<agents_dir>/<id>/`, etc),
  * not ephemeral sub-agents living only in Team's memory. Team delegates to
  * the host and just keeps the relationship (who leads whom).
  *
@@ -344,7 +344,7 @@ export class Team {
       content,
     });
     // Resume teammate's current session so context is preserved across turns.
-    const result = await agent.query(content, agent.lastSessionId ? { resume: agent.lastSessionId } : undefined);
+    const result = await agent.send(content, agent.lastSessionId ? { resume: agent.lastSessionId } : undefined);
     await this.store.appendMessage({
       id: randomUUID(),
       ts: Date.now(),

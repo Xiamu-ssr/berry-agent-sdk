@@ -221,7 +221,7 @@ describe('compact', () => {
     const summaryContent = result.messages[0].content as string;
     expect(summaryContent).toContain('short summary');
     expect(summaryContent).not.toContain('<analysis>');
-    expect(summaryContent).toContain('continued from a previous conversation');
+    expect(summaryContent).toContain('结构化工件');
     // No fake assistant ack message — recent messages come right after
     // Recent messages preserved
     expect(result.messages.slice(-3).map(m => m.content)).toEqual([
@@ -344,10 +344,10 @@ describe('compact', () => {
       // no forkContext
     );
 
-    // Without fork, should use COMPACT_SYSTEM_PROMPT (a single string)
+    // Without fork, should use the prompt-pack compactor system prompt.
     expect(capturedRequest).not.toBeNull();
     expect(capturedRequest!.systemPrompt).toHaveLength(1);
-    expect(capturedRequest!.systemPrompt[0]!.text).toContain('summarizing conversation');
+    expect(capturedRequest!.systemPrompt[0]!.text).toContain('上下文压缩器');
     // No tools passed
     expect(capturedRequest!.tools).toBeUndefined();
   });

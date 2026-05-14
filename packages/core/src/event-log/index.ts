@@ -35,6 +35,7 @@ export type {
   MetadataEvent,
   SessionStartEvent,
   MessagesSnapshotEvent,
+  ContextManifest,
   ApiRequestEvent,
   ApiResponseEvent,
   ToolUseStartEvent,

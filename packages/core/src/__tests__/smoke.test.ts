@@ -35,6 +35,7 @@ import type {
   QueryResult,
   DelegateResult,
 } from '../types.js';
+import { tmpHome } from './helpers.js';
 
 config({ path: resolve(__dirname, '../../../../.env.local') });
 
@@ -121,6 +122,7 @@ When solving math problems:
 `);
 
     agent = new Agent({
+      home: tmpHome(),
       provider: {
         type: 'anthropic',
         model: MODEL,
@@ -143,7 +145,7 @@ When solving math problems:
   let totalCacheRead = 0;
 
   it('1. basic Q&A + establishes session', async () => {
-    const result = await agent.query(
+    const result = await agent.send(
       'My name is Berry. Remember it. What is 2+2? Answer in one word.',
       { stream: true },
     );
@@ -164,7 +166,7 @@ When solving math problems:
   it('2. tool calling — store a note', async () => {
     events.length = 0;
 
-    const result = await agent.query(
+    const result = await agent.send(
       'Store a note with key "project" and value "berry-agent-sdk v0.1"',
       { resume: sessionId, stream: true },
     );
@@ -184,7 +186,7 @@ When solving math problems:
   it('3. session resume — verify memory + cache hit', async () => {
     events.length = 0;
 
-    const result = await agent.query(
+    const result = await agent.send(
       'What is my name? And retrieve the note with key "project".',
       { resume: sessionId, stream: true },
     );
@@ -221,31 +223,8 @@ When solving math problems:
     expect(delegateResult.usage.inputTokens).toBeGreaterThan(0);
   });
 
-  it('5. spawn() — persistent sub-agent', async () => {
-    const child = agent.spawn({
-      id: 'summarizer',
-      systemPrompt: 'You are a concise summarizer. Respond in 1-2 sentences max.',
-    });
-
-    expect(agent.children.size).toBe(1);
-
-    const r1 = await child.query('What is TypeScript? One sentence.');
-    expect(r1.text).toBeTruthy();
-    expect(r1.text.length).toBeGreaterThan(10);
-
-    // Sub-agent has its own session
-    const r2 = await child.query('Repeat what you just said, shorter.', {
-      resume: r1.sessionId,
-    });
-    expect(r2.text).toBeTruthy();
-
-    // Cleanup
-    agent.destroyChild('summarizer');
-    expect(agent.children.size).toBe(0);
-  });
-
   it('6. structured output — JSON extraction', async () => {
-    const result = await agent.query(
+    const result = await agent.send(
       'Extract the following info as JSON (keys: name, age, job, city): "Alice is 30 years old and works as an engineer in Berlin". Return ONLY the JSON object, no other text.',
     );
 
@@ -261,7 +240,7 @@ When solving math problems:
   it('7. skill loading — load_skill tool trigger', async () => {
     events.length = 0;
 
-    const result = await agent.query(
+    const result = await agent.send(
       'I need to solve a math problem. Load the math-helper skill first, then calculate 15 * 8 using the calculator tool.',
     );
 

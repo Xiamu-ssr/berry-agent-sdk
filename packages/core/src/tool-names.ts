@@ -12,14 +12,6 @@ export const TOOL_LOAD_SKILL = 'load_skill' as const;
 /** Delegate sub-task tool (auto-registered unless disabled). */
 export const TOOL_DELEGATE = 'delegate' as const;
 
-/**
- * Spawn persistent sub-agent tool.
- * @deprecated Removed in v0.4. Persistent sub-agent creation now belongs to
- * `@berry-agent/team` (leader-only `spawn_teammate`). The constant is kept
- * so old consumer allowlists that reference 'spawn_agent' still type-check.
- */
-export const TOOL_SPAWN = 'spawn_agent' as const;
-
 /** Per-session todo read tool (auto-registered). */
 export const TOOL_TODO_READ = 'todo_read' as const;
 
@@ -28,19 +20,6 @@ export const TOOL_TODO_WRITE = 'todo_write' as const;
 
 /** Sleep tool (auto-registered). Suspends the agent loop; interject() wakes early. */
 export const TOOL_SLEEP = 'sleep' as const;
-
-/**
- * Agent memory save tool (auto-registered when workspace is configured).
- * Appends to the agent's personal MEMORY.md.
- */
-export const TOOL_SAVE_MEMORY = 'save_memory' as const;
-
-/**
- * Project discovery save tool (auto-registered when project is configured).
- * Appends to `{project}/.berry-discoveries.md` — shared across every agent
- * bound to the same project (teammates + leader).
- */
-export const TOOL_SAVE_DISCOVERY = 'save_discovery' as const;
 
 // ----- Common tools (@berry-agent/tools-common) -----
 
@@ -66,8 +45,6 @@ export const CORE_TOOL_NAMES = [
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
   TOOL_SLEEP,
-  TOOL_SAVE_MEMORY,
-  TOOL_SAVE_DISCOVERY,
 ] as const;
 
 /** All common tool names from @berry-agent/tools-common. */

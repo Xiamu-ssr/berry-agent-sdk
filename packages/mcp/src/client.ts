@@ -32,9 +32,22 @@ export class MCPClient {
   /** Connect to the MCP server. Must be called before listing/calling tools. */
   async connect(): Promise<void> {
     if (this._connected) return;
+    const timeoutMs = this.config.connectTimeoutMs ?? 10_000;
 
     this.transport = this.createTransport();
-    await this.client.connect(this.transport);
+    try {
+      await raceWithTimeout(
+        this.client.connect(this.transport),
+        timeoutMs,
+        `MCP connect timeout after ${timeoutMs}ms (server: ${this.name})`,
+      );
+    } catch (err) {
+      // Tear down stdio subprocess / HTTP transport so we don't leak
+      // descriptors on timeout or initialize errors.
+      try { await this.client.close(); } catch { /* best effort */ }
+      this.transport = null;
+      throw err;
+    }
     this._connected = true;
   }
 
@@ -53,7 +66,12 @@ export class MCPClient {
   /** List available tools from the MCP server. */
   async listTools(): Promise<MCPToolInfo[]> {
     this.ensureConnected();
-    const result = await this.client.listTools();
+    const timeoutMs = this.config.connectTimeoutMs ?? 10_000;
+    const result = await raceWithTimeout(
+      this.client.listTools(),
+      timeoutMs,
+      `MCP listTools timeout after ${timeoutMs}ms (server: ${this.name})`,
+    );
     return (result.tools ?? []).map(tool => ({
       name: tool.name,
       description: tool.description ?? '',
@@ -134,4 +152,23 @@ export interface MCPToolInfo {
 export interface MCPToolResult {
   content: string;
   isError: boolean;
+}
+
+/**
+ * Reject the input promise with `message` if it hasn't settled within `ms`.
+ * Used to bound `initialize` / `tools/list` round-trips against hosts that
+ * spawn their MCP server via `stdio` — upstream SDK's default 60s timeout
+ * blocks cold-start pipelines that want to skip unhealthy servers.
+ *
+ * The helper only races; it does not cancel the inner work. Callers are
+ * responsible for tearing the client down after a timeout.
+ */
+function raceWithTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(msg)), ms);
+    p.then(
+      value => { clearTimeout(t); resolve(value); },
+      err => { clearTimeout(t); reject(err); },
+    );
+  });
 }
