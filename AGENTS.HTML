@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Berry Agent SDK 对齐文档</title>
+  <style>
+    :root { color-scheme: light dark; --fg: #202124; --muted: #667085; --line: #d0d5dd; --bg: #ffffff; --panel: #f8fafc; --accent: #0f766e; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #e5e7eb; --muted: #9ca3af; --line: #374151; --bg: #0b0f14; --panel: #111827; --accent: #34d399; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1 { font-size: 34px; line-height: 1.2; margin: 0 0 8px; }
+    h2 { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--line); font-size: 24px; }
+    h3 { margin-top: 28px; font-size: 18px; }
+    p, li { color: var(--fg); }
+    .muted { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+    .card { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 16px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { background: color-mix(in srgb, var(--panel) 80%, var(--accent)); padding: 2px 5px; border-radius: 5px; }
+    pre { overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 24px; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--panel); }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Berry Agent SDK 对齐文档</h1>
+  <p class="muted">本文件是 SDK 仓库的人类说明、架构约定和 agent 协作入口。README.md 和 AGENTS.md 只保留到本文档的引用，避免多份事实源漂移。</p>
+
+  <h2>定位</h2>
+  <p><strong>Berry Agent SDK</strong> 是用于构建长期运行、可恢复、可审计、可接入工具/MCP/Skill 的 TypeScript Agent SDK。它不是产品 UI，也不保存产品端实例列表、桌面壳状态或业务导航。</p>
+  <div class="grid">
+    <section class="card"><strong>SDK 负责</strong><br>agent 生命周期、provider 调用、messages/events、compaction、tool loop、MCP adapter、Skill loader、PromptPack、Memory、Safety、Observe。</section>
+    <section class="card"><strong>产品负责</strong><br>实例管理、用户交互、前端布局、产品事实展示、跨设备连接、发布包和平台壳。</section>
+    <section class="card"><strong>唯一事实源</strong><br><code>messages.json</code> 是 LLM 推理上下文事实源；<code>events.jsonl</code> 是 UI/审计/历史 timeline 事实源。</section>
+  </div>
+
+  <h2>核心原则</h2>
+  <ul>
+    <li><strong>先写后读</strong>：发给 LLM 的 messages 必须先写入 <code>messages.json</code>，再从文件读出构造 provider 请求。</li>
+    <li><strong>事件追加</strong>：运行过程、工具调用、安全决策、compaction、provider usage 追加到 <code>events.jsonl</code>，不反向替代 provider context。</li>
+    <li><strong>不做隐式默认路径</strong>：宿主决定数据目录；SDK 接受路径，不替产品决定用户数据放哪里。</li>
+    <li><strong>不放产品逻辑</strong>：团队工作台、服务器切换、手机/桌面连接、ClawHub 市场 UI 等属于产品端。</li>
+    <li><strong>PromptPack 是 SDK 能力</strong>：基础行为、压缩摘要、记忆 flush、handoff/resume 统一由 <code>@berry-agent/prompt-pack</code> 管理。</li>
+  </ul>
+
+  <h2>包职责</h2>
+  <table>
+    <thead><tr><th>包</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>@berry-agent/core</code></td><td>Agent loop、sessions、providers、compaction、event log、workspace、skills、runtime events。</td></tr>
+      <tr><td><code>@berry-agent/models</code></td><td>模型注册、provider preset、tier 解析、价格和上下文窗口信息。</td></tr>
+      <tr><td><code>@berry-agent/tools-common</code></td><td>文件、shell、搜索、web、memory、运行时基础工具。</td></tr>
+      <tr><td><code>@berry-agent/safe</code></td><td>工具安全策略、allow/deny、目录边界、LLM classifier、审计事件。</td></tr>
+      <tr><td><code>@berry-agent/mcp</code></td><td>MCP client、MCP tool adapter、MCP tool center。</td></tr>
+      <tr><td><code>@berry-agent/memory-file</code></td><td>文件型长期记忆 provider。</td></tr>
+      <tr><td><code>@berry-agent/prompt-pack</code></td><td>内置/导入/导出 PromptPack，管理提示词目录规范。</td></tr>
+      <tr><td><code>@berry-agent/observe</code></td><td>推理、成本、cache、guard、compaction 的记录、查询和内嵌 UI。</td></tr>
+      <tr><td><code>@berry-agent/team</code></td><td>多 agent 团队和 worklist 原语。</td></tr>
+      <tr><td><code>@berry-agent/avatar</code></td><td>确定性像素头像生成。</td></tr>
+      <tr><td><code>@berry-agent/config</code></td><td>共享配置加载和 schema 边界。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>代码量统计</h2>
+  <p class="muted">统计口径：排除 <code>node_modules</code>、<code>dist</code>、<code>coverage</code>、<code>.git</code> 等生成物；统计非空非注释行；测试按 <code>__tests__</code> / <code>.test.*</code> / <code>.spec.*</code>；前端按 React/UI 代码。</p>
+  <table>
+    <thead><tr><th>包</th><th class="num">逻辑代码</th><th class="num">前端</th><th class="num">测试</th><th class="num">合计</th><th class="num">文件</th></tr></thead>
+    <tbody>
+      <tr><td>core</td><td class="num">6108</td><td class="num">0</td><td class="num">4615</td><td class="num">10723</td><td class="num">69</td></tr>
+      <tr><td>observe</td><td class="num">2007</td><td class="num">2016</td><td class="num">919</td><td class="num">4942</td><td class="num">41</td></tr>
+      <tr><td>tools-common</td><td class="num">1108</td><td class="num">0</td><td class="num">608</td><td class="num">1716</td><td class="num">13</td></tr>
+      <tr><td>safe</td><td class="num">942</td><td class="num">0</td><td class="num">610</td><td class="num">1552</td><td class="num">22</td></tr>
+      <tr><td>models</td><td class="num">651</td><td class="num">0</td><td class="num">500</td><td class="num">1151</td><td class="num">14</td></tr>
+      <tr><td>team</td><td class="num">879</td><td class="num">0</td><td class="num">155</td><td class="num">1034</td><td class="num">6</td></tr>
+      <tr><td>memory-file</td><td class="num">585</td><td class="num">0</td><td class="num">278</td><td class="num">863</td><td class="num">9</td></tr>
+      <tr><td>mcp</td><td class="num">600</td><td class="num">0</td><td class="num">232</td><td class="num">832</td><td class="num">8</td></tr>
+      <tr><td>config</td><td class="num">181</td><td class="num">0</td><td class="num">295</td><td class="num">476</td><td class="num">4</td></tr>
+      <tr><td>prompt-pack</td><td class="num">380</td><td class="num">0</td><td class="num">0</td><td class="num">380</td><td class="num">1</td></tr>
+      <tr><td>root/examples</td><td class="num">243</td><td class="num">0</td><td class="num">0</td><td class="num">243</td><td class="num">6</td></tr>
+      <tr><td>avatar</td><td class="num">83</td><td class="num">0</td><td class="num">17</td><td class="num">100</td><td class="num">2</td></tr>
+      <tr><th>合计</th><th class="num">13767</th><th class="num">2016</th><th class="num">8229</th><th class="num">24012</th><th class="num">195</th></tr>
+    </tbody>
+  </table>
+
+  <h2>运行目录</h2>
+  <pre><code>&lt;agent-home&gt;/
+├── agent.json
+├── AGENTS.md
+├── MEMORY.md
+├── memory/
+├── .mcp.json
+├── skills/
+└── sessions/
+    └── &lt;session-id&gt;/
+        ├── messages.json
+        └── events.jsonl</code></pre>
+
+  <h2>代码规范</h2>
+  <ul>
+    <li>不引入无事实源的缓存；缓存只允许作为明确可丢弃的派生状态。</li>
+    <li>魔法值必须集中维护，优先使用常量、枚举或 schema。</li>
+    <li>序列化/反序列化必须标明事实源，不能让前后端各自维护一份漂移结构。</li>
+    <li>新增 SDK API 时必须明确：输入事实源、输出事实源、是否持久化、是否影响 provider context。</li>
+    <li>测试覆盖随风险增加：provider/session/compaction/event log/safety 变更必须有单测。</li>
+  </ul>
+
+  <h2>开发命令</h2>
+  <pre><code>npm install
+npm run build
+npm test</code></pre>
+
+  <h2>已清理内容</h2>
+  <p>旧的 Claude Code / Python SDK 参考目录仅作为早期调研材料存在，不再作为当前事实源维护，已从工作区清理。</p>
+</main>
+</body>
+</html>
