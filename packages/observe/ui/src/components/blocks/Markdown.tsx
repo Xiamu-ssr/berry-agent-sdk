@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useEffect, useState } from 'react';
+import type { AnchorHTMLAttributes, CSSProperties, HTMLAttributes, ReactNode, TableHTMLAttributes } from 'react';
 
 export function Markdown({ text }: { text: string }) {
   const isDark = useIsDark();
@@ -21,9 +22,10 @@ export function Markdown({ text }: { text: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           code(props) {
-            const { className, children, ...rest } = props as {
+            const { className, children, node: _node, ...rest } = props as HTMLAttributes<HTMLElement> & {
               className?: string;
-              children?: React.ReactNode;
+              children?: ReactNode;
+              node?: unknown;
             };
             const match = /language-(\w+)/.exec(className ?? '');
             const text = String(children ?? '').replace(/\n$/, '');
@@ -41,7 +43,7 @@ export function Markdown({ text }: { text: string }) {
             return (
               <SyntaxHighlighter
                 language={match[1]}
-                style={(isDark ? oneDark : oneLight) as Record<string, React.CSSProperties>}
+                style={(isDark ? oneDark : oneLight) as Record<string, CSSProperties>}
                 PreTag="div"
                 customStyle={{ margin: 0, borderRadius: 8, fontSize: 12 }}
               >
@@ -50,9 +52,12 @@ export function Markdown({ text }: { text: string }) {
             );
           },
           a(props) {
+            const { node: _node, ...rest } = props as AnchorHTMLAttributes<HTMLAnchorElement> & {
+              node?: unknown;
+            };
             return (
               <a
-                {...props}
+                {...rest}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-indigo-600 dark:text-indigo-400 hover:underline"
@@ -60,10 +65,13 @@ export function Markdown({ text }: { text: string }) {
             );
           },
           table(props) {
+            const { node: _node, ...rest } = props as TableHTMLAttributes<HTMLTableElement> & {
+              node?: unknown;
+            };
             return (
               <div className="overflow-x-auto">
                 <table
-                  {...props}
+                  {...rest}
                   className="text-xs border-collapse"
                 />
               </div>
