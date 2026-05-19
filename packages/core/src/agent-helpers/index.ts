@@ -12,6 +12,7 @@ export {
   isProviderResolver,
   providerConfigsEqual,
   isPromptTooLongError,
+  extractContextWindowFromError,
 } from './provider.js';
 export {
   createInMemoryStore,

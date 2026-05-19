@@ -83,6 +83,7 @@ import {
   isProviderResolver,
   providerConfigsEqual,
   isPromptTooLongError,
+  extractContextWindowFromError,
   createInMemoryStore,
   createEmptySessionMetadata,
   extractText,
@@ -830,6 +831,17 @@ export class Agent {
         } catch (err) {
           if (isPromptTooLongError(err) && ptlRetries < MAX_PTL_RETRIES) {
             ptlRetries++;
+            const learnedContextWindow = extractContextWindowFromError(err);
+            if (
+              learnedContextWindow &&
+              learnedContextWindow > 0 &&
+              learnedContextWindow < (this.compactionConfig?.contextWindow ?? ctxWindow)
+            ) {
+              this.compactionConfig = {
+                ...this.compactionConfig,
+                contextWindow: learnedContextWindow,
+              };
+            }
             // Force compaction to shrink context, then retry
             this.setStatus('tool_use', `compacting:${COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY}`);
             await this.runCompactionWithMiddleware(
@@ -837,7 +849,7 @@ export class Agent {
               {
                 level: 'hard',
                 reason: 'overflow_retry',
-                tokensBefore: session.metadata.lastInputTokens ?? 0,
+                tokensBefore: session.metadata.lastInputTokens ?? estimateTokens(session.messages),
               },
               () => runCompaction({
                 compactionStrategy: this.compactionStrategy,

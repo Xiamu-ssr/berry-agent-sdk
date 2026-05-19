@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { extractContextWindowFromError } from '../agent-helpers/provider.js';
 import { AnthropicProvider } from '../providers/anthropic.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import type { Message } from '../types.js';
@@ -36,7 +37,7 @@ describe('AnthropicProvider adapters', () => {
       {
         role: 'assistant',
         content: [
-          { type: 'thinking', thinking: 'hidden' },
+          { type: 'thinking', thinking: 'hidden', signature: 'sig' },
           { type: 'text', text: 'let me inspect' },
           { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'a.ts' } },
         ],
@@ -67,7 +68,7 @@ describe('AnthropicProvider adapters', () => {
         {
           type: 'thinking',
           thinking: 'hidden',
-          signature: '',
+          signature: 'sig',
         },
         {
           type: 'text',
@@ -140,6 +141,29 @@ describe('AnthropicProvider adapters', () => {
     ]);
   });
 
+  it('drops unsigned thinking blocks at the Anthropic boundary', () => {
+    const provider = new AnthropicProvider({
+      type: 'anthropic',
+      apiKey: 'test',
+      model: 'claude-sonnet-4-20250514',
+    });
+
+    const wireMessages = (provider as any).buildMessages([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'unsigned' },
+          { type: 'text', text: 'visible reply' },
+        ],
+      },
+    ] satisfies Message[]);
+
+    expect(wireMessages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'visible reply', cache_control: { type: 'ephemeral' } }],
+    });
+  });
+
   it('deduplicates Anthropic system cache breakpoints when the final block is stable', () => {
     const provider = new AnthropicProvider({
       type: 'anthropic',
@@ -163,6 +187,15 @@ describe('AnthropicProvider adapters', () => {
         cache_control: { type: 'ephemeral' },
       },
     ]);
+  });
+});
+
+describe('provider error helpers', () => {
+  it('extracts provider-reported context windows from prompt-too-long errors', () => {
+    expect(extractContextWindowFromError(new Error('This model supports at most 100000 tokens, but got 150001.'))).toBe(100_000);
+    expect(extractContextWindowFromError({ error: { message: 'input length 250,000 > 100,000 maximum tokens' } })).toBe(100_000);
+    expect(extractContextWindowFromError(new Error('maximum context length is 128,000 tokens'))).toBe(128_000);
+    expect(extractContextWindowFromError(new Error('rate limit'))).toBeUndefined();
   });
 });
 

@@ -99,3 +99,35 @@ export function isPromptTooLongError(err: unknown): boolean {
 
   return false;
 }
+
+/**
+ * Best-effort extraction of the provider-reported context window from prompt
+ * length errors. Providers phrase this differently ("250000 > 100000
+ * maximum", "maximum context length is 128000 tokens", etc.), so keep this
+ * intentionally conservative and return only plausible token limits.
+ */
+export function extractContextWindowFromError(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as Record<string, unknown>;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  const nested = e.error && typeof e.error === 'object'
+    ? String((e.error as Record<string, unknown>).message ?? '')
+    : '';
+  const text = `${msg}\n${nested}`;
+
+  const patterns = [
+    /(?:supports\s+at\s+most|at\s+most)\D{0,32}([\d,]{4,})/i,
+    /(?:maximum context length|max(?:imum)?(?: context)?(?: length)?|context(?: length)? limit)\D{0,32}([\d,]{4,})/i,
+    />\s*([\d,]{4,})\s*(?:tokens?)?\s*(?:maximum|max|limit)/i,
+    /([\d,]{4,})\s*(?:tokens?)?\s*(?:maximum|max|context limit)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const parsed = match?.[1] ? Number(match[1].replace(/,/g, '')) : NaN;
+    if (Number.isFinite(parsed) && parsed >= 4_000 && parsed <= 10_000_000) {
+      return parsed;
+    }
+  }
+  return undefined;
+}

@@ -37,6 +37,7 @@ import { withRetry } from '../utils/retry.js';
 
 // Extended Anthropic SDK types for beta features (thinking, etc.)
 interface ThinkingDelta { type: 'thinking_delta'; thinking: string }
+interface SignatureDelta { type: 'signature_delta'; signature: string }
 interface ThinkingBlock { type: 'thinking'; thinking: string }
 // Image block must satisfy ContentBlockParam union (ImageBlockParam)
 interface AnthropicImageBlock { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; [k: string]: unknown }
@@ -142,6 +143,13 @@ export class AnthropicProvider implements Provider {
             if (thinking) {
               yield { type: 'thinking_delta', thinking };
             }
+          } else if (delta.type === 'signature_delta') {
+            const signature = (delta as unknown as SignatureDelta).signature ?? '';
+            const target = block && block.type === 'thinking'
+              ? block
+              : ({ type: 'thinking', thinking: '' } satisfies ThinkingContent);
+            target.signature = `${target.signature ?? ''}${signature}`;
+            content[event.index] = target;
           } else if (delta.type === 'input_json_delta') {
             toolInputJson.set(event.index, (toolInputJson.get(event.index) ?? '') + delta.partial_json);
           }
@@ -374,37 +382,54 @@ export class AnthropicProvider implements Provider {
       return { role: 'assistant', content: [block] };
     }
 
-    const content: ContentBlockParam[] = msg.content.map((block, idx, arr) => {
-      const isLast = idx === arr.length - 1;
-      const cache = addCache && isLast
-        ? { cache_control: { type: 'ephemeral' as const } }
-        : {};
+    const content = msg.content
+      .map((block, idx, arr): ContentBlockParam | null => {
+        const isLast = idx === arr.length - 1;
+        const cache = addCache && isLast
+          ? { cache_control: { type: 'ephemeral' as const } }
+          : {};
 
-      if (block.type === 'text') {
-        return { type: 'text' as const, text: block.text, ...cache };
-      }
-      if (block.type === 'tool_use') {
-        return {
-          type: 'tool_use' as const,
-          id: (block as ToolUseContent).id,
-          name: (block as ToolUseContent).name,
-          input: (block as ToolUseContent).input,
-          ...cache,
-        } as ToolUseBlockParam;
-      }
-      if (block.type === 'thinking') {
-        const t = block as ThinkingContent;
-        return {
-          type: 'thinking' as const,
-          thinking: t.thinking,
-          signature: t.signature ?? '',
-          ...cache,
-        } as unknown as ContentBlockParam;
-      }
-      return { type: 'text' as const, text: JSON.stringify(block), ...cache };
-    });
+        if (block.type === 'text') {
+          return { type: 'text' as const, text: block.text, ...cache };
+        }
+        if (block.type === 'tool_use') {
+          return {
+            type: 'tool_use' as const,
+            id: (block as ToolUseContent).id,
+            name: (block as ToolUseContent).name,
+            input: (block as ToolUseContent).input,
+            ...cache,
+          } as ToolUseBlockParam;
+        }
+        if (block.type === 'thinking') {
+          const t = block as ThinkingContent;
+          // Anthropic thinking blocks are provider-private proof-carrying blocks:
+          // replaying them requires the exact signature returned by Anthropic.
+          // OpenAI/Kimi-style reasoning_content (or older Anthropic streaming
+          // sessions before signature_delta was captured) may live in Berry's
+          // provider-neutral messages[] as `thinking` without a valid signature.
+          // Sending `signature: ""` to Claude causes:
+          //   400 messages.N.content.M: Invalid `signature` in `thinking` block
+          // Drop unsigned thinking at the Anthropic boundary; keep signed blocks
+          // intact for true Anthropic multi-turn continuity.
+          if (!t.signature) return null;
+          return {
+            type: 'thinking' as const,
+            thinking: t.thinking,
+            signature: t.signature,
+            ...cache,
+          } as unknown as ContentBlockParam;
+        }
+        return { type: 'text' as const, text: JSON.stringify(block), ...cache };
+      })
+      .filter((block): block is ContentBlockParam => block !== null);
 
-    return { role: 'assistant', content };
+    return {
+      role: 'assistant',
+      content: content.length > 0
+        ? content
+        : [{ type: 'text' as const, text: '(unsigned thinking omitted)' }],
+    };
   }
 
   // ===== Tools =====
