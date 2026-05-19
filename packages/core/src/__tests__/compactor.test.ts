@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compact, estimateTokens } from '../compaction/compactor.js';
 import { normalizeSystemPrompt } from '../types.js';
 import type { Message, Provider, ProviderRequest, ProviderResponse, ContentBlock } from '../types.js';
+import { stablePrompt } from './helpers.js';
 
 class FakeProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -288,7 +289,7 @@ describe('compact', () => {
     };
 
     const forkContext = {
-      systemPrompt: ['You are a coding assistant.', 'Be concise.'],
+      systemPrompt: stablePrompt('You are a coding assistant.', 'Be concise.'),
       tools: [
         {
           name: 'read_file',
@@ -308,7 +309,7 @@ describe('compact', () => {
     // Verify forked compact used main system prompt instead of COMPACT_SYSTEM_PROMPT
     expect(capturedRequest).not.toBeNull();
     expect(capturedRequest!.systemPrompt).toEqual(
-      normalizeSystemPrompt(['You are a coding assistant.', 'Be concise.']),
+      normalizeSystemPrompt(stablePrompt('You are a coding assistant.', 'Be concise.')),
     );
     // Verify tools were passed through
     expect(capturedRequest!.tools).toEqual(forkContext.tools);

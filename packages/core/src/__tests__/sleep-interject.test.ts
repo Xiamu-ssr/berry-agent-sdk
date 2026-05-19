@@ -13,7 +13,7 @@ import type {
   ProviderResponse,
   Provider,
 } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 const STATUS_WAIT_TIMEOUT_MS = 1_000;
 const STATUS_POLL_INTERVAL_MS = 5;
@@ -66,7 +66,7 @@ function makeAgent() {
     home: tmpHome(),
     provider: { type: 'anthropic', apiKey: 'x', model: 'fake' } as ProviderConfig,
     providerInstance: provider,
-    systemPrompt: 'test',
+    systemPrompt: stablePrompt('test'),
     onEvent: (e) => events.push(e),
   });
   return { agent, provider, events };

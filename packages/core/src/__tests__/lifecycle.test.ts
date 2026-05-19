@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
 import type { ProviderConfig, Provider, ProviderResponse } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 class FakeProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -43,7 +43,7 @@ function makeAgent(): { agent: Agent; provider: FakeProvider } {
     home: tmpHome(),
     provider: providerConfig,
     providerInstance: provider,
-    systemPrompt: 'test',
+      systemPrompt: stablePrompt('test'),
   });
   return { agent, provider };
 }

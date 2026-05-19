@@ -58,6 +58,7 @@
       <tr><td><code>@berry-agent/safe</code></td><td>工具安全策略、allow/deny、目录边界、LLM classifier、审计事件。</td></tr>
       <tr><td><code>@berry-agent/mcp</code></td><td>MCP client、MCP tool adapter、MCP tool center。</td></tr>
       <tr><td><code>@berry-agent/memory-file</code></td><td>文件型长期记忆 provider。</td></tr>
+      <tr><td><code>@berry-agent/small-shared-core</code></td><td>跨包共享的轻量协议类型和纯函数，避免 core、prompt-pack 等包互相循环依赖。</td></tr>
       <tr><td><code>@berry-agent/prompt-pack</code></td><td>内置/导入/导出 PromptPack，管理提示词目录规范。</td></tr>
       <tr><td><code>@berry-agent/observe</code></td><td>推理、成本、cache、guard、compaction 的记录、查询和内嵌 UI。</td></tr>
       <tr><td><code>@berry-agent/team</code></td><td>多 agent 团队和 worklist 原语。</td></tr>
@@ -71,8 +72,8 @@
   <table>
     <thead><tr><th>包</th><th class="num">逻辑代码</th><th class="num">前端</th><th class="num">测试</th><th class="num">合计</th><th class="num">文件</th></tr></thead>
     <tbody>
-      <tr><td>core</td><td class="num">6108</td><td class="num">0</td><td class="num">4615</td><td class="num">10723</td><td class="num">69</td></tr>
-      <tr><td>observe</td><td class="num">2007</td><td class="num">2016</td><td class="num">919</td><td class="num">4942</td><td class="num">41</td></tr>
+      <tr><td>core</td><td class="num">6097</td><td class="num">0</td><td class="num">4629</td><td class="num">10726</td><td class="num">69</td></tr>
+      <tr><td>observe</td><td class="num">2007</td><td class="num">1970</td><td class="num">919</td><td class="num">4896</td><td class="num">39</td></tr>
       <tr><td>tools-common</td><td class="num">1108</td><td class="num">0</td><td class="num">608</td><td class="num">1716</td><td class="num">13</td></tr>
       <tr><td>safe</td><td class="num">942</td><td class="num">0</td><td class="num">610</td><td class="num">1552</td><td class="num">22</td></tr>
       <tr><td>models</td><td class="num">651</td><td class="num">0</td><td class="num">500</td><td class="num">1151</td><td class="num">14</td></tr>
@@ -80,10 +81,10 @@
       <tr><td>memory-file</td><td class="num">585</td><td class="num">0</td><td class="num">278</td><td class="num">863</td><td class="num">9</td></tr>
       <tr><td>mcp</td><td class="num">600</td><td class="num">0</td><td class="num">232</td><td class="num">832</td><td class="num">8</td></tr>
       <tr><td>config</td><td class="num">181</td><td class="num">0</td><td class="num">295</td><td class="num">476</td><td class="num">4</td></tr>
-      <tr><td>prompt-pack</td><td class="num">380</td><td class="num">0</td><td class="num">0</td><td class="num">380</td><td class="num">1</td></tr>
-      <tr><td>root/examples</td><td class="num">243</td><td class="num">0</td><td class="num">0</td><td class="num">243</td><td class="num">6</td></tr>
+      <tr><td>prompt-pack</td><td class="num">377</td><td class="num">0</td><td class="num">0</td><td class="num">377</td><td class="num">1</td></tr>
       <tr><td>avatar</td><td class="num">83</td><td class="num">0</td><td class="num">17</td><td class="num">100</td><td class="num">2</td></tr>
-      <tr><th>合计</th><th class="num">13767</th><th class="num">2016</th><th class="num">8229</th><th class="num">24012</th><th class="num">195</th></tr>
+      <tr><td>small-shared-core</td><td class="num">22</td><td class="num">0</td><td class="num">0</td><td class="num">22</td><td class="num">1</td></tr>
+      <tr><th>合计</th><th class="num">13532</th><th class="num">1970</th><th class="num">8243</th><th class="num">23745</th><th class="num">188</th></tr>
     </tbody>
   </table>
 
@@ -115,7 +116,7 @@ npm run build
 npm test</code></pre>
 
   <h2>已清理内容</h2>
-  <p>旧的 Claude Code / Python SDK 参考目录仅作为早期调研材料存在，不再作为当前事实源维护，已从工作区清理。</p>
+  <p>旧的 Claude Code / Python SDK 参考目录仅作为早期调研材料存在，不再作为当前事实源维护，已从工作区清理。过时的 <code>examples/</code> 示例目录已删除，避免旧 API 示例继续漂移。</p>
 </main>
 </body>
 </html>

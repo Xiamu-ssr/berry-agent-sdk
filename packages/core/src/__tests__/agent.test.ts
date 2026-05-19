@@ -11,7 +11,7 @@ import type {
   Session,
   AgentEvent,
 } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 function cloneProviderRequest(request: ProviderRequest): ProviderRequest {
   return {
@@ -160,7 +160,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'You are helpful',
+      systemPrompt: stablePrompt('You are helpful'),
       tools: [echoTool],
     });
 
@@ -218,7 +218,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'You are helpful',
+      systemPrompt: stablePrompt('You are helpful'),
       tools: [],
     });
 
@@ -255,7 +255,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      _systemPromptOverride: ['base prompt'],
+      _systemPromptOverride: stablePrompt('base prompt'),
     } as any);
 
     const prompt = [
@@ -290,7 +290,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      _systemPromptOverride: ['base prompt'],
+      _systemPromptOverride: stablePrompt('base prompt'),
     } as any);
 
     const created = await agent.createSession();
@@ -302,7 +302,7 @@ describe('Agent', () => {
     expect(result.sessionId).toBe(created.id);
     expect(storedBeforeTurn?.messages).toEqual([]);
     // systemPrompt is no longer on Session — verify through agent instead
-    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(['base prompt']));
+    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(stablePrompt('base prompt')));
     expect(idsBeforeTurn).toContain(created.id);
     expect(storedAfterTurn?.messages).toHaveLength(2);
     expect(storedAfterTurn?.messages[0]?.content).toBe('first turn');
@@ -336,13 +336,13 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      _systemPromptOverride: ['base prompt'],
+      _systemPromptOverride: stablePrompt('base prompt'),
     } as any);
 
     const first = await agent.send('first');
     const resumed = await agent.send('second', {
       resume: first.sessionId,
-      systemPrompt: ['override prompt'],
+      systemPrompt: stablePrompt('override prompt'),
     });
     const forked = await agent.send('fork prompt', { fork: first.sessionId });
 
@@ -352,7 +352,7 @@ describe('Agent', () => {
     expect(resumed.sessionId).toBe(first.sessionId);
     expect(forked.sessionId).not.toBe(first.sessionId);
     // systemPrompt override is query-time only, does not change the agent's base prompt
-    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(['base prompt']));
+    expect(agent.getSystemPrompt()).toEqual(normalizeSystemPrompt(stablePrompt('base prompt')));
     expect(originalSession?.messages).toHaveLength(4);
     expect(forkedSession?.messages).toHaveLength(6);
     expect(forkedSession?.messages[0].content).toBe('first');
@@ -372,7 +372,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       onEvent: (event) => events.push(event),
     });
 
@@ -404,7 +404,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       onEvent: (event) => events.push(event),
     });
 
@@ -452,7 +452,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
     });
 
     const first = await agent.send('hello');
@@ -502,7 +502,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: ptlProvider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       compaction: {
         contextWindow: 200_000,
         threshold: 100_000,
@@ -527,7 +527,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: setupProvider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
     });
 
     // Build up a session with many messages
@@ -548,7 +548,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: ptlProvider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       compaction: {
         contextWindow: 1000,
         threshold: 500,
@@ -595,7 +595,7 @@ describe('Agent', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       tools: [dangerousTool],
       toolGuard: async ({ toolName }) => {
         if (toolName === 'dangerous_tool') {
@@ -654,7 +654,7 @@ describe('Agent', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       tools: [echoTool],
       toolGuard: async () => ({
         action: 'modify',
@@ -710,7 +710,7 @@ describe('Agent', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       tools: [echoTool],
       sessionStore: store as any,
     });
@@ -763,7 +763,7 @@ describe('Agent', () => {
         model: 'fake-model',
       },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       tools: [echoTool],
     });
 
@@ -835,7 +835,7 @@ describe('runtime memory/todo tools', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       workspace: workspaceRoot,
     });
 
@@ -867,7 +867,7 @@ describe('runtime memory/todo tools', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       workspace: workspaceRoot,
     });
 
@@ -905,7 +905,7 @@ describe('runtime memory/todo tools', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       memory: mockProvider,
     });
 
@@ -955,7 +955,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       skillDirs: [skillDir],
     });
 
@@ -995,7 +995,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       skillDirs: [skillDir],
     });
 
@@ -1037,7 +1037,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       skillDirs: [skillDir],
     });
 
@@ -1065,7 +1065,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       skillDirs: [skillDir],
     });
 
@@ -1089,7 +1089,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       skillDirs: [skillDir],
     });
 
@@ -1127,7 +1127,7 @@ Review the code thoroughly. Check for:
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'base',
+      systemPrompt: stablePrompt('base'),
       onEvent: (event) => events.push(event),
       tools: [
         {

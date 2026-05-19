@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
 import type { ContentBlock, Provider, ProviderConfig, ProviderResponse, Session, ToolRegistration } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 // ---- FakeProvider (same pattern as status.test.ts) ----
 class FakeProvider implements Provider {
@@ -51,7 +51,7 @@ function makeAgent(): { agent: Agent; provider: FakeProvider } {
     home: tmpHome(),
     provider: providerConfig,
     providerInstance: provider,
-    systemPrompt: 'test',
+      systemPrompt: stablePrompt('test'),
     tools: [echoTool],
   });
   return { agent, provider };

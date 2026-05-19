@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 
 import { Agent } from '../agent.js';
 import type { AgentConfig, QueryResult, ToolRegistration, AgentEvent } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 // Load .env.local from repo root
 config({ path: resolve(__dirname, '../../../../.env.local') });
@@ -42,7 +42,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant. Be concise.',
+      systemPrompt: stablePrompt('You are a helpful assistant. Be concise.'),
       compaction: {
         // Use a tiny context window to trigger compaction easily in tests
         contextWindow: 4_000,
@@ -94,7 +94,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You have a tool called add_numbers. Use it when asked to add numbers. Reply with just the result.',
+      systemPrompt: stablePrompt('You have a tool called add_numbers. Use it when asked to add numbers. Reply with just the result.'),
       tools: [addTool],
     });
 
@@ -132,7 +132,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant. Be concise.',
+      systemPrompt: stablePrompt('You are a helpful assistant. Be concise.'),
     });
 
     // First turn
@@ -160,7 +160,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant.',
+      systemPrompt: stablePrompt('You are a helpful assistant.'),
     });
 
     const deltas: string[] = [];
@@ -193,7 +193,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant.',
+      systemPrompt: stablePrompt('You are a helpful assistant.'),
       compaction: {
         // Extremely low threshold: compaction fires when lastInputTokens > 100
         contextWindow: 1_000,
@@ -244,7 +244,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant. Be concise.',
+      systemPrompt: stablePrompt('You are a helpful assistant. Be concise.'),
     });
 
     const r1 = await usageAgent.send('Say "hi".');
@@ -269,7 +269,7 @@ describe.skipIf(!canRun)('integration (real API)', () => {
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant.',
+      systemPrompt: stablePrompt('You are a helpful assistant.'),
     });
 
     const controller = new AbortController();

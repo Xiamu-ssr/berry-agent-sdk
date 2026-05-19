@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/team",
-  "version": "0.5.0-alpha.0",
+  "version": "0.5.0-alpha.1",
   "description": "Team mode for Berry Agent SDK — leader/teammate topology, inter-agent messaging, persistent project-scoped collaboration",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@berry-agent/core": "^0.5.0-alpha.0"
+    "@berry-agent/core": "^0.5.0-alpha.1"
   },
   "devDependencies": {
     "@berry-agent/core": "*",

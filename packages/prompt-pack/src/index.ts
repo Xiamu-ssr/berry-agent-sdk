@@ -1,14 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import {
+  SystemPromptCacheMode,
+  type SystemPromptBlock,
+  type SystemPromptInput,
+} from '@berry-agent/small-shared-core';
 
-export type SystemPromptCacheScope = 'stable' | 'dynamic';
-
-export interface SystemPromptBlock {
-  text: string;
-  cache?: SystemPromptCacheScope;
-}
-
-export type SystemPromptInput = string | SystemPromptBlock | Array<string | SystemPromptBlock>;
+export { SystemPromptCacheMode };
+export type { SystemPromptBlock, SystemPromptInput };
 
 export interface PromptPack {
   /** Stable machine id. Used by config, import/export, and UI selection. */
@@ -158,7 +157,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     version: 'berry.prompt-pack.zh.default.v1',
     baseAgent: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry Agent,一个可长期运行、会使用工具、嵌入宿主产品的 AI agent。
 
 核心规则:
@@ -173,7 +172,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     ],
     compactSystem: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry Agent 的上下文压缩器。
 
 你的任务是把旧会话前缀转成忠实、紧凑、可继续执行的上下文工件。你不解决用户任务,只保留下一轮 assistant 继续工作所需的状态。`,
@@ -193,7 +192,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     version: 'berry.prompt-pack.zh.codex.v1',
     baseAgent: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry Agent,一个偏工程执行的长期工具型 agent。
 
 工作方式:
@@ -208,7 +207,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     ],
     compactSystem: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry 工程执行上下文压缩器。
 
 你要保留工程现场: 目标、已读文件、已改文件、命令、测试、错误、决策、未完成补丁和下一步。摘要必须让后续 agent 能直接继续改代码。`,
@@ -228,7 +227,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     version: 'berry.prompt-pack.zh.claude.v1',
     baseAgent: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry Agent,一个偏深度协作的长期工具型 agent。
 
 协作方式:
@@ -243,7 +242,7 @@ export const BUILTIN_PROMPT_PACKS: readonly PromptPack[] = Object.freeze([
     ],
     compactSystem: [
       {
-        cache: 'stable' as const,
+        cache: SystemPromptCacheMode.Stable,
         text: `你是 Berry 深度协作上下文压缩器。
 
 你要保留协作连续性: 用户真实意图、拍板原因、开放问题、当前假设、关键事实和交接下一步。不要把短期 todo 写成长期记忆。`,
@@ -421,7 +420,7 @@ function isPromptPack(input: PromptPackInput | undefined): input is PromptPack {
 }
 
 function stableBlock(text: string): SystemPromptBlock[] {
-  return [{ cache: 'stable' as const, text }];
+  return [{ cache: SystemPromptCacheMode.Stable, text }];
 }
 
 function readManifest(path: string): PromptPackManifest {
@@ -440,11 +439,7 @@ function readText(packDirectory: string, file: string): string {
 }
 
 function systemPromptToMarkdown(input: SystemPromptInput): string {
-  if (typeof input === 'string') return input;
-  if (Array.isArray(input)) {
-    return input.map((item) => (typeof item === 'string' ? item : item.text)).join('\n\n');
-  }
-  return input.text;
+  return input.map((item) => item.text).join('\n\n');
 }
 
 function safePackDirName(id: string): string {

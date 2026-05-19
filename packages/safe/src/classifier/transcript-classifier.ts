@@ -6,7 +6,7 @@
 // Stage 2: CoT reasoning (only if Stage 1 flags)
 // Same prompt for both stages → Stage 2 is ~100% cache hit from Stage 1
 
-import type { Provider, ToolGuard, Message } from '@berry-agent/core';
+import { SystemPromptCacheMode, type Provider, type ToolGuard, type Message } from '@berry-agent/core';
 import { createProvider, toProviderResolver } from '@berry-agent/core';
 import { selectProvider } from '@berry-agent/models';
 import type {
@@ -259,7 +259,7 @@ async function classifyAction(
   ];
 
   const stage1Response = await provider.chat({
-    systemPrompt: [systemPrompt],
+    systemPrompt: [{ text: systemPrompt, cache: SystemPromptCacheMode.Stable }],
     messages: stage1Messages,
     tools: [],
   });
@@ -285,7 +285,7 @@ async function classifyAction(
   ];
 
   const stage2Response = await provider.chat({
-    systemPrompt: [systemPrompt],
+    systemPrompt: [{ text: systemPrompt, cache: SystemPromptCacheMode.Stable }],
     messages: stage2Messages,
     tools: [],
   });

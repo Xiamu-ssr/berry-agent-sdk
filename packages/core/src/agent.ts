@@ -39,7 +39,7 @@ import type {
   SystemPromptInput,
   ModelRefResolver,
 } from './types.js';
-import { normalizeSystemPrompt, toProviderResolver, ToolGroup } from './types.js';
+import { normalizeSystemPrompt, toProviderResolver, ToolGroup, SystemPromptCacheMode } from './types.js';
 import type { EventLogStore, SessionEvent } from './event-log/types.js';
 import { FileEventLogStore } from './event-log/jsonl-store.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -106,19 +106,10 @@ interface InternalAgentConfig extends AgentConfig {
   _isSubAgent?: boolean;
   /**
    * Test-only / internal-hydration escape hatch for the base system prompt.
-   * Public callers MUST NOT use this — the real source is `<home>/AGENTS.md`.
-   * Kept here so unit tests that need to assert on specific prompt content
-   * (e.g. delegate `appendSystemPrompt` merging) don't have to stand up a
-   * temp directory + AgentHome just to write one file.
+   * Kept here so internal/test code can bypass the normal public
+   * `systemPrompt` entrypoint without touching on-disk workspace context.
    */
   _systemPromptOverride?: SystemPromptInput;
-  /**
-   * Legacy test-only alias for `_systemPromptOverride`. Tests are excluded
-   * from tsconfig, so test files can still pass `systemPrompt: '...'` to
-   * `new Agent({...})` and have the value flow into the base prompt.
-   * Public callers CANNOT reach this (it's not on `AgentConfig`).
-   */
-  systemPrompt?: SystemPromptInput;
 }
 
 function shortHash(value: unknown): string {
@@ -177,7 +168,7 @@ export class Agent {
   private _isSubAgent = false;
   private _lastSessionId?: string;
 
-  /** The session id used by the most recent query(), or undefined if no query has been made yet. */
+  /** The session id used by the most recent send(), or undefined if no turn has been made yet. */
   get lastSessionId(): string | undefined {
     return this._lastSessionId;
   }
@@ -222,7 +213,7 @@ export class Agent {
    * Inject an immediate message into the currently-running query, to be seen
    * by the next LLM inference within the same turn.
    *
-   *   - Use `query()` for queued / next-turn messages (normal user prompts).
+   *   - Use `send()` for queued / next-turn messages (normal user prompts).
    *   - Use `interject()` for right-now messages that should not wait for the
    *     current turn to finish (e.g. "stop" nudges, breaking news).
    *
@@ -278,15 +269,16 @@ export class Agent {
   }
 
   constructor(config: AgentConfig) {
-    // System prompt is NOT a constructor parameter (AGENTS.md §Context).
-    // The base seed here is the SDK prompt pack; real product/project content comes from
-    // AGENTS.md / per-project AGENTS.md / skill index, which `buildSystemPrompt`
-    // stitches on at send-time. `_systemPromptOverride` is a test/internal
-    // escape hatch only.
+    // Base system prompt blocks come from the explicit config when supplied;
+    // otherwise the selected prompt pack seeds the base prompt. Additional
+    // runtime context (project AGENTS.md, workspace AGENTS.md, skill index)
+    // is appended later by buildSystemPrompt().
     const internal = config as InternalAgentConfig;
     this.promptPack = resolvePromptPack(config.promptPack, { directory: config.promptPackDir });
     this.systemPrompt = normalizeSystemPrompt(
-      internal._systemPromptOverride ?? internal.systemPrompt ?? this.promptPack.baseAgent,
+      internal._systemPromptOverride
+        ?? config.systemPrompt
+        ?? this.promptPack.baseAgent,
     );
 
     if (!config.home) {
@@ -526,6 +518,7 @@ export class Agent {
 
     return new Agent({
       provider: providerConfig,
+      systemPrompt: config.systemPrompt,
       tools: config.tools,
       skillDirs: config.skillDirs,
       disabledSkills: config.disabledSkills,
@@ -647,7 +640,7 @@ export class Agent {
     }
   }
 
-  /** Internal: the actual agent loop, extracted for try-catch in query(). */
+  /** Internal: the actual agent loop, extracted for try-catch in send(). */
   private async _queryLoop(
     session: Session,
     prompt: string | ContentBlock[],
@@ -1483,14 +1476,14 @@ export class Agent {
     // product/project/agent-specific, while the base block stays reusable.
     if (this._projectContext) {
       const ctx = await this._projectContext.loadContext();
-      if (ctx) base.push({ text: ctx, cache: 'stable' });
+      if (ctx) base.push({ text: ctx, cache: SystemPromptCacheMode.Stable });
     }
 
     // Append AGENTS.md from workspace (if exists)
     try {
       const { readFile } = await import('node:fs/promises');
       const agentMd = await readFile(this._home.agentMdPath, 'utf-8');
-      if (agentMd.trim()) base.push({ text: agentMd, cache: 'stable' });
+      if (agentMd.trim()) base.push({ text: agentMd, cache: SystemPromptCacheMode.Stable });
     } catch {
       // AGENTS.md doesn't exist or is empty — skip
     }
@@ -1498,7 +1491,7 @@ export class Agent {
     // Skill system: inject lightweight index (name + description + whenToUse).
     // Full content is loaded lazily when the skill is invoked.
     const index = await this.skills.renderIndexBlock();
-    if (index) base.push({ text: index, cache: 'dynamic' });
+    if (index) base.push({ text: index, cache: SystemPromptCacheMode.Dynamic });
 
     return base;
   }

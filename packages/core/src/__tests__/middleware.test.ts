@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
-import { normalizeSystemPrompt } from '../types.js';
+import { normalizeSystemPrompt, SystemPromptCacheMode } from '../types.js';
 import type {
   Provider,
   ProviderRequest,
@@ -12,7 +12,7 @@ import type {
   CompactionOutcome,
   CompactionStrategy,
 } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 function makeUsage(): TokenUsage {
   return { inputTokens: 100, outputTokens: 50 };
@@ -46,7 +46,10 @@ describe('middleware', () => {
         // Add a message to the request
         return {
           ...request,
-          systemPrompt: [...request.systemPrompt, 'INJECTED BY MIDDLEWARE'],
+          systemPrompt: [
+            ...request.systemPrompt,
+            { text: 'INJECTED BY MIDDLEWARE', cache: SystemPromptCacheMode.Stable },
+          ],
         };
       },
     };
@@ -55,7 +58,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      _systemPromptOverride: 'Base prompt.',
+      _systemPromptOverride: stablePrompt('Base prompt.'),
       middleware: [mw],
     } as any);
 
@@ -63,7 +66,7 @@ describe('middleware', () => {
 
     expect(capturedRequests).toHaveLength(1);
     // The original didn't have the injected text
-    expect(capturedRequests[0]!.systemPrompt).toEqual(normalizeSystemPrompt('Base prompt.'));
+    expect(capturedRequests[0]!.systemPrompt).toEqual(normalizeSystemPrompt(stablePrompt('Base prompt.')));
   });
 
   it('onAfterApiCall observes the response', async () => {
@@ -86,7 +89,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       middleware: [mw],
     });
 
@@ -136,7 +139,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       tools: [echoTool],
       middleware: [mw],
     });
@@ -182,7 +185,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       tools: [readTool],
       middleware: [mw],
     });
@@ -216,7 +219,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       middleware: [mw1, mw2],
     });
 
@@ -271,7 +274,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       middleware: [mw],
       compaction: { contextWindow: 200_000, threshold: 150_000 },
       compactionStrategy: strategy,
@@ -339,7 +342,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: ptlProvider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       middleware: [mw],
       compaction: { contextWindow: 1000, threshold: 500 },
       compactionStrategy: strategy,
@@ -399,7 +402,7 @@ describe('middleware', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       middleware: [mw],
       compaction: { contextWindow: 200_000, threshold: 150_000 },
       compactionStrategy: strategy,

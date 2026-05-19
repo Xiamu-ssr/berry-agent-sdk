@@ -65,13 +65,13 @@ export interface ThinkingEvent extends BaseEvent {
   thinking: string;
 }
 
-/** Start of a query() call. */
+/** Start of a send() call. */
 export interface QueryStartEvent extends BaseEvent {
   type: 'query_start';
   prompt: string | ContentBlock[];
 }
 
-/** End of a query() call. */
+/** End of a send() call. */
 export interface QueryEndEvent extends BaseEvent {
   type: 'query_end';
   result: QueryResult;

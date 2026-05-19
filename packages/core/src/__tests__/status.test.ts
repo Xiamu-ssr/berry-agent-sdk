@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
 import type { ProviderConfig, AgentEvent, ToolRegistration, Provider, ProviderResponse } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 /**
  * Minimal in-memory provider used to drive the agent through known states.
@@ -67,7 +67,7 @@ describe('Agent status machine', () => {
       home: tmpHome(),
       provider: providerConfig,
       providerInstance: provider,
-      systemPrompt: 'test',
+      systemPrompt: stablePrompt('test'),
       tools: opts?.tools,
       onEvent: (e) => events.push(e),
     });

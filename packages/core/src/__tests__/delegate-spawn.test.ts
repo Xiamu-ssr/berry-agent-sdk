@@ -10,7 +10,7 @@ import type {
   Session,
   AgentEvent,
 } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 // ===== Test Helpers =====
 
@@ -53,7 +53,7 @@ describe('delegate', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
-      systemPrompt: 'You are a coding assistant.',
+      systemPrompt: stablePrompt('You are a coding assistant.'),
     });
 
     const result = await agent.delegate('Summarize the code');
@@ -94,7 +94,7 @@ describe('delegate', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
-      systemPrompt: 'You are a coding assistant.',
+      systemPrompt: stablePrompt('You are a coding assistant.'),
       tools: [readFileTool],
     });
 
@@ -121,7 +121,7 @@ describe('delegate', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: mainProvider,
-      systemPrompt: 'You are helpful.',
+      systemPrompt: stablePrompt('You are helpful.'),
     });
 
     await agent.send('Hi');
@@ -160,17 +160,20 @@ describe('delegate', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
-      _systemPromptOverride: 'Base prompt.',
+      _systemPromptOverride: stablePrompt('Base prompt.'),
     } as any);
 
     await agent.delegate('Do something', {
-      appendSystemPrompt: 'Extra skill instructions here.',
+      appendSystemPrompt: stablePrompt('Extra skill instructions here.'),
       includeHistory: false, // no session yet
     });
 
     const request = provider.chatSpy.mock.calls[0]![0] as ProviderRequest;
     expect(request.systemPrompt).toEqual(
-      normalizeSystemPrompt(['Base prompt.', 'Extra skill instructions here.']),
+      normalizeSystemPrompt([
+        ...stablePrompt('Base prompt.'),
+        ...stablePrompt('Extra skill instructions here.'),
+      ]),
     );
   });
 
@@ -203,7 +206,7 @@ describe('delegate', () => {
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
       providerInstance: provider,
-      systemPrompt: 'Base.',
+      systemPrompt: stablePrompt('Base.'),
       tools: [execTool],
     });
 

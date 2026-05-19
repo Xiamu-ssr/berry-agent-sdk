@@ -120,7 +120,7 @@ export * from './constants.js';
 export * from './tool-names.js';
 
 // Tool group enum and labels
-export { ToolGroup, TOOL_GROUP_LABELS } from './types.js';
+export { ToolGroup, TOOL_GROUP_LABELS, SystemPromptCacheMode } from './types.js';
 
 // Types
 export type {
@@ -140,7 +140,6 @@ export type {
   ToolResultContent,
   ThinkingContent,
   SystemPromptBlock,
-  SystemPromptCacheScope,
   SystemPromptInput,
   Role,
 

@@ -359,7 +359,9 @@ async function summarizeOldMessages(
   //
   // Without forkContext, we use the prompt-pack compactor system prompt
   // (cheaper but no cache sharing).
-  const systemPrompt = normalizeSystemPrompt(forkContext?.systemPrompt ?? promptPack.compactSystem);
+  const systemPrompt = normalizeSystemPrompt(
+    forkContext?.systemPrompt ?? promptPack.compactSystem,
+  );
 
   try {
     const summaryResponse = await provider.chat({

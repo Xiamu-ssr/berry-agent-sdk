@@ -2,6 +2,13 @@
 // Berry Agent SDK — Core Type Definitions
 // ============================================================
 
+import {
+  SystemPromptCacheMode,
+  type SystemPromptBlock,
+  type SystemPromptInput,
+  normalizeSystemPrompt,
+  flattenSystemPrompt,
+} from '@berry-agent/small-shared-core';
 import type { SkillDirSpec } from './skills/types.js';
 
 // ----- Messages (Internal Format) -----
@@ -57,56 +64,9 @@ export interface Message {
 
 // ----- System Prompt -----
 
-/**
- * Cache stability hint for system prompt blocks.
- *
- * - 'stable'  — Content that does not change between turns (env, AGENTS.md).
- *               Anthropic provider places a cache_control breakpoint at the
- *               last stable block (lastStableIndex), maximizing prefix reuse.
- * - 'dynamic' — Content that may change between turns (skill index, runtime state).
- *               A second breakpoint is placed at the end of the full system prompt.
- */
-export type SystemPromptCacheScope = 'stable' | 'dynamic';
-
-/**
- * Structured system prompt block.
- *
- * `stable` blocks are expected to remain reusable across requests and are good
- * Anthropic cache breakpoint candidates. `dynamic` blocks are request-specific
- * tail content that should remain ordered after stable prompt prefix blocks.
- */
-export interface SystemPromptBlock {
-  text: string;
-  cache?: SystemPromptCacheScope;
-}
-
-export type SystemPromptInput = string | SystemPromptBlock | Array<string | SystemPromptBlock>;
-
-/** Normalize plain string inputs into structured prompt blocks while preserving order. */
-export function normalizeSystemPrompt(
-  prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
-  defaultCache: SystemPromptCacheScope = 'stable',
-): SystemPromptBlock[] {
-  const blocks = (Array.isArray(prompt) ? prompt : [prompt]) as ReadonlyArray<string | SystemPromptBlock>;
-
-  return blocks.map((block) => {
-    if (typeof block === 'string') {
-      return { text: block, cache: defaultCache };
-    }
-
-    return {
-      text: block.text,
-      cache: block.cache ?? defaultCache,
-    };
-  });
-}
-
-/** Flatten structured prompt blocks down to text only, preserving order. */
-export function flattenSystemPrompt(
-  prompt: SystemPromptInput | ReadonlyArray<SystemPromptBlock>,
-): string[] {
-  return normalizeSystemPrompt(prompt).map(block => block.text);
-}
+export { SystemPromptCacheMode };
+export type { SystemPromptBlock, SystemPromptInput };
+export { normalizeSystemPrompt, flattenSystemPrompt };
 
 // ----- Tools -----
 
@@ -276,7 +236,7 @@ export function toProviderResolver(input: ProviderInput): ProviderResolver {
 
 export interface ProviderRequest {
   /** System prompt blocks (split for cache optimization) */
-  systemPrompt: Array<string | SystemPromptBlock>;
+  systemPrompt: SystemPromptBlock[];
   messages: Message[];
   tools?: ToolDefinition[];
   /** Abort signal */
@@ -378,6 +338,13 @@ export interface AgentConfig {
   /** SDK prompt pack id/object for base behavior, compaction, and memory flush prompts. */
   promptPack?: import('./prompts.js').PromptPackInput;
   /**
+   * Optional base system prompt blocks for this agent instance.
+   *
+   * These blocks form the base prompt before runtime-appended context such as
+   * project/agent AGENTS.md or host-managed dynamic blocks.
+   */
+  systemPrompt?: SystemPromptInput;
+  /**
    * Optional prompt-pack data directory. When set, the SDK seeds built-in
    * prompt packs into this directory on first use and resolves string pack ids
    * from disk before falling back to built-ins.
@@ -405,7 +372,7 @@ export interface AgentConfig {
   toolGuard?: ToolGuard;
   /**
    * Event log store for append-only session event recording.
-   * When set, every action in query() is appended to the event log.
+   * When set, every action in send() is appended to the event log.
    * Provider context still comes from messages.json; the event log is for
    * audit, UI timelines, and crash detection.
    */
@@ -470,9 +437,14 @@ export interface AgentCreateConfig {
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
 
   // --- Agent config ---
-  // System prompt is NOT a constructor parameter. It is loaded from
-  // `<home.root>/AGENTS.md` (plus per-project AGENTS.md and the skill index),
-  // per AGENTS.md §Context.
+  /**
+   * Optional base system prompt blocks for this agent instance.
+   *
+   * These blocks are the explicit base prompt supplied by the host. Runtime
+   * context sources such as AGENTS.md and skill indexes may still be appended
+   * by the agent loop unless overridden per query.
+   */
+  systemPrompt?: SystemPromptInput;
   /** Tools to register. */
   tools?: ToolRegistration[];
   /** Skill directories (plain path or {@link SkillDirSpec} with defaults). */
@@ -730,7 +702,7 @@ export interface QueryResult {
   totalUsage: TokenUsage;
   toolCalls: number;
   compacted: boolean;
-  /** Error message when query fails (set by try-catch in query()). */
+  /** Error message when send fails (set by try-catch in send()). */
   error?: string;
 }
 

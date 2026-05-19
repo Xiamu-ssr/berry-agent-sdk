@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/tools-common",
-  "version": "0.5.0-alpha.0",
+  "version": "0.5.0-alpha.1",
   "description": "Common tool implementations for Berry Agent SDK (file, shell, search)",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@berry-agent/core": "^0.5.0-alpha.0"
+    "@berry-agent/core": "^0.5.0-alpha.1"
   },
   "devDependencies": {
     "@berry-agent/core": "*",

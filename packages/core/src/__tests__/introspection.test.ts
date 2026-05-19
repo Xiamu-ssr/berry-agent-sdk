@@ -10,7 +10,7 @@ import type {
   ProviderResponse,
   ToolRegistration,
 } from '../types.js';
-import { tmpHome } from './helpers.js';
+import { stablePrompt, tmpHome } from './helpers.js';
 
 class FakeProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -51,7 +51,7 @@ describe('getMCP', () => {
       home: tmpHome(),
       provider: providerConfig,
       providerInstance: new FakeProvider(),
-      systemPrompt: 'x',
+      systemPrompt: stablePrompt('x'),
       tools: [builtinTool('echo')],
     });
     expect(agent.getMCP()).toEqual([]);
@@ -62,7 +62,7 @@ describe('getMCP', () => {
       home: tmpHome(),
       provider: providerConfig,
       providerInstance: new FakeProvider(),
-      systemPrompt: 'x',
+      systemPrompt: stablePrompt('x'),
       tools: [
         builtinTool('echo'),
         mcpTool('github', 'create_pr'),
@@ -89,7 +89,7 @@ describe('getMCP', () => {
       home: tmpHome(),
       provider: providerConfig,
       providerInstance: new FakeProvider(),
-      systemPrompt: 'x',
+      systemPrompt: stablePrompt('x'),
       tools: [builtinTool('echo'), mcpTool('srv', 't')],
     });
     expect(agent.getMCP().length).toBe(1);
@@ -101,7 +101,7 @@ describe('getMCP', () => {
       home: tmpHome(),
       provider: providerConfig,
       providerInstance: new FakeProvider(),
-      systemPrompt: 'x',
+      systemPrompt: stablePrompt('x'),
       tools: [mcpTool('alpha', 'a'), mcpTool('beta', 'b')],
     });
     const snap = agent.snapshot();

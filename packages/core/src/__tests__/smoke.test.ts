@@ -36,6 +36,7 @@ import type {
   DelegateResult,
 } from '../types.js';
 import { tmpHome } from './helpers.js';
+import { stablePrompt } from './helpers.js';
 
 config({ path: resolve(__dirname, '../../../../.env.local') });
 
@@ -129,7 +130,7 @@ When solving math problems:
         apiKey: API_KEY!,
         baseUrl: BASE_URL,
       },
-      systemPrompt: 'You are a helpful assistant with tools. Be concise. When asked to store notes, use the note_store tool. When asked math questions, consider loading the math-helper skill first.',
+      systemPrompt: stablePrompt('You are a helpful assistant with tools. Be concise. When asked to store notes, use the note_store tool. When asked math questions, consider loading the math-helper skill first.'),
       tools: [calculatorTool, fileStoreTool],
       skillDirs: [skillDir],
       onEvent: (e) => events.push(e),

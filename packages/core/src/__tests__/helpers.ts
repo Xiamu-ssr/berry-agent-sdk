@@ -8,6 +8,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentHome } from '../agent-home.js';
+import { SystemPromptCacheMode, type SystemPromptBlock } from '../types.js';
 
 /**
  * Create a fresh `AgentHome` rooted at a unique OS temp directory.
@@ -16,4 +17,8 @@ import { AgentHome } from '../agent-home.js';
  */
 export function tmpHome(prefix = 'berry-test-'): AgentHome {
   return new AgentHome(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+export function stablePrompt(...texts: string[]): SystemPromptBlock[] {
+  return texts.map((text) => ({ text, cache: SystemPromptCacheMode.Stable }));
 }

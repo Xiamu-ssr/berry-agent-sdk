@@ -10,6 +10,7 @@ import type {
   ToolRegistration,
 } from '../types.js';
 import type { SessionEvent } from '../event-log/types.js';
+import { stablePrompt } from './helpers.js';
 
 class NoopProvider implements Provider {
   readonly type = 'anthropic' as const;
@@ -47,7 +48,7 @@ describe('runCompaction', () => {
       session,
       compactLevel: 'hard',
       provider: new NoopProvider(),
-      systemPrompt: ['base'],
+      systemPrompt: stablePrompt('base'),
       allowedTools: [] as ToolRegistration[],
       emit: (event) => emitted.push(event),
       appendEvent: async (event) => { appended.push(event); },

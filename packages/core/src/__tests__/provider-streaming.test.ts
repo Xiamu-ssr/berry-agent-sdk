@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { AnthropicProvider } from '../providers/anthropic.js';
 import { OpenAIProvider } from '../providers/openai.js';
 import type { ProviderRequest, ProviderStreamEvent } from '../types.js';
+import { stablePrompt } from './helpers.js';
 
 async function collect(iterable: AsyncIterable<ProviderStreamEvent>) {
   const events: ProviderStreamEvent[] = [];
@@ -13,7 +14,7 @@ async function collect(iterable: AsyncIterable<ProviderStreamEvent>) {
 }
 
 const request: ProviderRequest = {
-  systemPrompt: ['You are helpful.'],
+  systemPrompt: stablePrompt('You are helpful.'),
   messages: [{ role: 'user', content: 'hi' }],
 };
 

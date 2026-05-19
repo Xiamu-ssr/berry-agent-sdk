@@ -1,6 +1,6 @@
 {
   "name": "@berry-agent/prompt-pack",
-  "version": "0.5.0-alpha.0",
+  "version": "0.5.0-alpha.1",
   "description": "Prompt pack registry, import/export, and built-in Chinese prompt suites for Berry Agent SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,9 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@berry-agent/small-shared-core": "^0.5.0-alpha.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
