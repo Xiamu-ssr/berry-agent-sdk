@@ -69,6 +69,7 @@ import { executeTools } from './tool-executor.js';
 import {
   shouldSoftCompact,
   shouldHardCompact,
+  currentContextTokens,
   runCompaction,
   preCompactMemoryFlush,
 } from './compaction-runner.js';
@@ -688,7 +689,7 @@ export class Agent {
         {
           level: compactLevel,
           reason: 'threshold',
-          tokensBefore: session.metadata.lastInputTokens ?? 0,
+          tokensBefore: currentContextTokens({ session, systemPrompt: fullSystemPrompt }),
         },
         () => runCompaction({
           compactionStrategy: this.compactionStrategy,
@@ -741,7 +742,7 @@ export class Agent {
           {
             level: 'hard',
             reason: 'threshold',
-            tokensBefore: session.metadata.lastInputTokens ?? 0,
+            tokensBefore: currentContextTokens({ session, systemPrompt: fullSystemPrompt }),
           },
           () => runCompaction({
             compactionStrategy: this.compactionStrategy,

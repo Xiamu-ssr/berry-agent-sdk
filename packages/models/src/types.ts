@@ -113,6 +113,12 @@ export interface ModelBinding {
   /** Optional display label (defaults to id). */
   label?: string;
   /**
+   * Maximum context window for this logical model, in tokens. This is Layer-2
+   * metadata because agents and tiers depend on the model id, while failover
+   * providers are just backing routes for that same model.
+   */
+  contextWindow?: number;
+  /**
    * Ordered list of providers. Resolver uses `providers[0]` first; when a
    * call fails, the resolver rotates to `providers[1]`, etc. Providers
    * are equal — no cooldowns, no scores — until they've all been exhausted.

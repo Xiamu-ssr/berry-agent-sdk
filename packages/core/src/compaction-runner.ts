@@ -161,9 +161,13 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
   const contextAfter = nonMessageOverhead + messageTokensAfter;
   session.messages = result.messages;
   session.metadata.compactionCount++;
+  // Keep the session's current-context watermark aligned with the compacted
+  // provider context. Otherwise hosts that poll context size after receiving
+  // the compaction event can jump back to the pre-compaction value.
+  session.metadata.lastInputTokens = contextAfter;
 
   // tokensFreed in full-input terms
-  const tokensFreed = contextBefore - contextAfter;
+  const tokensFreed = Math.max(0, contextBefore - contextAfter);
 
   const triggerReason = compactLevel === 'soft'
     ? COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD

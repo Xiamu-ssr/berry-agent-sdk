@@ -87,6 +87,7 @@ describe('runCompaction', () => {
     expect(marker!.tokensFreed).toBeGreaterThan(0);
     // contextAfter should be less than contextBefore
     expect(marker!.contextAfter).toBeLessThan(175000);
+    expect(session.metadata.lastInputTokens).toBe(marker!.contextAfter);
     expect(typeof marker?.durationMs).toBe('number');
 
     expect(emitted).toContainEqual(expect.objectContaining({
