@@ -81,15 +81,7 @@ export class ManagedRuntimeRegistry<
     return this.get(id) ?? this.create(id, entry, factory);
   }
 
-  replace(
-    id: string,
-    entry: TEntry,
-    factory: ManagedRuntimeMountFactory<TEntry, TBuild>,
-  ): Promise<ManagedRuntimeMount<TEntry, TBuild>> {
-    return this.replaceAsync(id, entry, factory);
-  }
-
-  async replaceAsync(
+  async replace(
     id: string,
     entry: TEntry,
     factory: ManagedRuntimeMountFactory<TEntry, TBuild>,
@@ -105,11 +97,7 @@ export class ManagedRuntimeRegistry<
     return mount;
   }
 
-  drop(id: string): Promise<ManagedRuntimeMount<TEntry, TBuild> | undefined> {
-    return this.dropAsync(id);
-  }
-
-  async dropAsync(id: string): Promise<ManagedRuntimeMount<TEntry, TBuild> | undefined> {
+  async drop(id: string): Promise<ManagedRuntimeMount<TEntry, TBuild> | undefined> {
     const mount = this.mounts.get(id);
     if (!mount) return undefined;
     await this.destroyMount(mount);
@@ -118,11 +106,7 @@ export class ManagedRuntimeRegistry<
     return mount;
   }
 
-  dropWhere(predicate: (mount: ManagedRuntimeMount<TEntry, TBuild>) => boolean): Promise<ManagedRuntimeMount<TEntry, TBuild>[]> {
-    return this.dropWhereAsync(predicate);
-  }
-
-  async dropWhereAsync(
+  async dropWhere(
     predicate: (mount: ManagedRuntimeMount<TEntry, TBuild>) => boolean,
   ): Promise<ManagedRuntimeMount<TEntry, TBuild>[]> {
     const dropped: ManagedRuntimeMount<TEntry, TBuild>[] = [];
@@ -134,11 +118,7 @@ export class ManagedRuntimeRegistry<
     return dropped;
   }
 
-  clear(): Promise<void> {
-    return this.clearAsync();
-  }
-
-  async clearAsync(): Promise<void> {
+  async clear(): Promise<void> {
     for (const id of [...this.mounts.keys()]) {
       await this.drop(id);
     }

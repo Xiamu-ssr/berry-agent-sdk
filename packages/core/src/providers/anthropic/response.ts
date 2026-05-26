@@ -1,7 +1,23 @@
 import type Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import type { ContentBlock, TextContent, ThinkingContent, ToolUseContent } from '../../content-types.js';
 import type { ProviderResponse, TokenUsage } from '../../provider-types.js';
 import { normalizeProviderToolInput } from '../tool-input.js';
+
+const anthropicThinkingBlockSchema = z.object({
+  thinking: z.string().optional(),
+  signature: z.string().optional(),
+});
+
+function parseAnthropicThinkingBlock(block: Anthropic.ContentBlock): ThinkingContent {
+  const parsed = anthropicThinkingBlockSchema.safeParse(block);
+  const data = parsed.success ? parsed.data : {};
+  return {
+    type: 'thinking',
+    thinking: data.thinking ?? '',
+    signature: data.signature,
+  };
+}
 
 export function parseAnthropicResponseContent(content: Anthropic.ContentBlock[]): ContentBlock[] {
   return content.map(block => {
@@ -17,12 +33,7 @@ export function parseAnthropicResponseContent(content: Anthropic.ContentBlock[])
       } as ToolUseContent;
     }
     if (block.type === 'thinking') {
-      const b = block as unknown as { thinking?: string; signature?: string };
-      return {
-        type: 'thinking',
-        thinking: b.thinking ?? '',
-        signature: b.signature,
-      } as ThinkingContent;
+      return parseAnthropicThinkingBlock(block);
     }
     return { type: 'text', text: JSON.stringify(block) } as TextContent;
   });
@@ -41,12 +52,7 @@ export function parseAnthropicStreamStartBlock(block: Anthropic.ContentBlock): C
     };
   }
   if (block.type === 'thinking') {
-    const b = block as unknown as { thinking?: string; signature?: string };
-    return {
-      type: 'thinking',
-      thinking: b.thinking ?? '',
-      signature: b.signature,
-    };
+    return parseAnthropicThinkingBlock(block);
   }
   return undefined;
 }

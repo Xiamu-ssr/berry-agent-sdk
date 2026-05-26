@@ -194,9 +194,19 @@ export class HandRegistry {
     this.hands.set(hand.id, hand);
   }
 
+  /** Remove a hand from the registry without disposing it. */
   unregister(id: string): Hand | undefined {
     const hand = this.hands.get(id);
     this.hands.delete(id);
+    return hand;
+  }
+
+  /** Remove a hand and dispose it. Matches ExecutionEnvironmentRegistry.drop. */
+  async drop(id: string): Promise<Hand | undefined> {
+    const hand = this.hands.get(id);
+    if (!hand) return undefined;
+    this.hands.delete(id);
+    await hand.dispose?.();
     return hand;
   }
 
