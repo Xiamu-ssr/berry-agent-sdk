@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createMCPTools } from '../adapter.js';
+import { createMCPHand, createMCPTools } from '../adapter.js';
+import { createHandToolRegistrations } from '@berry-agent/core';
 import type { MCPClient, MCPToolInfo } from '../client.js';
 
 /** Create a fake MCPClient for testing. */
@@ -191,5 +192,23 @@ describe('createMCPTools', () => {
 
     // Should call MCP with the original name, not the prefixed one
     expect((client as any).callTool).toHaveBeenCalledWith('read_file', { path: '/test' });
+  });
+
+  it('can expose MCP as a hand while preserving MCP provenance', async () => {
+    const client = createFakeMCPClient(sampleTools);
+    const hand = await createMCPHand(client, { autoPrefix: 'test_' });
+    const tools = createHandToolRegistrations([hand]);
+
+    expect(hand.id).toBe('mcp:test-server');
+    expect(hand.kind).toBe('mcp');
+    expect(tools.map(t => t.definition.name)).toEqual([
+      'test_read_file',
+      'test_write_file',
+      'test_search',
+    ]);
+    expect(tools[0]!.source).toEqual({ kind: 'mcp', server: 'test-server' });
+
+    await tools[0]!.execute({ path: '/tmp/test.txt' }, { cwd: '/tmp' });
+    expect((client as any).callTool).toHaveBeenCalledWith('read_file', { path: '/tmp/test.txt' });
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { Agent } from '../agent.js';
-import { flattenSystemPrompt, normalizeSystemPrompt } from '../types.js';
+import { flattenSystemPrompt, normalizeSystemPrompt } from '../index.js';
 import type {
   Provider,
   ProviderRequest,
@@ -10,7 +10,7 @@ import type {
   ToolRegistration,
   Session,
   AgentEvent,
-} from '../types.js';
+} from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 function cloneProviderRequest(request: ProviderRequest): ProviderRequest {
@@ -465,6 +465,42 @@ describe('Agent', () => {
     await agent.send('follow up', { resume: first.sessionId });
     const updated = await agent.getSession(first.sessionId);
     expect(updated?.metadata.lastInputTokens).toBe(2000);
+  });
+
+  // Regression: real bridge proxies (e.g. anthropic-compatible → OpenAI backend)
+  // sometimes return a successful-looking response with usage={0,0} when the
+  // upstream model produced no usable output. Trusting that would zero out
+  // lastInputTokens and break the next compaction's contextBefore reading
+  // (front-end then displays "Freed 0 tokens" even when ~120k were freed).
+  it('preserves lastInputTokens when provider returns usage={0,0}', async () => {
+    const provider = new SequenceProvider([
+      {
+        content: [{ type: 'text', text: 'first reply' }],
+        stopReason: 'end_turn',
+        usage: { inputTokens: 5000, outputTokens: 50 },
+      },
+      {
+        // Bridge proxy "empty success": no error, but no usage signal.
+        content: [{ type: 'text', text: '' }],
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0 },
+      },
+    ]);
+
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      providerInstance: provider,
+      systemPrompt: stablePrompt('base'),
+    });
+
+    const first = await agent.send('hello');
+    expect((await agent.getSession(first.sessionId))?.metadata.lastInputTokens).toBe(5000);
+
+    await agent.send('triggers empty response', { resume: first.sessionId });
+    // Must NOT be zeroed by the bad observation — the watermark stays at the
+    // last useful value so compaction decisions remain meaningful.
+    expect((await agent.getSession(first.sessionId))?.metadata.lastInputTokens).toBe(5000);
   });
 
   it('recovers from prompt-too-long errors via forced compaction', async () => {

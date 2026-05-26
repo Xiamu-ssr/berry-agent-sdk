@@ -18,9 +18,12 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
+  renameSync,
 } from 'node:fs';
-import { join, basename } from 'node:path';
-import type { CompactionConfig } from '../types.js';
+import { basename } from 'node:path';
+import { z } from 'zod';
+import { AgentHome } from '../agent-home.js';
+import type { CompactionConfig } from '../compaction/types.js';
 
 /** Reasoning effort levels supported by providers. */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
@@ -70,6 +73,41 @@ export interface InitWorkspaceSeed {
   safeLevel?: string;
 }
 
+export const zReasoningEffort = z.enum(['none', 'low', 'medium', 'high', 'max', 'xhigh']);
+
+const zCompactionLayer = z.enum([
+  'clear_thinking',
+  'truncate_tool_results',
+  'clear_tool_pairs',
+  'merge_messages',
+  'summarize',
+  'trim_assistant',
+  'truncate_oldest',
+]);
+
+export const zAgentMetadata = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  createdAt: z.string().min(1),
+  model: z.string().min(1).optional(),
+  reasoningEffort: zReasoningEffort.optional(),
+  compaction: z.object({
+    threshold: z.number().optional(),
+    softThreshold: z.number().optional(),
+    contextWindow: z.number().optional(),
+    enabledLayers: z.array(zCompactionLayer).optional(),
+    softLayers: z.array(zCompactionLayer).optional(),
+  }).strict().optional(),
+  skills: z.object({
+    extraDirs: z.array(z.string().min(1)).optional(),
+  }).strict().optional(),
+  mcp: z.object({
+    extraPaths: z.array(z.string().min(1)).optional(),
+  }).strict().optional(),
+  toolDenylist: z.array(z.string().min(1)).optional(),
+  safeLevel: z.string().min(1).optional(),
+}).strict() satisfies z.ZodType<AgentMetadata>;
+
 /**
  * Initialize an agent workspace directory (synchronous).
  *
@@ -80,20 +118,24 @@ export interface InitWorkspaceSeed {
  *   ├── AGENTS.md       (empty system prompt snippet)
  *   ├── MEMORY.md       (empty)
  *   └── sessions/
+ *   └── skills/
  * ```
  *
- * Idempotent: if `agent.json` exists, it's loaded and returned unchanged
- * (seed is ignored — on-disk wins).
+ * Seed semantics:
+ *   - File missing -> write a fresh metadata composed from seed.
+ *   - File exists -> read agent.json as-is; no implicit migration/back-fill.
  */
 export function initWorkspaceSync(root: string, seed?: InitWorkspaceSeed): AgentMetadata {
-  const agentJsonPath = join(root, 'agent.json');
+  const home = new AgentHome(root);
+  const agentJsonPath = home.metadataPath;
 
   if (existsSync(agentJsonPath)) {
     return loadAgentConfigSync(root);
   }
 
   // Create directory structure
-  mkdirSync(join(root, 'sessions'), { recursive: true });
+  mkdirSync(home.sessionsDir, { recursive: true });
+  mkdirSync(home.skillsDir, { recursive: true });
 
   const id = slugify(basename(root));
   const metadata: AgentMetadata = {
@@ -109,13 +151,13 @@ export function initWorkspaceSync(root: string, seed?: InitWorkspaceSeed): Agent
     ...(seed?.safeLevel && { safeLevel: seed.safeLevel }),
   };
 
-  writeFileSync(agentJsonPath, JSON.stringify(metadata, null, 2) + '\n', 'utf-8');
+  writeJsonAtomicSync(agentJsonPath, zAgentMetadata.parse(metadata));
   // AGENTS.md and MEMORY.md are lazy — only created if written to.
-  if (!existsSync(join(root, 'AGENTS.md'))) {
-    writeFileSync(join(root, 'AGENTS.md'), '', 'utf-8');
+  if (!existsSync(home.agentMdPath)) {
+    writeFileSync(home.agentMdPath, '', 'utf-8');
   }
-  if (!existsSync(join(root, 'MEMORY.md'))) {
-    writeFileSync(join(root, 'MEMORY.md'), '', 'utf-8');
+  if (!existsSync(home.memoryPath)) {
+    writeFileSync(home.memoryPath, '', 'utf-8');
   }
 
   return metadata;
@@ -128,9 +170,9 @@ export async function initWorkspace(root: string, seed?: InitWorkspaceSeed): Pro
 
 /** Read `agent.json` synchronously. Throws if the file is missing or malformed. */
 export function loadAgentConfigSync(root: string): AgentMetadata {
-  const path = join(root, 'agent.json');
+  const path = new AgentHome(root).metadataPath;
   const raw = readFileSync(path, 'utf-8');
-  return JSON.parse(raw) as AgentMetadata;
+  return parseAgentMetadata(raw, path);
 }
 
 /**
@@ -138,11 +180,35 @@ export function loadAgentConfigSync(root: string): AgentMetadata {
  * patch explicitly overrides them. Used by `switchModel` et al.
  */
 export function saveAgentConfigSync(root: string, patch: Partial<AgentMetadata>): AgentMetadata {
-  const path = join(root, 'agent.json');
+  const path = new AgentHome(root).metadataPath;
   const current = loadAgentConfigSync(root);
-  const next: AgentMetadata = { ...current, ...patch };
-  writeFileSync(path, JSON.stringify(next, null, 2) + '\n', 'utf-8');
+  const next = zAgentMetadata.parse({ ...current, ...patch });
+  writeJsonAtomicSync(path, next);
   return next;
+}
+
+function parseAgentMetadata(raw: string, path: string): AgentMetadata {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse agent metadata "${path}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    return zAgentMetadata.parse(parsed);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      throw new Error(`Invalid agent metadata "${path}": ${err.issues.map((issue) => issue.message).join('; ')}`);
+    }
+    throw err;
+  }
+}
+
+function writeJsonAtomicSync(path: string, value: unknown): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf-8');
+  renameSync(tmp, path);
 }
 
 /** Convert a directory name to a URL-friendly slug. */

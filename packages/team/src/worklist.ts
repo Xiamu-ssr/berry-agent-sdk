@@ -22,18 +22,16 @@
  * action tools (cf. `bash`, `str_replace_editor`). Adding actions later
  * doesn't require new registrations.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { projectSharedPaths, type ProjectSharedPaths } from '@berry-agent/core';
 import type {
   TeammateId,
   WorklistState,
   WorklistTask,
   WorklistTaskStatus,
 } from './types.js';
-
-const BERRY_DIR = '.berry';
-const WORKLIST_FILE = 'worklist.json';
+import { zWorklistState } from './schema.js';
 
 /** Thrown on illegal state transitions and permission violations. */
 export class WorklistError extends Error {
@@ -48,11 +46,13 @@ export type WorklistActor = TeammateId | '@leader';
 export class WorklistStore {
   readonly project: string;
   readonly berryDir: string;
+  readonly paths: ProjectSharedPaths;
   private _state: WorklistState | null = null;
 
   constructor(project: string) {
     this.project = project;
-    this.berryDir = join(project, BERRY_DIR);
+    this.paths = projectSharedPaths(project);
+    this.berryDir = this.paths.berryDir;
   }
 
   private async ensureDir(): Promise<void> {
@@ -64,25 +64,32 @@ export class WorklistStore {
   /** Load-or-create. First call on a fresh project returns an empty state. */
   async load(): Promise<WorklistState> {
     if (this._state) return this._state;
-    const path = join(this.berryDir, WORKLIST_FILE);
+    const path = this.paths.worklistPath;
     if (!existsSync(path)) {
       this._state = { tasks: [], nextId: 1, updatedAt: Date.now() };
       return this._state;
     }
     const raw = await readFile(path, 'utf-8');
-    this._state = JSON.parse(raw) as WorklistState;
+    this._state = zWorklistState.parse(JSON.parse(raw));
     return this._state;
   }
 
   private async save(): Promise<void> {
     if (!this._state) return;
+    this._state = zWorklistState.parse(this._state);
     await this.ensureDir();
-    const path = join(this.berryDir, WORKLIST_FILE);
+    const path = this.paths.worklistPath;
     const tmp = `${path}.tmp`;
     this._state.updatedAt = Date.now();
     await writeFile(tmp, JSON.stringify(this._state, null, 2), 'utf-8');
     const { rename } = await import('node:fs/promises');
     await rename(tmp, path);
+  }
+
+  /** Delete the persisted worklist artifact. */
+  async deleteArtifact(): Promise<void> {
+    this._state = null;
+    await rm(this.paths.worklistPath, { force: true });
   }
 
   // ======================= Actor-aware operations =======================

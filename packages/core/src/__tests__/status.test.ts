@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
-import type { ProviderConfig, AgentEvent, ToolRegistration, Provider, ProviderResponse } from '../types.js';
+import type { ProviderConfig, AgentEvent, ToolRegistration, Provider, ProviderResponse } from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 /**

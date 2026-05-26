@@ -10,7 +10,7 @@ import type {
   ProviderConfig,
   ProviderInput,
   ProviderResolver,
-} from '../types.js';
+} from '../provider-types.js';
 import { AnthropicProvider } from '../providers/anthropic.js';
 import { OpenAIProvider } from '../providers/openai.js';
 

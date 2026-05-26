@@ -39,14 +39,21 @@ export type { CreateModelResolverOptions, ModelResolverWithSnapshot } from './re
 export { ModelResolverSnapshot } from './resolver-snapshot.js';
 export type { ModelResolverSnapshotData, ResolverErrorSummary } from './resolver-snapshot.js';
 
-// Model reference string parser (tier:X / model:X / raw:...)
-export { parseModelRef, formatRawRef } from './parse.js';
+// Model reference string parser (tier:X / model:X / bare model id)
+export { parseModelRef } from './parse.js';
 export type { ModelRef } from './parse.js';
 
 // Top-level convenience
 export { selectProvider } from './select.js';
 export type { SelectProviderOptions } from './select.js';
+export { inferContextWindow } from './context-window.js';
 
 // Zod schema for SDK config namespace
-export { modelsNamespaceSchema, modelProviderRefSchema, modelBindingSchema, providerInstanceSchema } from './schema.js';
+export {
+  modelsNamespaceSchema,
+  modelProviderRefSchema,
+  modelBindingSchema,
+  providerInstanceSchema,
+  providerTypeSchema,
+} from './schema.js';
 export type { ModelsNamespaceConfig } from './schema.js';

@@ -12,8 +12,8 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "test": "vitest run"
+    "build": "rm -rf dist && tsc",
+    "test": "vitest run --maxWorkers=2"
   },
   "peerDependencies": {
     "@berry-agent/core": "^0.5.0-alpha.1"
@@ -21,17 +21,18 @@
   "devDependencies": {
     "@berry-agent/core": "*",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4",
-    "zod": "^3.24.0"
+    "vitest": "^3.2.4"
   },
   "files": [
     "dist"
   ],
   "license": "MIT",
   "dependencies": {
+    "@berry-agent/safe": "^0.5.0-alpha.1",
     "@mozilla/readability": "^0.6.0",
     "isomorphic-dompurify": "^3.9.0",
     "linkedom": "^0.18.12",
-    "node-html-markdown": "^2.0.0"
+    "node-html-markdown": "^2.0.0",
+    "zod": "^3.24.0"
   }
 }

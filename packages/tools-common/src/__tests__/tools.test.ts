@@ -2,8 +2,17 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createFileTools, createShellTool, createShellTools, createSearchTools, createAllTools, createEditFileTool, createWebFetchTool, createWebSearchTool } from '../index.js';
-import { COMMON_TOOL_NAMES } from '@berry-agent/core';
+import {
+  AgentScope,
+  createExecutionEnvironment,
+  createHandToolRegistrations,
+  createToolRegistrationHand,
+  type CommandExecutor,
+  type CredentialStore,
+  type ProcessHandle,
+} from '@berry-agent/core';
+import { createFileTools, createShellTool, createShellTools, createSearchTools, createEditFileTool, createWebFetchTool, createWebSearchTool, createLocalWorkspaceHand, createSandboxedShellOptions } from '../index.js';
+import { NodeExecutor } from '../executor.js';
 
 let tmpDir: string;
 let siblingDir: string;
@@ -99,6 +108,29 @@ describe('Shell tool', () => {
     const result = await tool.execute({ command: 'rm -rf /' }, { cwd: tmpDir });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('blocked');
+  });
+
+  it('does not inherit arbitrary host env secrets by default', async () => {
+    const previous = process.env.BERRY_AGENT_SHELL_SECRET;
+    process.env.BERRY_AGENT_SHELL_SECRET = 'secret';
+    try {
+      const result = await new NodeExecutor().exec(
+        'node -e "process.stdout.write(process.env.BERRY_AGENT_SHELL_SECRET || \\"missing\\")"',
+        { cwd: tmpDir },
+      );
+      expect(result.output).toBe('missing');
+    } finally {
+      if (previous === undefined) delete process.env.BERRY_AGENT_SHELL_SECRET;
+      else process.env.BERRY_AGENT_SHELL_SECRET = previous;
+    }
+  });
+
+  it('supports explicit scoped env injection', async () => {
+    const result = await new NodeExecutor().exec(
+      'node -e "process.stdout.write(process.env.BERRY_AGENT_SCOPED_SECRET || \\"missing\\")"',
+      { cwd: tmpDir, env: { BERRY_AGENT_SCOPED_SECRET: 'scoped' } },
+    );
+    expect(result.output).toBe('scoped');
   });
 
   it('supports first-stage background process management', async () => {
@@ -304,6 +336,35 @@ describe('web_fetch tool', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('disposes tracked background processes when the shell hand is disposed', async () => {
+    const killed: Array<string | undefined> = [];
+    const handle: ProcessHandle = {
+      pid: 123,
+      write: vi.fn(async () => {}),
+      kill: vi.fn((signal?: string) => { killed.push(signal); }),
+      onStdOut: vi.fn(),
+      onStdErr: vi.fn(),
+      onError: vi.fn(),
+      onExit: vi.fn(),
+      stdinWritable: true,
+    };
+    const executor: CommandExecutor = {
+      exec: vi.fn(async () => ({ output: '', isError: false })),
+      spawn: vi.fn(() => handle),
+    };
+    const tools = createShellTools(tmpDir, { executor });
+    const shell = tools.find(t => t.definition.name === 'shell')!;
+    const hand = createToolRegistrationHand({
+      id: 'test-shell',
+      tools,
+    });
+
+    await shell.execute({ command: 'sleep 100', background: true }, { cwd: tmpDir });
+    await hand.dispose?.();
+
+    expect(killed).toEqual(['SIGTERM']);
+  });
 });
 
 describe('web_search tool', () => {
@@ -390,49 +451,66 @@ describe('web_search tool', () => {
   });
 });
 
-describe('createAllTools', () => {
-  it('returns file, shell/process, and search tools together', () => {
-    const tools = createAllTools(tmpDir);
-    // Single source of truth: COMMON_TOOL_NAMES. Note web_search/web_fetch
-    // are *not* part of createAllTools (they're exposed via separate
-    // factories), so we subtract them from the expected count.
-    const webTools = ['web_search', 'web_fetch'];
-    const expectedCount = COMMON_TOOL_NAMES.filter(n => !webTools.includes(n)).length;
-    expect(tools).toHaveLength(expectedCount);
-    const names = tools.map(t => t.definition.name);
+describe('createLocalWorkspaceHand', () => {
+  const emptyCredentials: CredentialStore = { get: () => undefined };
+
+  it('wraps local workspace tools and web tools as one hand', () => {
+    const hand = createLocalWorkspaceHand({
+      scope: new AgentScope(tmpDir),
+      credentials: emptyCredentials,
+    });
+    const names = hand.capabilities().map((capability) => capability.definition.name);
+
+    expect(hand.id).toBe('local-workspace');
     expect(names).toContain('read_file');
-    expect(names).toContain('write_file');
-    expect(names).toContain('list_files');
-    expect(names).toContain('edit_file');
     expect(names).toContain('shell');
-    expect(names).toContain('process_list');
-    expect(names).toContain('process_poll');
-    expect(names).toContain('process_log');
-    expect(names).toContain('process_write');
-    expect(names).toContain('process_kill');
-    expect(names).toContain('grep');
-    expect(names).toContain('find_files');
+    expect(names).toContain('web_fetch');
+    expect(names).toContain('web_search');
   });
-});
 
-describe('ProviderRegistry', () => {
-  // Import here to test alongside tools
-  it('imported from core and works', async () => {
-    const { ProviderRegistry } = await import('@berry-agent/core');
-    const reg = new ProviderRegistry();
-    reg.register('test', { type: 'openai', apiKey: 'k', models: ['gpt-4o', 'gpt-4o-mini'] });
-    reg.setDefault('gpt-4o');
+  it('filters by tool group or explicit tool name', () => {
+    const hand = createLocalWorkspaceHand({
+      scope: new AgentScope(tmpDir),
+      credentials: emptyCredentials,
+      allowedTools: ['file', 'web_fetch'],
+    });
+    const names = hand.capabilities().map((capability) => capability.definition.name);
 
-    expect(reg.listModels()).toHaveLength(2);
-    expect(reg.getDefault()).toBe('gpt-4o');
+    expect(names).toEqual(expect.arrayContaining(['read_file', 'write_file', 'list_files', 'web_fetch']));
+    expect(names).not.toContain('shell');
+    expect(names).not.toContain('web_search');
+  });
 
-    const resolved = reg.resolve('gpt-4o-mini');
-    expect(resolved).not.toBeNull();
-    expect(resolved!.providerName).toBe('test');
+  it('can derive sandbox shell options from the scope', () => {
+    const options = createSandboxedShellOptions(new AgentScope(tmpDir));
+    expect(options).toEqual(expect.any(Object));
+  });
 
-    const config = reg.toProviderConfig('gpt-4o');
-    expect(config.type).toBe('openai');
-    expect(config.model).toBe('gpt-4o');
-    expect(config.apiKey).toBe('k');
+  it('routes shell execution through the supplied execution environment', async () => {
+    const calls: Array<{ command: string; cwd: string }> = [];
+    const executor: CommandExecutor = {
+      exec: async (command, options) => {
+        calls.push({ command, cwd: options.cwd });
+        return { output: 'from environment', isError: false };
+      },
+      spawn: () => ({ pid: undefined } as ProcessHandle),
+    };
+    const scope = new AgentScope(tmpDir);
+    const hand = createLocalWorkspaceHand({
+      scope,
+      credentials: emptyCredentials,
+      allowedTools: ['shell'],
+      environment: createExecutionEnvironment({
+        id: 'container-a',
+        kind: 'container',
+        createCommandExecutor: () => executor,
+      }),
+    });
+
+    const shell = createHandToolRegistrations([hand]).find((tool) => tool.definition.name === 'shell')!;
+    const result = await shell.execute({ command: 'pwd' }, { cwd: tmpDir });
+
+    expect(result.content).toBe('from environment');
+    expect(calls).toEqual([{ command: 'pwd', cwd: scope.projectDir }]);
   });
 });

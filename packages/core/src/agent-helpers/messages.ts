@@ -7,21 +7,32 @@
 
 import type {
   Message,
-  ContentBlock,
+  AnnotationContent,
   TextContent,
-  ToolUseContent,
-  ToolResultContent,
-  TokenUsage,
-  ToolRegistration,
-} from '../types.js';
+} from '../content-types.js';
+import type { TokenUsage } from '../provider-types.js';
+import type { ToolRegistration } from '../tool-types.js';
+export { repairOrphanToolUses } from '../message-repair.js';
 
 export function extractText(message: Message): string {
   if (!message) return '';
   if (typeof message.content === 'string') return message.content;
   return message.content
-    .filter((b): b is TextContent => b.type === 'text')
-    .map(b => b.text)
+    .flatMap((b): string[] => {
+      if (b.type === 'text') return [(b as TextContent).text];
+      if (b.type === 'annotation') return [formatAnnotationText(b as AnnotationContent)];
+      return [];
+    })
     .join('\n');
+}
+
+function formatAnnotationText(block: AnnotationContent): string {
+  const title = block.source.title ? ` (${block.source.title})` : '';
+  return [
+    `[annotation] ${block.body}`,
+    `source: ${block.source.url}${title}`,
+    `rect: x=${block.rect.x}, y=${block.rect.y}, width=${block.rect.width}, height=${block.rect.height}`,
+  ].join('\n');
 }
 
 export function accumulateUsage(total: TokenUsage, delta: TokenUsage): TokenUsage {
@@ -49,53 +60,4 @@ export function mergeToolsByName(primary: ToolRegistration[], secondary: ToolReg
   }
 
   return [...merged.values()];
-}
-
-/**
- * Repair orphan tool_use blocks: if an assistant message contains tool_use
- * blocks but the immediately following message is NOT a user message with
- * matching tool_result blocks, inject synthetic tool_result(s) so the
- * Anthropic API doesn't reject the entire conversation.
- *
- * This is a defensive measure against the stop_reason desync bug where
- * streaming returns stop_reason='end_turn' despite tool_use content.
- *
- * Modifies `messages` in place. Safe to call multiple times (idempotent).
- */
-export function repairOrphanToolUses(messages: Message[]): void {
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role !== 'assistant') continue;
-    const blocks = Array.isArray(msg.content) ? msg.content : [];
-    const toolUseIds = blocks
-      .filter((b): b is ToolUseContent => (b as ContentBlock).type === 'tool_use')
-      .map(b => b.id);
-    if (toolUseIds.length === 0) continue;
-
-    // Check if the next message is a user message containing tool_result
-    // blocks for every tool_use id.
-    const next = messages[i + 1];
-    if (next && next.role === 'user') {
-      const nextBlocks = Array.isArray(next.content) ? next.content : [];
-      const resultIds = new Set(
-        nextBlocks
-          .filter((b): b is ToolResultContent => (b as ContentBlock).type === 'tool_result')
-          .map(b => b.toolUseId),
-      );
-      if (toolUseIds.every(id => resultIds.has(id))) continue; // all matched
-    }
-
-    // Orphan detected — inject synthetic tool_result blocks
-    const syntheticBlocks: ContentBlock[] = toolUseIds.map(id => ({
-      type: 'tool_result' as const,
-      toolUseId: id,
-      content: '[Berry SDK] Session repair: tool execution was interrupted. This tool_result was synthesized to maintain conversation integrity.',
-      isError: true,
-    }));
-    messages.splice(i + 1, 0, {
-      role: 'user',
-      content: syntheticBlocks,
-      createdAt: Date.now(),
-    });
-  }
 }

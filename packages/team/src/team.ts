@@ -1,11 +1,11 @@
 /**
- * Team runtime — glues TeamStore (persistent state) to live Agent instances.
+ * Team runtime — glues TeamStore (persistent state) to managed agent runtimes.
  *
  * Host wiring:
- *   1. Instantiate a Team with the leader's Agent and a project path.
- *   2. Mount team.leaderTools() onto the leader Agent.
- *   3. When leader calls `spawn_teammate`, Team creates a child Agent via
- *      `leader.spawn()` and mounts team.teammateTools() on it.
+ *   1. Open a Team with a leader id and a project path.
+ *   2. Mount team.leaderHand() onto the leader runtime.
+ *   3. When leader calls `spawn_teammate`, Team asks the host factory for a
+ *      first-class teammate runtime and mounts team.teammateHand() on it.
  *   4. Persist state in project/.berry/team.json on every mutation.
  *
  * This package does NOT own the host agent registry; it
@@ -13,31 +13,54 @@
  * at most one team at a time (enforced by the host).
  */
 import { randomUUID } from 'node:crypto';
-import type { Agent, ToolRegistration } from '@berry-agent/core';
-import { ToolGroup } from '@berry-agent/core';
+import type { Hand, ManagedAgentTurnResult, ToolRegistration } from '@berry-agent/core';
+import { createToolRegistrationHand, ToolGroup } from '@berry-agent/core';
+import { z, ZodError, type ZodIssue } from 'zod';
 import type { TeamState, TeammateId, TeammateRecord, TeamMessage } from './types.js';
 import { WORKLIST_STATUS_VALUES } from './types.js';
 import { TeamStore } from './store.js';
 import { WorklistStore, WorklistError, type WorklistActor } from './worklist.js';
+import { zWorklistTaskStatus } from './schema.js';
 
-/** Internal mapping teammate id → live Agent instance (not persisted). */
-type TeammateAgents = Map<TeammateId, Agent>;
+const zNonBlankString = z.string().refine((value) => value.trim().length > 0, 'is required.');
+const zWorklistToolInput = z.object({
+  action: zNonBlankString,
+  id: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  assignee: zNonBlankString.optional(),
+  status: zWorklistTaskStatus.optional(),
+  reason: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+}).passthrough();
+const zWorklistIdInput = zWorklistToolInput.extend({ id: zNonBlankString });
+const zWorklistCreateInput = zWorklistToolInput.extend({ title: zNonBlankString });
+type WorklistToolInput = z.infer<typeof zWorklistToolInput>;
+
+export interface TeamAgentRuntime {
+  hasHand(id: string): boolean;
+  addHand(hand: Hand): void;
+  send(prompt: string): Promise<ManagedAgentTurnResult>;
+}
+
+/** Internal mapping teammate id → live runtime facade (not persisted). */
+type TeammateRuntimes = Map<TeammateId, TeamAgentRuntime>;
 
 /**
- * Host-provided factory that turns a teammate spec into a first-class Agent.
+ * Host-provided factory that turns a teammate spec into a first-class runtime.
  *
  * Moved out of Team in v1.2 (2026-04-22): teammates are now *regular* agents
  * registered in the host's agent registry (so they show up in the host UI,
- * have their own session store under `<agents_dir>/<id>/`, etc),
- * not ephemeral sub-agents living only in Team's memory. Team delegates to
- * the host and just keeps the relationship (who leads whom).
+ * have their own SDK session store, etc), not ephemeral sub-agents living only
+ * in Team's memory. Team delegates to the host and just keeps the relationship
+ * (who leads whom).
  *
  * Implementations MUST persist the teammate as a regular agent before
  * returning — a crash between this call and the subsequent team.json save
  * is tolerable (orphan agent row, fixable), but a crash that loses the
  * agent record entirely would break rehydration.
  */
-export type TeammateAgentFactory = (spec: SpawnTeammateSpec) => Promise<Agent>;
+export type TeammateRuntimeFactory = (spec: SpawnTeammateSpec) => Promise<TeamAgentRuntime>;
 
 /** Host-facing callback when a teammate is removed from a team. */
 export type TeammateDisbandCallback = (id: TeammateId) => Promise<void>;
@@ -60,30 +83,27 @@ export interface SpawnTeammateSpec {
 export interface CreateTeamOptions {
   /** Host-assigned id for the leader agent (shown in UI + messages). */
   leaderId: string;
-  /** Leader Agent instance — the one we'll message from. */
-  leader: Agent;
   /** Absolute path to the project root. Must exist. */
   project: string;
   /** Display name for the team. */
   name?: string;
   /**
-   * Host factory for creating teammates as first-class agents. If omitted,
-   * spawn_teammate will fail — there is no longer a fallback to
-   * `leader.spawn()`, because that would create an off-registry agent.
+   * Host factory for creating teammates as first-class runtimes. If omitted,
+   * spawn_teammate will fail; team never creates hidden runtimes by itself.
    */
-  agentFactory?: TeammateAgentFactory;
+  runtimeFactory?: TeammateRuntimeFactory;
   /**
    * Host callback invoked when a teammate is disbanded — the host should
-   * delete the teammate's AgentEntry from the registry (and optionally
+   * delete the teammate's registry entry (and optionally
    * archive its session logs).
    */
   onDisband?: TeammateDisbandCallback;
   /**
-   * Host-provided live Agent lookup. Team asks the host when it needs to
-   * message a teammate; hosts typically point this at AgentManager.getAgent.
+   * Host-provided live runtime lookup. Team asks the host when it needs to
+   * message a teammate.
    * If omitted, Team can only message teammates it spawned this session.
    */
-  agentLookup?: (id: TeammateId) => Agent | undefined;
+  runtimeLookup?: (id: TeammateId) => TeamAgentRuntime | undefined;
   /**
    * Function that returns the valid tier names (e.g. ['strong', 'balanced',
    * 'fast']) for this host. Used to populate the `tier` enum on spawn_teammate
@@ -96,42 +116,39 @@ export class Team {
   readonly store: TeamStore;
   readonly worklist: WorklistStore;
   private _state: TeamState;
-  private _leader: Agent;
-  private _teammateAgents: TeammateAgents = new Map();
-  private _agentFactory?: TeammateAgentFactory;
+  private _teammateRuntimes: TeammateRuntimes = new Map();
+  private _runtimeFactory?: TeammateRuntimeFactory;
   private _onDisband?: TeammateDisbandCallback;
-  private _agentLookup?: (id: TeammateId) => Agent | undefined;
+  private _runtimeLookup?: (id: TeammateId) => TeamAgentRuntime | undefined;
   private _availableTiers?: () => string[];
 
   private constructor(
     state: TeamState,
-    leader: Agent,
     store: TeamStore,
-    hooks: Pick<CreateTeamOptions, 'agentFactory' | 'onDisband' | 'agentLookup' | 'availableTiers'> = {},
+    hooks: Pick<CreateTeamOptions, 'runtimeFactory' | 'onDisband' | 'runtimeLookup' | 'availableTiers'> = {},
   ) {
     this._state = state;
-    this._leader = leader;
     this.store = store;
     this.worklist = new WorklistStore(state.project);
-    this._agentFactory = hooks.agentFactory;
+    this._runtimeFactory = hooks.runtimeFactory;
     this._onDisband = hooks.onDisband;
-    this._agentLookup = hooks.agentLookup;
+    this._runtimeLookup = hooks.runtimeLookup;
     this._availableTiers = hooks.availableTiers;
   }
 
   /**
    * Create a new team or load an existing one from the project.
    * If team.json exists under project/.berry/, its state is adopted and the
-   * provided leader is assumed to correspond to leaderId. Live teammate
-   * Agents are NOT rehydrated here — the host decides when to re-spawn them.
+   * Live teammate runtimes are NOT rehydrated here — the host decides when to
+   * instantiate them.
    */
   static async open(opts: CreateTeamOptions): Promise<Team> {
     const store = new TeamStore(opts.project);
     const existing = await store.load();
     const hooks = {
-      agentFactory: opts.agentFactory,
+      runtimeFactory: opts.runtimeFactory,
       onDisband: opts.onDisband,
-      agentLookup: opts.agentLookup,
+      runtimeLookup: opts.runtimeLookup,
       availableTiers: opts.availableTiers,
     };
     if (existing) {
@@ -142,7 +159,7 @@ export class Team {
           `A project hosts at most one team in v1; disband the existing team or pick the right leader.`,
         );
       }
-      return new Team(existing, opts.leader, store, hooks);
+      return new Team(existing, store, hooks);
     }
     const fresh: TeamState = {
       name: opts.name ?? 'team',
@@ -152,7 +169,7 @@ export class Team {
       createdAt: Date.now(),
     };
     await store.save(fresh);
-    return new Team(fresh, opts.leader, store, hooks);
+    return new Team(fresh, store, hooks);
   }
 
   get state(): TeamState {
@@ -163,21 +180,19 @@ export class Team {
     return this._state.teammates;
   }
 
-  /** Live Agent instance for a teammate, or undefined if not spawned (e.g. after restart). */
-  teammateAgent(id: TeammateId): Agent | undefined {
-    return this._teammateAgents.get(id);
+  /** Live runtime facade for a teammate, or undefined if not spawned (e.g. after restart). */
+  teammateRuntime(id: TeammateId): TeamAgentRuntime | undefined {
+    return this._teammateRuntimes.get(id);
   }
 
   /**
-   * Create a new teammate as a first-class host agent.
+   * Create a new teammate as a first-class host runtime.
    *
-   * Delegates to the host's `agentFactory` (supplied at Team.open time) to
+   * Delegates to the host's `runtimeFactory` (supplied at Team.open time) to
    * register the teammate in the host registry. Throws if no factory was
-   * provided — there is no longer a leader.spawn() fallback because that
-   * would create an off-registry agent (violates v1.2 "all agents are real
-   * agents" invariant).
+   * provided; team never creates hidden runtimes by itself.
    *
-   * After the host returns a live Agent, Team mounts the teammate-side
+   * After the host returns a live runtime, Team mounts the teammate-side
    * tools (message_leader, worklist) and stores the record in team.json.
    */
   async spawnTeammate(input: {
@@ -191,13 +206,13 @@ export class Team {
     if (this._state.teammates.some((t) => t.id === input.id)) {
       throw new Error(`Teammate "${input.id}" already exists in this team.`);
     }
-    if (!this._agentFactory) {
+    if (!this._runtimeFactory) {
       throw new Error(
-        'Team has no agentFactory; the host must supply one so teammates can be registered as first-class agents.',
+        'Team has no runtimeFactory; the host must supply one so teammates can be registered as first-class runtimes.',
       );
     }
 
-    const childAgent = await this._agentFactory({
+    const teammateRuntime = await this._runtimeFactory({
       id: input.id,
       role: input.role,
       systemPrompt: input.systemPrompt,
@@ -208,10 +223,7 @@ export class Team {
       leaderId: this._state.leaderId,
     });
 
-    // Mount the teammate-side tools so the child can call message_leader / worklist.
-    for (const tool of this.teammateTools(input.id)) {
-      childAgent.addTool(tool);
-    }
+    this.mountTeammateHand(teammateRuntime, input.id);
 
     const record: TeammateRecord = {
       id: input.id,
@@ -222,30 +234,30 @@ export class Team {
       createdAt: Date.now(),
     };
     this._state.teammates.push(record);
-    this._teammateAgents.set(input.id, childAgent);
+    this._teammateRuntimes.set(input.id, teammateRuntime);
     await this.store.save(this._state);
     return record;
   }
 
   /**
-   * Rehydrate a teammate's live Agent from its persisted record.
+   * Rehydrate a teammate's live runtime from its persisted record.
    *
    * Used after a host restart: team.json survives (teammate roster +
-   * systemPrompt + model), but live Agent objects don't — they live in
-   * `_teammateAgents`, a plain in-memory Map. Call this for each entry in
+   * systemPrompt + model), but live runtime objects don't — they live in
+   * `_teammateRuntimes`, a plain in-memory Map. Call this for each entry in
    * `state.teammates` on startup to bring the live instances back.
    *
    * Idempotent: if the teammate is already live, this is a no-op and
-   * returns the existing Agent. If the teammate record doesn't exist,
+   * returns the existing runtime. If the teammate record doesn't exist,
    * throws — caller should have iterated `state.teammates`.
    *
    * IMPORTANT: the teammate's session log (conversation history) is
    * loaded automatically by the SDK's SessionStore from disk, so the
-   * rehydrated Agent picks up where it left off. Only runtime plumbing
+   * rehydrated runtime picks up where it left off. Only runtime plumbing
    * (tools, guards, provider binding) gets rebuilt here.
    */
-  rehydrateTeammate(id: TeammateId): Agent {
-    const existing = this._teammateAgents.get(id);
+  rehydrateTeammate(id: TeammateId): TeamAgentRuntime {
+    const existing = this._teammateRuntimes.get(id);
     if (existing) return existing;
 
     const record = this._state.teammates.find((t) => t.id === id);
@@ -253,35 +265,33 @@ export class Team {
       throw new Error(`Cannot rehydrate teammate "${id}": no record in team.json.`);
     }
 
-    // v1.2: teammates are regular agents in the host registry. On a host
-    // restart the host re-instantiates them via its normal agent lifecycle,
-    // then calls team.rehydrateAll() — we just look them up and (re)mount
-    // the teammate-side tools. If the host can't find the agent, something
+    // Teammates are regular managed runtimes in the host registry. On a host
+    // restart the host re-instantiates them via its normal runtime lifecycle,
+    // then calls team.rehydrateAll() — we just look them up and mount the
+    // teammate-side tools. If the host can't find the runtime, something
     // bigger is wrong (orphan record); surface rather than auto-heal.
-    if (!this._agentLookup) {
+    if (!this._runtimeLookup) {
       throw new Error(
-        `Cannot rehydrate teammate "${id}": no agentLookup supplied. Host must pass one to Team.open.`,
+        `Cannot rehydrate teammate "${id}": no runtimeLookup supplied. Host must pass one to Team.open.`,
       );
     }
-    const childAgent = this._agentLookup(id);
-    if (!childAgent) {
+    const teammateRuntime = this._runtimeLookup(id);
+    if (!teammateRuntime) {
       throw new Error(
-        `Cannot rehydrate teammate "${id}": host registry has no agent with that id. ` +
-        `This likely means the teammate agent config was deleted without disbanding the team first.`,
+        `Cannot rehydrate teammate "${id}": host registry has no runtime with that id. ` +
+        `This likely means the teammate config was deleted without disbanding the team first.`,
       );
     }
-    for (const tool of this.teammateTools(record.id)) {
-      childAgent.addTool(tool);
-    }
-    this._teammateAgents.set(record.id, childAgent);
-    return childAgent;
+    this.mountTeammateHand(teammateRuntime, record.id);
+    this._teammateRuntimes.set(record.id, teammateRuntime);
+    return teammateRuntime;
   }
 
   /** Rehydrate every teammate in the roster. Returns ids that were revived. */
   rehydrateAll(): TeammateId[] {
     const revived: TeammateId[] = [];
     for (const record of this._state.teammates) {
-      if (!this._teammateAgents.has(record.id)) {
+      if (!this._teammateRuntimes.has(record.id)) {
         try {
           this.rehydrateTeammate(record.id);
           revived.push(record.id);
@@ -299,9 +309,9 @@ export class Team {
     const idx = this._state.teammates.findIndex((t) => t.id === id);
     if (idx < 0) throw new Error(`Teammate "${id}" not found.`);
     this._state.teammates.splice(idx, 1);
-    this._teammateAgents.delete(id);
+    this._teammateRuntimes.delete(id);
     await this.store.save(this._state);
-    // Let the host know so it can delete the teammate's AgentEntry from its
+    // Let the host know so it can delete the teammate's registry entry from its
     // registry. We save team.json first so a crash between save and callback
     // leaves an orphan agent (fixable) rather than a ghost team entry.
     if (this._onDisband) {
@@ -312,26 +322,42 @@ export class Team {
   }
 
   /**
+   * Disband the whole team and delete team-owned project artifacts.
+   * Teammate session logs are intentionally left to the host registry.
+   */
+  async disband(): Promise<void> {
+    const ids = this._state.teammates.map((t) => t.id);
+    for (const id of ids) {
+      await this.disbandTeammate(id);
+    }
+    await Promise.all([
+      this.store.deleteArtifacts(),
+      this.worklist.deleteArtifact(),
+    ]);
+    this._state.teammates = [];
+  }
+
+  /**
    * Leader → Teammate messaging. Synchronous RPC in v1: sends `content` as
-   * a user message to the teammate's Agent, awaits its reply, returns the
+   * a user message to the teammate runtime, awaits its reply, returns the
    * reply text. Both the outbound message and the reply are logged.
    */
   async messageTeammate(teammateId: TeammateId, content: string): Promise<string> {
     // First check our local cache, then fall back to the host's registry.
     // This handles the cold-start case where the host has just revived the
-    // teammate agent but rehydrateTeammate hasn't been invoked yet.
-    let agent = this._teammateAgents.get(teammateId);
-    if (!agent && this._agentLookup) {
-      agent = this._agentLookup(teammateId);
-      if (agent) {
+    // teammate runtime but rehydrateTeammate hasn't been invoked yet.
+    let runtime = this._teammateRuntimes.get(teammateId);
+    if (!runtime && this._runtimeLookup) {
+      runtime = this._runtimeLookup(teammateId);
+      if (runtime) {
         // Opportunistically rehydrate so subsequent calls are fast and the
         // teammate tools are mounted.
-        try { this.rehydrateTeammate(teammateId); } catch { /* ignore — we got an agent anyway */ }
+        try { this.rehydrateTeammate(teammateId); } catch { /* ignore — we got a runtime anyway */ }
       }
     }
-    if (!agent) {
+    if (!runtime) {
       throw new Error(
-        `Teammate "${teammateId}" has no live Agent instance. ` +
+        `Teammate "${teammateId}" has no live runtime. ` +
         `The host must register it before the leader can message it.`,
       );
     }
@@ -343,17 +369,16 @@ export class Team {
       to: teammateId,
       content,
     });
-    // Resume teammate's current session so context is preserved across turns.
-    const result = await agent.send(content, agent.lastSessionId ? { resume: agent.lastSessionId } : undefined);
+    const turn = await runtime.send(content);
     await this.store.appendMessage({
       id: randomUUID(),
       ts: Date.now(),
       from: teammateId,
       to: '@leader',
-      content: result.text,
+      content: turn.result.text,
       replyTo: requestId,
     });
-    return result.text;
+    return turn.result.text;
   }
 
   /**
@@ -372,6 +397,13 @@ export class Team {
     });
   }
 
+  private mountTeammateHand(runtime: TeamAgentRuntime, teammateId: TeammateId): void {
+    const hand = this.teammateHand(teammateId);
+    if (!runtime.hasHand(hand.id)) {
+      runtime.addHand(hand);
+    }
+  }
+
   /** Read the full team message log (v1 — fine for small teams). */
   async readMessages(): Promise<TeamMessage[]> {
     return this.store.readMessages();
@@ -380,8 +412,34 @@ export class Team {
   // ================ Tool factories ================
 
   /**
+   * Leader-facing hand: creating / messaging / listing / disbanding teammates.
+   * Mount this on the leader runtime.
+   */
+  leaderHand(): Hand {
+    return createToolRegistrationHand({
+      id: `team:${this._state.leaderId}:leader`,
+      kind: 'team',
+      displayName: `${this._state.name} leader`,
+      tools: this.leaderTools(),
+    });
+  }
+
+  /**
+   * Teammate-facing hand: message the leader and coordinate through worklist.
+   * Mount this on the teammate runtime.
+   */
+  teammateHand(ownId: TeammateId): Hand {
+    return createToolRegistrationHand({
+      id: `team:${this._state.leaderId}:teammate:${ownId}`,
+      kind: 'team',
+      displayName: `${this._state.name} teammate ${ownId}`,
+      tools: this.teammateTools(ownId),
+    });
+  }
+
+  /**
    * Leader-facing tools: creating / messaging / listing / disbanding teammates.
-   * Mount these on the leader Agent (via `agent.addTool()`).
+   * Prefer `leaderHand()` for mounting; this remains the low-level tool factory.
    */
   leaderTools(): ToolRegistration[] {
     return [
@@ -574,7 +632,7 @@ export class Team {
 
   /**
    * Teammate-facing tools: message_leader + worklist. Mounted automatically
-   * when spawnTeammate creates a child Agent.
+   * when spawnTeammate creates a teammate runtime.
    */
   teammateTools(ownId: TeammateId): ToolRegistration[] {
     return [
@@ -670,8 +728,10 @@ export class Team {
         },
       },
       execute: async (input) => {
-        const action = input.action as string;
+        let action = 'unknown';
         try {
+          const parsedInput = parseWorklistToolInput(input);
+          action = parsedInput.action;
           switch (action) {
             case 'list': {
               const tasks = await this.worklist.list();
@@ -683,57 +743,59 @@ export class Team {
               };
             }
             case 'view': {
-              const id = input.id as string;
-              if (!id) throw new WorklistError('`id` is required for view.');
+              const { id } = parseWorklistActionInput(zWorklistIdInput, input);
               const task = await this.worklist.get(id);
               if (!task) return { content: `Task ${id} not found.`, isError: true };
               return { content: JSON.stringify(task, null, 2) };
             }
             case 'create': {
+              const args = parseWorklistActionInput(zWorklistCreateInput, input);
               const task = await this.worklist.create(actor, {
-                title: input.title as string,
-                description: input.description as string | undefined,
-                assignee: input.assignee as WorklistActor | undefined,
-                tags: input.tags as string[] | undefined,
+                title: args.title,
+                description: args.description,
+                assignee: args.assignee,
+                tags: args.tags,
               });
               return { content: `Created ${task.id}: ${task.title} [${task.status}]` };
             }
             case 'update': {
-              const id = input.id as string;
-              if (!id) throw new WorklistError('`id` is required for update.');
-              const task = await this.worklist.update(actor, id, {
-                title: input.title as string | undefined,
-                description: input.description as string | undefined,
-                assignee: input.assignee as WorklistActor | undefined,
-                status: input.status as any,
-                tags: input.tags as string[] | undefined,
-                failureReason: input.reason as string | undefined,
+              const args = parseWorklistActionInput(zWorklistIdInput, input);
+              const task = await this.worklist.update(actor, args.id, {
+                title: args.title,
+                description: args.description,
+                assignee: args.assignee,
+                status: args.status,
+                tags: args.tags,
+                failureReason: args.reason,
               });
               return { content: `Updated ${task.id} → [${task.status}]` };
             }
             case 'delete': {
-              const id = input.id as string;
-              if (!id) throw new WorklistError('`id` is required for delete.');
+              const { id } = parseWorklistActionInput(zWorklistIdInput, input);
               await this.worklist.remove(actor, id);
               return { content: `Deleted ${id}.` };
             }
             case 'claim': {
-              const task = await this.worklist.claim(actor, input.id as string);
+              const { id } = parseWorklistActionInput(zWorklistIdInput, input);
+              const task = await this.worklist.claim(actor, id);
               return { content: `Claimed ${task.id}.` };
             }
             case 'start': {
-              const task = await this.worklist.start(actor, input.id as string);
+              const { id } = parseWorklistActionInput(zWorklistIdInput, input);
+              const task = await this.worklist.start(actor, id);
               return { content: `Started ${task.id} (now in_progress).` };
             }
             case 'complete': {
-              const task = await this.worklist.complete(actor, input.id as string);
+              const { id } = parseWorklistActionInput(zWorklistIdInput, input);
+              const task = await this.worklist.complete(actor, id);
               return { content: `Completed ${task.id}.` };
             }
             case 'fail': {
+              const args = parseWorklistActionInput(zWorklistIdInput, input);
               const task = await this.worklist.fail(
                 actor,
-                input.id as string,
-                (input.reason as string) ?? '',
+                args.id,
+                args.reason ?? '',
               );
               return { content: `Failed ${task.id}: ${task.failureReason}` };
             }
@@ -747,4 +809,33 @@ export class Team {
       },
     };
   }
+}
+
+function parseWorklistToolInput(input: unknown): WorklistToolInput {
+  return parseWorklistActionInput(zWorklistToolInput, input);
+}
+
+function parseWorklistActionInput<T>(schema: z.ZodType<T>, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  throw new WorklistError(formatWorklistInputError(parsed.error));
+}
+
+function formatWorklistInputError(error: ZodError): string {
+  const issue = error.issues[0];
+  return `${formatIssuePath(issue?.path ?? [])} ${formatIssueMessage(issue)}`;
+}
+
+function formatIssuePath(path: Array<string | number>): string {
+  if (path.length === 0) return '`input`';
+  const [first, ...rest] = path;
+  return rest.reduce<string>((out, part) => (
+    typeof part === 'number' ? `${out}[${part}]` : `${out}.${part}`
+  ), `\`${String(first)}\``);
+}
+
+function formatIssueMessage(issue: ZodIssue | undefined): string {
+  if (!issue) return 'is invalid.';
+  if (issue.path[0] === 'status') return `must be one of: ${WORKLIST_STATUS_VALUES.join(', ')}.`;
+  return issue.message;
 }

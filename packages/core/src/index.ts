@@ -8,7 +8,9 @@ export { AgentHome } from './agent-home.js';
 export type { AgentHomeSnapshot } from './agent-home.js';
 export type { AgentSnapshot, MCPSummary } from './agent-helpers/introspection.js';
 export type { CompactionResult } from './compaction/compactor.js';
-export { flattenSystemPrompt, normalizeSystemPrompt, toProviderResolver } from './types.js';
+export { flattenSystemPrompt, normalizeSystemPrompt } from '@berry-agent/small-shared-core';
+export { toProviderResolver } from './provider-types.js';
+export { providerPublicConfig } from './provider-types.js';
 export {
   BUILTIN_PROMPT_PACKS,
   DEFAULT_PROMPT_PACK,
@@ -34,10 +36,6 @@ export type {
   PromptPackInput,
 } from './prompts.js';
 
-// Provider Registry
-export { ProviderRegistry } from './registry.js';
-export type { ProviderEntry, ResolvedModel } from './registry.js';
-
 // Providers
 export { createProvider } from './agent-helpers/provider.js';
 
@@ -46,22 +44,55 @@ export { compact, estimateTokens, DefaultCompactionStrategy } from './compaction
 export type { ForkContext } from './compaction/compactor.js';
 export type { CompactionStrategy, CompactionStrategyResult } from './compaction/types.js';
 
-// Tool Executor
-export { executeTools } from './tool-executor.js';
-export type { ExecuteToolsParams, ExecuteToolsResult } from './tool-executor.js';
-
-// Compaction Runner
-export { shouldCompact, shouldSoftCompact, shouldHardCompact, currentContextTokens, runCompaction, preCompactMemoryFlush } from './compaction-runner.js';
+// Hands / capability boundary
+export {
+  HandRegistry,
+  createHandToolRegistrations,
+  createToolRegistrationHand,
+} from './hands.js';
+export type {
+  CreateToolHandOptions,
+  Hand,
+  HandCall,
+  HandCapability,
+  HandContext,
+  HandKind,
+  HandState,
+  HandStatus,
+  HandToolAdapterOptions,
+} from './hands.js';
 
 // Chat / Timeline (UI-friendly format)
-export { toChatMessages, toChatTimeline } from './chat.js';
-export type { ChatMessage, ChatToolCall, ChatCompactionMarker, ChatTimelineItem } from './chat.js';
+export { createPendingUserChatMessage, timelineEventFromAgentEvent, toAgentSessionView } from './chat.js';
+export type {
+  AgentChatInference,
+  AgentChatMessage,
+  AgentChatMessageDelivery,
+  AgentChatMessageStatus,
+  AgentChatStep,
+  AgentChatTimelineEvent,
+  AgentChatTimelineItem,
+  AgentSessionStatus,
+  AgentSessionView,
+  ChatToolCall,
+} from './chat-types.js';
+
+// Managed runtime
+export { ManagedAgentRuntime } from './runtime.js';
+export type {
+  ManagedAgentClearResult,
+  ManagedAgentContextSize,
+  ManagedAgentDeleteResult,
+  ManagedAgentRuntimeCreateOptions,
+  ManagedAgentSendOptions,
+  ManagedAgentTurnResult,
+} from './runtime.js';
 
 // Session stores
 export { FileSessionStore } from './session/file-store.js';
 
 // Event Log
-export { FileEventLogStore, DefaultContextStrategy } from './event-log/index.js';
+export { FileEventLogStore, DefaultContextStrategy, zSessionEvent } from './event-log/index.js';
 export type {
   BaseEvent,
   SessionEvent,
@@ -76,23 +107,55 @@ export type {
   QueryEndEvent,
   CompactionMarkerEvent,
   GuardDecisionEvent,
+  ApprovalRequestEvent,
+  ApprovalDecisionEvent,
   DelegateStartEvent,
   DelegateEndEvent,
   ApiCallEvent,
   MetadataEvent,
   MemoryFlushEvent,
+  SessionEventDraft,
   GetEventsOptions,
   EventLogStore,
   ContextStrategy,
 } from './event-log/index.js';
 
 // Workspace
-export { FileAgentMemory, FileProjectContext, initWorkspace } from './workspace/index.js';
-export type { WorkspaceConfig, AgentMemory, ProjectContext, AgentMetadata, ReasoningEffort } from './workspace/index.js';
+export {
+  AgentFileBrowser,
+  FileAgentMemory,
+  FileProjectContext,
+  PROJECT_BERRY_DIR,
+  PROJECT_CONTEXT_FILE,
+  PROJECT_SAFETY_FILE,
+  PROJECT_TEAM_FILE,
+  PROJECT_TEAM_MESSAGES_FILE,
+  PROJECT_WORKLIST_FILE,
+  createAgentFileBrowser,
+  initWorkspace,
+  normalizeBrowsePath,
+  projectSharedPaths,
+  zAgentMetadata,
+  zReasoningEffort,
+} from './workspace/index.js';
+export type {
+  AgentBrowseRoot,
+  AgentBrowseRootKind,
+  AgentFileBrowserOptions,
+  AgentFileContent,
+  AgentFileEntry,
+  AgentFileList,
+  ProjectSharedPaths,
+  WorkspaceConfig,
+  AgentMemory,
+  ProjectContext,
+  AgentMetadata,
+  ReasoningEffort,
+} from './workspace/index.js';
 export type { MemoryProvider, MemoryInitContext } from './memory/index.js';
 
 // Skills
-export { loadSkillsFromDir, loadSkill, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
+export { loadSkillsFromDir, loadSkill, listSkillNamesSync, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
 export type { Skill, SkillMeta, SkillIndex, SkillDirSpec } from './skills/types.js';
 export type { LoadSkillsOptions } from './skills/loader.js';
 
@@ -102,6 +165,29 @@ export type { ErrorKind } from './utils/retry.js';
 
 // Command Executor (sandbox abstraction)
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from './executor.js';
+export { createCommandEnvironment } from './command-environment.js';
+export type { CommandEnvironment, CommandEnvironmentOptions } from './command-environment.js';
+
+// Execution environments (local process / OS sandbox / container / remote)
+export {
+  ExecutionEnvironmentRegistry,
+  createExecutionEnvironment,
+  isolationPolicyFromScope,
+  workspaceBindingFromScope,
+} from './execution-environment.js';
+export type {
+  CreateExecutionEnvironmentOptions,
+  ExecutionEnvironment,
+  ExecutionEnvironmentKind,
+  ExecutionEnvironmentProvider,
+  ExecutionEnvironmentProvisionRequest,
+  ExecutionEnvironmentState,
+  ExecutionEnvironmentStatus,
+  ExecutionIsolationPolicy,
+  ExecutionNetworkPolicy,
+  ScopeIsolationOptions,
+  WorkspaceBinding,
+} from './execution-environment.js';
 
 // Agent Scope (permission fact source)
 export { AgentScope } from './scope.js';
@@ -120,82 +206,75 @@ export * from './constants.js';
 export * from './tool-names.js';
 
 // Tool group enum and labels
-export { ToolGroup, TOOL_GROUP_LABELS, SystemPromptCacheMode } from './types.js';
+export { SystemPromptCacheMode } from '@berry-agent/small-shared-core';
+export { ToolGroup, TOOL_GROUP_LABELS } from './tool-types.js';
+export { AGENT_EVENT_TYPES, GUARD_EVENT_KINDS } from './agent-runtime-types.js';
 
 // Types
 export type {
-  // Agent config
   AgentConfig,
-  QueryOptions,
-  CreateSessionOptions,
-  QueryResult,
+  AgentCreateConfig,
+} from './agent-config-types.js';
+export type {
   AgentEvent,
+  AgentEventType,
   AgentStatus,
-
-  // Messages
-  Message,
+  CreateSessionOptions,
+  DelegateConfig,
+  DelegateResult,
+  GuardEventKind,
+  Middleware,
+  MiddlewareContext,
+  QueryOptions,
+  QueryResult,
+  RetryReason,
+} from './agent-runtime-types.js';
+export type {
+  AnnotationContent,
   ContentBlock,
+  ImageContent,
+  Message,
+  Role,
   TextContent,
-  ToolUseContent,
-  ToolResultContent,
   ThinkingContent,
+  ToolResultContent,
+  ToolUseContent,
+} from './content-types.js';
+export type {
   SystemPromptBlock,
   SystemPromptInput,
-  Role,
-
-  // Tools
-  ToolDefinition,
-  ToolRegistration,
+} from '@berry-agent/small-shared-core';
+export type {
   ToolContext,
-  ToolResult,
-
-  // Provider
-  Provider,
-  ProviderConfig,
-  ProviderResolver,
-  ProviderInput,
-  ProviderType,
-  ProviderRequest,
-  ProviderResponse,
-  ProviderStreamEvent,
-  TokenUsage,
-
-  // Session
-  Session,
-  SessionMetadata,
-  SessionTodoState,
-  SessionStore,
-  TodoItem,
-
-  // Compaction
-  CompactionConfig,
-  CompactionLayer,
-
-  // Tool Guard (permission hook)
+  ToolDefinition,
   ToolGuard,
   ToolGuardContext,
   ToolGuardDecision,
-
-  // Delegate
-  DelegateConfig,
-  DelegateResult,
-
-  // Middleware
-  Middleware,
-  MiddlewareContext,
-
-  // Structured output
+  ToolRegistration,
+  ToolResult,
+} from './tool-types.js';
+export type {
   JsonSchema,
-
-  // Multi-modal
-  ImageContent,
-
-  // Agent.create() shorthand
-  AgentCreateConfig,
-
-  // Event types
-  AgentEventType,
-  GuardEventKind,
-  AGENT_EVENT_TYPES,
-  GUARD_EVENT_KINDS,
-} from './types.js';
+  ModelRefResolver,
+  Provider,
+  ProviderConfig,
+  ProviderInput,
+  ProviderPublicConfig,
+  ProviderRequest,
+  ProviderResolver,
+  ProviderResponse,
+  ProviderStreamEvent,
+  ProviderType,
+  TokenUsage,
+} from './provider-types.js';
+export type {
+  Session,
+  SessionMetadata,
+  SessionStore,
+  SessionTodoState,
+  TodoItem,
+} from './session-types.js';
+export type {
+  CompactionConfig,
+  CompactionLayer,
+} from './compaction/types.js';

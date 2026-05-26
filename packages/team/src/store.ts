@@ -13,22 +13,21 @@
  *     host app's config, because a team *is* project-scoped — cloning the
  *     project should come with the team.
  */
-import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile, appendFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { projectSharedPaths, type ProjectSharedPaths } from '@berry-agent/core';
 import type { TeamMessage, TeamState } from './types.js';
-
-const BERRY_DIR = '.berry';
-const TEAM_FILE = 'team.json';
-const MESSAGES_FILE = 'messages.jsonl';
+import { zTeamMessage, zTeamState } from './schema.js';
 
 export class TeamStore {
   readonly project: string;
   readonly berryDir: string;
+  readonly paths: ProjectSharedPaths;
 
   constructor(project: string) {
     this.project = project;
-    this.berryDir = join(project, BERRY_DIR);
+    this.paths = projectSharedPaths(project);
+    this.berryDir = this.paths.berryDir;
   }
 
   private async ensureDir(): Promise<void> {
@@ -39,20 +38,21 @@ export class TeamStore {
 
   /** Load the team snapshot, or null if no team exists in this project. */
   async load(): Promise<TeamState | null> {
-    const path = join(this.berryDir, TEAM_FILE);
+    const path = this.paths.teamPath;
     if (!existsSync(path)) return null;
     const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw) as TeamState;
+    return zTeamState.parse(JSON.parse(raw));
   }
 
   /** Atomically replace the team snapshot. */
   async save(state: TeamState): Promise<void> {
     await this.ensureDir();
-    const path = join(this.berryDir, TEAM_FILE);
+    const path = this.paths.teamPath;
+    const snapshot = zTeamState.parse(state);
     // Write to temp then rename = atomic on POSIX; prevents partial writes
     // corrupting the file if the process dies mid-save.
     const tmp = `${path}.tmp`;
-    await writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
+    await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf-8');
     const { rename } = await import('node:fs/promises');
     await rename(tmp, path);
   }
@@ -60,8 +60,8 @@ export class TeamStore {
   /** Append one message to the log. */
   async appendMessage(msg: TeamMessage): Promise<void> {
     await this.ensureDir();
-    const path = join(this.berryDir, MESSAGES_FILE);
-    await appendFile(path, JSON.stringify(msg) + '\n', 'utf-8');
+    const path = this.paths.teamMessagesPath;
+    await appendFile(path, JSON.stringify(zTeamMessage.parse(msg)) + '\n', 'utf-8');
   }
 
   /**
@@ -69,12 +69,26 @@ export class TeamStore {
    * are short). If this ever grows unbounded, add pagination / tail.
    */
   async readMessages(): Promise<TeamMessage[]> {
-    const path = join(this.berryDir, MESSAGES_FILE);
+    const path = this.paths.teamMessagesPath;
     if (!existsSync(path)) return [];
     const raw = await readFile(path, 'utf-8');
     return raw
       .split('\n')
       .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as TeamMessage);
+      .map((line) => zTeamMessage.parse(JSON.parse(line)));
   }
+
+  /** Delete team-owned snapshot and message-log artifacts. */
+  async deleteArtifacts(): Promise<void> {
+    await Promise.all([
+      rm(this.paths.teamPath, { force: true }),
+      rm(this.paths.teamMessagesPath, { force: true }),
+    ]);
+  }
+}
+
+/** Read the leader id for a project-scoped team without opening/mutating it. */
+export async function readTeamLeaderId(project: string): Promise<string | null> {
+  const state = await new TeamStore(project).load();
+  return state?.leaderId ?? null;
 }

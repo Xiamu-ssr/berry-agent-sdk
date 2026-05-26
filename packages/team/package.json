@@ -15,8 +15,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
-    "test": "vitest run"
+    "build": "rm -rf dist && tsc",
+    "test": "vitest run --maxWorkers=2"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
   },
   "peerDependencies": {
     "@berry-agent/core": "^0.5.0-alpha.1"

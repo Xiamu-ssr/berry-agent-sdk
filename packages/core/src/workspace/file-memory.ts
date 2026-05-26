@@ -3,7 +3,7 @@
 // ============================================================
 
 import { readFile, writeFile, appendFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { AgentHome } from '../agent-home.js';
 import type { AgentMemory } from './types.js';
 
 /**
@@ -19,7 +19,7 @@ export class FileAgentMemory implements AgentMemory {
   private readonly memoryPath: string;
 
   constructor(workspaceRoot: string) {
-    this.memoryPath = join(workspaceRoot, 'MEMORY.md');
+    this.memoryPath = new AgentHome(workspaceRoot).memoryPath;
   }
 
   async load(): Promise<string> {

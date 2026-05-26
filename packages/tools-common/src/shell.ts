@@ -101,7 +101,8 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
     };
   };
 
-  return [
+  const dispose = () => manager.dispose();
+  const tools: ToolRegistration[] = [
     {
       definition: {
         name: TOOL_SHELL,
@@ -248,6 +249,8 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
       },
     },
   ];
+
+  return tools.map((tool) => ({ ...tool, dispose }));
 }
 
 /** Single shell tool factory; createShellTools() also includes process tools. */
@@ -347,6 +350,17 @@ class ProcessSessionManager {
     }
     session.handle.kill('SIGTERM');
     return this.toSummary(session);
+  }
+
+  dispose(): void {
+    for (const session of this.sessions.values()) {
+      if (session.status !== 'running') continue;
+      session.handle.kill('SIGTERM');
+      session.status = 'exited';
+      session.signal = session.signal ?? 'SIGTERM';
+      session.endedAt = session.endedAt ?? Date.now();
+    }
+    this.sessions.clear();
   }
 
   private appendLog(session: ProcessSession, chunk: string) {

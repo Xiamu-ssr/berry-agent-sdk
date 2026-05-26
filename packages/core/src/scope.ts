@@ -7,12 +7,12 @@
 // ToolGuard, OS sandbox, file tools — reads from here.
 //
 // Principles:
-//   - Read: unrestricted (isReadable always returns true)
-//   - Write: limited to writableRoots (workspace + project + /tmp)
+//   - Read: limited to readableRoots
+//   - Write: limited to writableRoots (workspace + project)
 //   - Derived from agent config (workspace, project), not hardcoded
 //   - Frontend can change project → scope updates automatically
 
-import { resolve, relative } from 'node:path';
+import { isAbsolute, resolve, relative } from 'node:path';
 import { realpathSync } from 'node:fs';
 
 export class AgentScope {
@@ -42,7 +42,7 @@ export class AgentScope {
     return this.project ?? this.workspace;
   }
 
-  /** 可读取的根目录列表 (currently informational — reads are unrestricted) */
+  /** 可读取的根目录列表 */
   get readableRoots(): string[] {
     return this.project
       ? [this.project, this.workspace]
@@ -67,41 +67,16 @@ export class AgentScope {
    * Resolves the path first, then checks against each writable root.
    */
   isWritable(path: string): boolean {
-    const resolved = resolve(path);
-    return this.writableRoots.some((root) => {
-      const rel = relative(root, resolved);
-      return !rel.startsWith('..') && !rel.startsWith('/');
-    });
+    const resolved = resolveReal(path);
+    return this.writableRoots.some((root) => isWithinRoot(root, resolved));
   }
 
   /**
    * Check whether a path is within the readable scope.
-   * Currently always returns true (reads are unrestricted).
    */
-  isReadable(_path: string): boolean {
-    return true;
-  }
-
-  /**
-   * Generate a SandboxConfig for the OS-level sandbox.
-   * Consumed by @berry-agent/safe's createSandbox().
-   *
-   * Note: Returns a plain object matching SandboxConfig's shape,
-   * but doesn't import the type directly to avoid circular deps.
-   * The consumer (agent-manager) casts as needed.
-   */
-  toSandboxConfig(): {
-    allowRead: string[];
-    allowWrite: string[];
-    network: 'allow' | 'deny' | { allowDomains: string[] };
-    allowExec: boolean;
-  } {
-    return {
-      allowRead: ['/'],
-      allowWrite: [...this.writableRoots, '/tmp'],
-      network: 'allow',
-      allowExec: true,
-    };
+  isReadable(path: string): boolean {
+    const resolved = resolveReal(path);
+    return this.readableRoots.some((root) => isWithinRoot(root, resolved));
   }
 
   /**
@@ -125,4 +100,9 @@ function resolveReal(p: string): string {
   } catch {
     return resolve(p);
   }
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }

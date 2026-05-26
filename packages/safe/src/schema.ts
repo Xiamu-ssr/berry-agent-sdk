@@ -9,6 +9,7 @@ import { z } from 'zod';
 /** Zod schema for the `safe` namespace in berry-sdk.json. */
 export const safeNamespaceSchema = z.object({
   classifier: z.object({
+    enabled: z.boolean().optional(),
     model: z.string().optional(),
     blockRules: z.array(z.string()).optional(),
     allowExceptions: z.array(z.string()).optional(),

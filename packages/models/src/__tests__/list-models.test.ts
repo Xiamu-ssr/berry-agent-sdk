@@ -111,4 +111,23 @@ describe('listModels', () => {
     await listModels(inst, { fetch: fetchMock });
     expect(fetchMock).toHaveBeenCalled();
   });
+
+  it('supports the ZenMux OpenAI-compatible preset', async () => {
+    const inst: ProviderInstance = {
+      id: 'zenmux_openai',
+      presetId: 'zenmux-openai',
+      apiKey: 'zen-key',
+    };
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      expect(String(url)).toBe('https://zenmux.ai/api/v1/models');
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      expect(headers.Authorization).toBe('Bearer zen-key');
+      return new Response(JSON.stringify({
+        data: [{ id: 'google/gemini-3.1-pro-preview' }],
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const res = await listModels(inst, { fetch: fetchMock });
+    expect(res.source).toBe('live');
+    expect(res.models).toEqual(['google/gemini-3.1-pro-preview']);
+  });
 });

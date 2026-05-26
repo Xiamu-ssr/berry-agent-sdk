@@ -5,27 +5,21 @@
 // keep the god class thin — introspection is a natural leaf because
 // it only consumes state, never mutates it.
 
-import type {
-  AgentStatus,
-  ProviderConfig,
-  SystemPromptBlock,
-  ToolDefinition,
-  ToolRegistration,
-  Middleware,
-  ToolGuard,
-} from '../types.js';
-import { normalizeSystemPrompt } from '../types.js';
+import type { SystemPromptBlock } from '@berry-agent/small-shared-core';
+import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
+import type { AgentStatus, Middleware } from '../agent-runtime-types.js';
+import type { CompactionConfig, CompactionStrategy } from '../compaction/types.js';
+import { providerPublicConfig, type ProviderConfig, type ProviderPublicConfig } from '../provider-types.js';
+import type { ToolDefinition, ToolGuard, ToolRegistration } from '../tool-types.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
   DEFAULT_SOFT_COMPACTION_RATIO,
 } from '../constants.js';
-import { getRuntimeToolDefinitions } from '../runtime-tools.js';
+import { getRuntimeToolDefinitions } from './runtime-tools.js';
 import type { AgentMemory } from '../workspace/types.js';
 import type { EventLogStore } from '../event-log/types.js';
-import type { CompactionStrategy } from '../compaction/types.js';
 import type { Skill } from '../skills/types.js';
-import type { AgentConfig } from '../types.js';
 import { mergeToolsByName } from './messages.js';
 
 /** Minimal read-only view of Agent state that introspection helpers need. */
@@ -39,10 +33,9 @@ export interface IntrospectionDeps {
   readonly toolGuard?: ToolGuard;
   readonly workspaceRoot?: string;
   readonly memory?: AgentMemory;
-  readonly compactionConfig: AgentConfig['compaction'];
+  readonly compactionConfig?: CompactionConfig;
   readonly compactionStrategy?: CompactionStrategy;
   readonly eventLogStore?: EventLogStore;
-  readonly children: ReadonlyMap<string, unknown>;
   readonly status: AgentStatus;
   readonly statusDetail?: string;
 }
@@ -64,7 +57,7 @@ export interface MCPSummary {
  * safe to pass around, serialize, or diff. Produced by `agent.snapshot()`.
  */
 export interface AgentSnapshot {
-  provider: Readonly<ProviderConfig>;
+  provider: Readonly<ProviderPublicConfig>;
   systemPrompt: SystemPromptBlock[];
   tools: ToolDefinition[];
   mcp: MCPSummary[];
@@ -82,7 +75,6 @@ export interface AgentSnapshot {
   };
   eventLog?: { available: boolean };
   hasCustomCompaction: boolean;
-  children: string[];
   status: AgentStatus;
   statusDetail?: string;
   /** Wall-clock ms at snapshot time. */
@@ -145,7 +137,7 @@ export function getMCPFrom(deps: IntrospectionDeps): MCPSummary[] {
 export function snapshotFrom(deps: IntrospectionDeps): AgentSnapshot {
   const ctxWindow = deps.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   return {
-    provider: { ...deps.providerConfig },
+    provider: providerPublicConfig(deps.providerConfig),
     systemPrompt: normalizeSystemPrompt(deps.systemPrompt),
     tools: getToolsFrom(deps),
     mcp: getMCPFrom(deps),
@@ -167,7 +159,6 @@ export function snapshotFrom(deps: IntrospectionDeps): AgentSnapshot {
     },
     eventLog: { available: !!deps.eventLogStore },
     hasCustomCompaction: !!deps.compactionStrategy,
-    children: [...deps.children.keys()],
     status: deps.status,
     statusDetail: deps.statusDetail,
     capturedAt: Date.now(),

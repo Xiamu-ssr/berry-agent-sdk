@@ -21,7 +21,7 @@ export interface ExecOptions {
   timeout?: number;
   /** Max buffer size in bytes. Default 1MB. */
   maxBuffer?: number;
-  /** Environment variables (merged with process.env if partial). */
+  /** Environment variables merged with the SDK's sanitized command env. */
   env?: Record<string, string | undefined>;
 }
 
@@ -35,7 +35,7 @@ export interface ExecResult {
 export interface SpawnOptions {
   /** Working directory for the command. */
   cwd: string;
-  /** Environment variables. */
+  /** Environment variables merged with the SDK's sanitized command env. */
   env?: Record<string, string | undefined>;
 }
 

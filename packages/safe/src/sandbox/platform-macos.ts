@@ -10,6 +10,7 @@
 // look identical to regular file-permission errors.
 
 import { exec, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createCommandEnvironment } from '@berry-agent/core';
 import type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from '@berry-agent/core';
 import type { SandboxConfig } from './types.js';
 import { buildSeatbeltProfile } from './profile-builder.js';
@@ -46,7 +47,7 @@ class SeatbeltExecutor implements CommandExecutor {
       const child = spawn('/usr/bin/sandbox-exec', args, {
         cwd: options.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: options.env ? { ...process.env, ...options.env } : process.env,
+        env: createCommandEnvironment({ env: options.env }),
       });
 
       let stdout = '';
@@ -94,7 +95,7 @@ class SeatbeltExecutor implements CommandExecutor {
     const child = spawn('/usr/bin/sandbox-exec', args, {
       cwd: options.cwd,
       stdio: 'pipe',
-      env: options.env ? { ...process.env, ...options.env } : process.env,
+      env: createCommandEnvironment({ env: options.env }),
     }) as ChildProcessWithoutNullStreams;
 
     child.stdout.setEncoding('utf8');

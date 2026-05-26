@@ -108,6 +108,19 @@ describe('loadSdkConfig — schema strictness', () => {
     const p = write('notiers.json', JSON.stringify(bad));
     expect(() => loadSdkConfig(p)).toThrow(/invalid "models\.tiers"/);
   });
+
+  it('rejects explicit provider/model ids that disagree with registry keys', () => {
+    const bad = {
+      models: {
+        providers: { p1: { id: 'other-provider', presetId: 'x', apiKey: 'sk' } },
+        models: { 'm-1': { id: 'other-model', providers: [{ providerId: 'p1' }] } },
+        tiers: { strong: 'm-1' },
+      },
+    };
+    const p = write('id-mismatch.json', JSON.stringify(bad));
+    expect(() => loadSdkConfig(p)).toThrow(/models\.providers\.p1\.id must match provider key "p1"/);
+    expect(() => loadSdkConfig(p)).toThrow(/models\.models\.m-1\.id must match model key "m-1"/);
+  });
 });
 
 describe('loadSdkConfig — provider validation', () => {
@@ -205,6 +218,8 @@ describe('loadSdkConfig — happy path', () => {
     const p = write('good.json', JSON.stringify(validConfig));
     const cfg = loadSdkConfig(p);
     expect(cfg.models.providers.anthropic_main!.apiKey).toBe('sk-test');
+    expect(cfg.models.providers.anthropic_main!.id).toBe('anthropic_main');
+    expect(cfg.models.models['claude-opus-4.7']!.id).toBe('claude-opus-4.7');
     expect(cfg.models.tiers.strong).toBe('claude-opus-4.7');
   });
 
@@ -250,6 +265,7 @@ describe('loadSdkConfig — safe namespace', () => {
       safe: {
         classifier: {
           model: 'tier:fast',
+          enabled: true,
           blockRules: ['rm -rf'],
           allowExceptions: ['git push'],
           skipStage2: true,
@@ -261,6 +277,7 @@ describe('loadSdkConfig — safe namespace', () => {
     const p = write('safe-full.json', JSON.stringify(cfg));
     const result = loadSdkConfig(p);
     expect(result.safe!.classifier!.blockRules).toEqual(['rm -rf']);
+    expect(result.safe!.classifier!.enabled).toBe(true);
     expect(result.safe!.classifier!.skipStage2).toBe(true);
   });
 

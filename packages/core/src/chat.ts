@@ -1,273 +1,130 @@
 // ============================================================
-// Berry Agent SDK — Chat / Timeline Converters
+// Berry Agent SDK - Chat / Session View
 // ============================================================
-// UI-friendly chat message formats and converters from raw
-// provider messages or append-only session events.
+// Public UI-friendly session view assembly. Message/event hydration lives in
+// chat-messages.ts; block formatting and timeline wording live in their own
+// subdomains so products do not rebuild SDK session history.
 
+import type { Session } from './session-types.js';
+import type { SessionEvent } from './event-log/types.js';
 import type {
-  Message,
-  ContentBlock,
-  TextContent,
-  ToolUseContent,
-  ToolResultContent,
-  CompactionLayer,
-} from './types.js';
-import type {
-  SessionEvent,
-  CompactionMarkerEvent,
-} from './event-log/types.js';
-import type { CompactionTriggerReason } from './constants.js';
+  AgentChatMessage,
+  AgentChatTimelineEvent,
+  AgentSessionStatus,
+  AgentSessionView,
+} from './chat-types.js';
 import {
-  COMPACTION_TRIGGER_REASON,
-  COMPACTION_TRIGGER_REASON_VALUES,
-} from './constants.js';
+  deriveTitleFromEvents,
+  deriveTitleFromMessages,
+  deriveTitleFromSession,
+  toAgentChatMessages,
+  toAgentChatMessagesFromEvents,
+} from './chat-messages.js';
 
-export interface ChatToolCall {
-  name: string;
-  input: Record<string, unknown>;
-  result?: string;
-  isError?: boolean;
-}
+export { createPendingUserChatMessage } from './chat-messages.js';
+export { timelineEventFromAgentEvent } from './chat-timeline.js';
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp?: number;
-  kind?: 'message';
-  toolCalls?: ChatToolCall[];
-  usage?: { inputTokens: number; outputTokens: number };
-}
-
-export interface ChatCompactionMarker {
-  id: string;
-  role: 'system';
-  kind: 'compaction_marker';
-  content: string;
-  timestamp?: number;
-  compaction: {
-    strategy: string;
-    triggerReason?: CompactionTriggerReason;
-    tokensFreed: number;
-    contextBefore?: number;
-    contextAfter?: number;
-    thresholdPct?: number;
-    contextWindow?: number;
-    layersApplied?: CompactionLayer[];
-    durationMs?: number;
-  };
-}
-
-export type ChatTimelineItem = ChatMessage | ChatCompactionMarker;
-
-type ToolResultInfo = { content: string; isError?: boolean };
-type ChatSourceMessage = Pick<Message, 'role' | 'content' | 'createdAt'>;
+export type {
+  AgentChatInference,
+  AgentChatMessage,
+  AgentChatMessageDelivery,
+  AgentChatMessageStatus,
+  AgentChatStep,
+  AgentChatTimelineEvent,
+  AgentChatTimelineItem,
+  AgentSessionStatus,
+  AgentSessionView,
+  ChatToolCall,
+} from './chat-types.js';
 
 /**
- * Convert raw provider messages to UI-friendly chat messages.
- *
- * - Extracts text content from ContentBlock arrays
- * - Pairs tool_use blocks with their tool_result blocks
- * - Generates stable IDs based on message index
- * - Handles both string content and ContentBlock[] content
+ * Convert an SDK session plus its append-only event log into the rich chat
+ * view expected by host UIs. The event log wins because it preserves the
+ * complete pre-compaction timeline; `messages.json` is only the fallback
+ * provider-context view.
  */
-export function toChatMessages(messages: Message[]): ChatMessage[] {
-  const resultMap = buildToolResultMapFromMessages(messages);
-  const result: ChatMessage[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const item = toChatMessage(messages[i], `msg_${i}`, resultMap);
-    if (item) result.push(item);
-  }
-
-  return result;
-}
-
-/**
- * Convert full append-only session events into a UI timeline.
- *
- * Unlike DefaultContextStrategy, this preserves the full event history and
- * inserts compaction markers as explicit system timeline items.
- */
-export function toChatTimeline(events: SessionEvent[]): ChatTimelineItem[] {
-  const resultMap = buildToolResultMapFromEvents(events);
-  const items: ChatTimelineItem[] = [];
-  let messageIndex = 0;
-  let markerIndex = 0;
-
-  for (const event of events) {
-    switch (event.type) {
-      case 'user_message': {
-        const item = toChatMessage({
-          role: 'user',
-          content: event.content,
-          createdAt: event.timestamp,
-        }, `msg_${messageIndex}`, resultMap);
-        if (item) {
-          items.push(item);
-          messageIndex++;
-        }
-        break;
-      }
-
-      case 'assistant_message': {
-        const item = toChatMessage({
-          role: 'assistant',
-          content: event.content,
-          createdAt: event.timestamp,
-        }, `msg_${messageIndex}`, resultMap);
-        if (item) {
-          items.push(item);
-          messageIndex++;
-        }
-        break;
-      }
-
-      case 'compaction_marker':
-        items.push(toCompactionMarkerItem(event, `marker_${markerIndex}`));
-        markerIndex++;
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  return items;
-}
-
-function buildToolResultMapFromMessages(messages: Message[]): Map<string, ToolResultInfo> {
-  const resultMap = new Map<string, ToolResultInfo>();
-  for (const msg of messages) {
-    if (!Array.isArray(msg.content)) continue;
-    for (const block of msg.content) {
-      if (block.type === 'tool_result') {
-        const tr = block as ToolResultContent;
-        resultMap.set(tr.toolUseId, {
-          content: tr.content,
-          isError: tr.isError,
-        });
-      }
-    }
-  }
-  return resultMap;
-}
-
-function buildToolResultMapFromEvents(events: SessionEvent[]): Map<string, ToolResultInfo> {
-  const resultMap = new Map<string, ToolResultInfo>();
-  for (const event of events) {
-    if (event.type === 'tool_result') {
-      resultMap.set(event.toolUseId, {
-        content: event.content,
-        isError: event.isError,
-      });
-    }
-  }
-  return resultMap;
-}
-
-function toChatMessage(
-  message: ChatSourceMessage,
-  id: string,
-  resultMap: Map<string, ToolResultInfo>,
-): ChatMessage | null {
-  if (typeof message.content === 'string') {
-    return {
-      id,
-      role: message.role,
-      content: message.content,
-      timestamp: message.createdAt,
-    };
-  }
-
-  const textParts: string[] = [];
-  const toolCalls: ChatToolCall[] = [];
-
-  for (const block of message.content) {
-    if (block.type === 'text') {
-      textParts.push((block as TextContent).text);
-    } else if (block.type === 'tool_use') {
-      const tu = block as ToolUseContent;
-      const paired = resultMap.get(tu.id);
-      toolCalls.push({
-        name: tu.name,
-        input: tu.input,
-        result: paired?.content,
-        isError: paired?.isError,
-      });
-    } else if (block.type === 'thinking') {
-      // Skip thinking blocks in chat view
-    }
-    // tool_result blocks are consumed via the resultMap pairing
-  }
-
-  const content = textParts.join('\n');
-
-  // Skip messages that are purely tool_result containers (user messages with only tool results)
-  if (!content && toolCalls.length === 0 && message.role === 'user') {
-    const hasOnlyToolResults = message.content.every(
-      (block: ContentBlock) => block.type === 'tool_result',
-    );
-    if (hasOnlyToolResults) return null;
+export function toAgentSessionView(
+  session: Session,
+  options: { events?: SessionEvent[]; agentId?: string } = {},
+): AgentSessionView {
+  const eventMessages = options.events && options.events.length > 0
+    ? toAgentChatMessagesFromEvents(options.events)
+    : [];
+  const messages = eventMessages.length > 0
+    ? eventMessages
+    : toAgentChatMessages(session.messages);
+  const eventTimes = options.events?.map((event) => event.timestamp).filter((time) => Number.isFinite(time)) ?? [];
+  const status = deriveAgentSessionStatus(options.events);
+  if (status === 'interrupted') {
+    markInterruptedSession(messages, session.id, eventTimes.at(-1) ?? session.lastAccessedAt);
   }
 
   return {
-    id,
-    role: message.role,
-    content,
-    timestamp: message.createdAt,
-    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    id: session.id,
+    title: deriveTitleFromMessages(messages) ?? deriveTitleFromSession(session),
+    messages,
+    createdAt: eventTimes.length > 0 ? Math.min(...eventTimes) : session.createdAt,
+    lastActiveAt: eventTimes.length > 0 ? Math.max(...eventTimes) : session.lastAccessedAt,
+    agentId: options.agentId,
+    status,
   };
 }
 
-function toCompactionMarkerItem(event: CompactionMarkerEvent, id: string): ChatCompactionMarker {
+/** Lightweight view for session lists. It never expands messages/timeline. */
+export function toAgentSessionSummary(
+  session: Pick<Session, 'id' | 'createdAt' | 'lastAccessedAt' | 'metadata'>,
+  options: { events?: SessionEvent[]; agentId?: string } = {},
+): AgentSessionView {
+  const eventTimes = options.events?.map((event) => event.timestamp).filter((time) => Number.isFinite(time)) ?? [];
   return {
-    id,
-    role: 'system',
-    kind: 'compaction_marker',
-    content: formatCompactionMarkerContent(event),
-    timestamp: event.timestamp,
-    compaction: {
-      strategy: event.strategy,
-      triggerReason: event.triggerReason,
-      tokensFreed: event.tokensFreed,
-      contextBefore: event.contextBefore,
-      contextAfter: event.contextAfter,
-      thresholdPct: event.thresholdPct,
-      contextWindow: event.contextWindow,
-      layersApplied: event.layersApplied,
-      durationMs: event.durationMs,
-    },
+    id: session.id,
+    title: deriveTitleFromEvents(options.events) ?? session.id,
+    messages: [],
+    createdAt: eventTimes.length > 0 ? Math.min(...eventTimes, session.createdAt) : session.createdAt,
+    lastActiveAt: eventTimes.length > 0 ? Math.max(...eventTimes, session.lastAccessedAt) : session.lastAccessedAt,
+    agentId: options.agentId,
+    status: deriveAgentSessionStatus(options.events),
   };
 }
 
-function formatCompactionMarkerContent(event: CompactionMarkerEvent): string {
-  const reason = event.triggerReason ?? normalizeTriggerReason(event.strategy);
-  const label = reason === COMPACTION_TRIGGER_REASON.SOFT_THRESHOLD
-    ? 'Soft compaction'
-    : reason === COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY
-      ? 'Overflow recovery compaction'
-      : 'Context compaction';
-
-  const details: string[] = [];
-  if (typeof event.tokensFreed === 'number') {
-    details.push(`freed ~${formatNumber(event.tokensFreed)} tokens`);
+function deriveAgentSessionStatus(events?: SessionEvent[]): AgentSessionStatus {
+  if (!events || events.length === 0) return 'idle';
+  const ended = new Set<string>();
+  const starts: string[] = [];
+  for (const event of events) {
+    if (event.type === 'query_start' && event.turnId) starts.push(event.turnId);
+    if (event.type === 'query_end' && event.turnId) ended.add(event.turnId);
   }
-  if (typeof event.contextAfter === 'number' && typeof event.contextWindow === 'number') {
-    details.push(`${formatNumber(event.contextAfter)}/${formatNumber(event.contextWindow)} tokens after`);
-  }
-
-  return details.length > 0
-    ? `${label} — ${details.join(' · ')}`
-    : label;
+  const latestTurn = starts.at(-1);
+  if (!latestTurn) return 'idle';
+  return ended.has(latestTurn) ? 'idle' : 'interrupted';
 }
 
-function normalizeTriggerReason(value: string): CompactionTriggerReason | undefined {
-  return (COMPACTION_TRIGGER_REASON_VALUES as readonly string[]).includes(value)
-    ? (value as CompactionTriggerReason)
-    : undefined;
-}
-
-function formatNumber(value: number): string {
-  return value.toLocaleString('en-US');
+function markInterruptedSession(messages: AgentChatMessage[], sessionId: string, timestamp: number): void {
+  const event: AgentChatTimelineEvent = {
+    id: `interrupted_${sessionId}`,
+    kind: 'system',
+    title: '上次执行中断',
+    detail: 'events.jsonl 中存在未闭合 query_start；实际执行已停止，可直接发送下一条消息。',
+    timestamp,
+    tone: 'warn',
+    collapsed: true,
+  };
+  const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+  if (lastAssistant) {
+    lastAssistant.status = 'failed';
+    lastAssistant.events = [...(lastAssistant.events ?? []), event];
+    lastAssistant.timeline = [...(lastAssistant.timeline ?? []), { type: 'event', event }];
+    return;
+  }
+  messages.push({
+    id: `interrupted_${sessionId}`,
+    role: 'assistant',
+    content: '上次执行在完成前中断，已从事件日志标记为停止。',
+    timestamp,
+    status: 'failed',
+    delivery: 'turn',
+    events: [event],
+    timeline: [{ type: 'event', event }],
+  });
 }

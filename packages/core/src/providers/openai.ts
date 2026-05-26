@@ -1,22 +1,11 @@
 // ============================================================
 // Berry Agent SDK — OpenAI Compatible Provider
 // ============================================================
-// Covers: OpenAI, DeepSeek, Qwen, Mistral, Groq, Together,
-// Ollama, and any OpenAI-compatible endpoint.
-//
-// Key differences from Anthropic:
-// - Cache is AUTOMATIC (no breakpoints). Just keep prefix stable.
-// - tool_calls[] on assistant message, not content blocks
-// - role:"tool" messages for results, not user content blocks
-// - arguments is JSON string, not object
-// - No thinking blocks
+// Covers OpenAI and OpenAI-compatible endpoints. Provider runtime stays here;
+// wire message construction and response parsing are split into ./openai/*.
 
 import OpenAI from 'openai';
 import type {
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-  ChatCompletionToolMessageParam,
-  ChatCompletionAssistantMessageParam,
   ChatCompletionChunk,
 } from 'openai/resources/chat/completions';
 import type {
@@ -25,18 +14,19 @@ import type {
   ProviderRequest,
   ProviderResponse,
   ProviderStreamEvent,
-  Message,
-  ContentBlock,
-  ToolDefinition,
-  TokenUsage,
-  TextContent,
-  ToolUseContent,
-  ToolResultContent,
-  ImageContent,
-} from '../types.js';
-import { flattenSystemPrompt } from '../types.js';
+} from '../provider-types.js';
 import { DEFAULT_MAX_TOKENS, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { withRetry } from '../utils/retry.js';
+import {
+  buildOpenAIMessages,
+  buildOpenAITools,
+} from './openai/messages.js';
+import {
+  accumulateOpenAIStreamChunk,
+  createOpenAIStreamAccumulator,
+  finalizeOpenAIStreamResponse,
+  parseOpenAIResponse,
+} from './openai/response.js';
 
 export class OpenAIProvider implements Provider {
   readonly type = 'openai' as const;
@@ -63,7 +53,7 @@ export class OpenAIProvider implements Provider {
       request.signal,
     );
     assertValidOpenAIResponse(response, this.config.baseUrl);
-    const result = this.parseResponse(response);
+    const result = parseOpenAIResponse(response, this.config.baseUrl);
     result.rawRequest = params as unknown as Record<string, unknown>;
     result.rawResponse = response as unknown as Record<string, unknown>;
     return result;
@@ -77,119 +67,24 @@ export class OpenAIProvider implements Provider {
       request.signal,
     ) as AsyncIterable<ChatCompletionChunk>;
 
-    const textParts: string[] = [];
-    const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
-    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
-    let stopReason: ProviderResponse['stopReason'] = 'end_turn';
-    let lastChunkId: string | undefined;
-    let lastChunkModel: string | undefined;
-    let rawUsageRaw: Record<string, unknown> = {};
-    let chunkCount = 0;
-
+    const acc = createOpenAIStreamAccumulator();
     for await (const chunk of stream) {
-      chunkCount++;
-      lastChunkId = chunk.id;
-      lastChunkModel = chunk.model;
-      if (chunk.usage) {
-        usage = this.extractUsage(chunk.usage);
-        rawUsageRaw = chunk.usage as unknown as Record<string, unknown>;
-      }
-
-      const choice = chunk.choices[0];
-      if (!choice) continue;
-
-      if (choice.finish_reason) {
-        stopReason = this.mapStopReason(choice.finish_reason);
-      }
-
-      const delta = choice.delta;
-      if (delta.content) {
-        textParts.push(delta.content);
-        yield { type: 'text_delta', text: delta.content };
-      }
-
-      for (const toolCallDelta of delta.tool_calls ?? []) {
-        const current = toolCalls.get(toolCallDelta.index) ?? {
-          id: '',
-          name: '',
-          arguments: '',
-        };
-
-        if (toolCallDelta.id) {
-          current.id = toolCallDelta.id;
-        }
-        if (toolCallDelta.function?.name) {
-          current.name += toolCallDelta.function.name;
-        }
-        if (toolCallDelta.function?.arguments) {
-          current.arguments += toolCallDelta.function.arguments;
-        }
-
-        toolCalls.set(toolCallDelta.index, current);
+      for (const text of accumulateOpenAIStreamChunk(acc, chunk)) {
+        yield { type: 'text_delta', text };
       }
     }
 
-    if (chunkCount === 0) {
-      throw new Error(
-        `OpenAI-compatible stream returned 0 chunks. This usually means the baseUrl is wrong or the gateway is serving HTML instead of /v1 API responses. baseUrl=${this.config.baseUrl ?? '(default)'}`,
-      );
-    }
+    const response = finalizeOpenAIStreamResponse(acc, this.config.baseUrl);
+    response.rawRequest = rawRequest;
 
-    const content: ContentBlock[] = [];
-    const text = textParts.join('');
-
-    if (text) {
-      content.push({ type: 'text', text });
-    }
-
-    const builtToolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
-    for (const [, toolCall] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
-      content.push({
-        type: 'tool_use',
-        id: toolCall.id || `tool_${Math.random().toString(36).slice(2, 8)}`,
-        name: toolCall.name,
-        input: this.parseToolArguments(toolCall.arguments),
-      });
-      builtToolCalls.push({
-        id: toolCall.id,
-        type: 'function',
-        function: { name: toolCall.name, arguments: toolCall.arguments },
-      });
-    }
-
-    const rawResponse: Record<string, unknown> = {
-      id: lastChunkId,
-      model: lastChunkModel,
-      object: 'chat.completion',
-      usage: rawUsageRaw,
-      choices: [{
-        finish_reason: stopReason === 'tool_use' ? 'tool_calls' : stopReason === 'max_tokens' ? 'length' : 'stop',
-        message: {
-          role: 'assistant',
-          content: text || null,
-          ...(builtToolCalls.length > 0 ? { tool_calls: builtToolCalls } : {}),
-        },
-      }],
-    };
-
-    yield {
-      type: 'response',
-      response: {
-        content: content.length > 0 ? content : [{ type: 'text', text: '' }],
-        stopReason,
-        usage,
-        rawUsage: rawUsageRaw,
-        rawRequest,
-        rawResponse,
-      },
-    };
+    yield { type: 'response', response };
   }
 
   // ===== Params =====
 
   private buildParams(request: ProviderRequest): OpenAI.ChatCompletionCreateParamsNonStreaming {
-    const messages = this.buildMessages(request.systemPrompt, request.messages);
-    const tools = request.tools ? this.buildTools(request.tools) : undefined;
+    const messages = buildOpenAIMessages(request.systemPrompt, request.messages);
+    const tools = request.tools ? buildOpenAITools(request.tools) : undefined;
 
     const params: OpenAI.ChatCompletionCreateParamsNonStreaming = {
       model: this.config.model,
@@ -198,13 +93,11 @@ export class OpenAIProvider implements Provider {
       ...(tools && tools.length > 0 ? { tools } : {}),
     };
 
-    // Reasoning effort (OpenAI GPT-5.x / o-series, and compatible gateways)
     const reasoningEffort = this.resolveReasoningEffort();
     if (reasoningEffort) {
       ((params as unknown) as Record<string, unknown>).reasoning_effort = reasoningEffort;
     }
 
-    // Structured output (JSON schema)
     if (request.responseFormat) {
       params.response_format = {
         type: 'json_schema',
@@ -214,15 +107,15 @@ export class OpenAIProvider implements Provider {
           schema: request.responseFormat.schema,
           strict: true,
         },
-      } as unknown as OpenAI.ChatCompletionCreateParams["response_format"];
+      } as unknown as OpenAI.ChatCompletionCreateParams['response_format'];
     }
 
     return params;
   }
 
   private buildStreamParams(request: ProviderRequest): OpenAI.ChatCompletionCreateParamsStreaming {
-    const messages = this.buildMessages(request.systemPrompt, request.messages);
-    const tools = request.tools ? this.buildTools(request.tools) : undefined;
+    const messages = buildOpenAIMessages(request.systemPrompt, request.messages);
+    const tools = request.tools ? buildOpenAITools(request.tools) : undefined;
 
     const params: OpenAI.ChatCompletionCreateParamsStreaming = {
       model: this.config.model,
@@ -247,7 +140,7 @@ export class OpenAIProvider implements Provider {
           schema: request.responseFormat.schema,
           strict: true,
         },
-      } as unknown as OpenAI.ChatCompletionCreateParams["response_format"];
+      } as unknown as OpenAI.ChatCompletionCreateParams['response_format'];
     }
 
     return params;
@@ -265,245 +158,20 @@ export class OpenAIProvider implements Provider {
     };
     return map[effort];
   }
-
-  // ===== Message Building =====
-
-  buildMessages(
-    systemPrompt: ProviderRequest['systemPrompt'],
-    messages: Message[],
-  ): ChatCompletionMessageParam[] {
-    const result: ChatCompletionMessageParam[] = [];
-
-    const systemText = flattenSystemPrompt(systemPrompt).filter(Boolean).join('\n\n');
-    if (systemText) {
-      result.push({ role: 'system', content: systemText });
-    }
-
-    for (const msg of messages) {
-      const converted = this.convertMessage(msg);
-      result.push(...converted);
-    }
-
-    return result;
-  }
-
-  private convertMessage(msg: Message): ChatCompletionMessageParam[] {
-    if (msg.role === 'user') {
-      return this.convertUserMessage(msg);
-    }
-    if (msg.role === 'assistant') {
-      return this.convertAssistantMessage(msg);
-    }
-    return [];
-  }
-
-  private convertUserMessage(msg: Message): ChatCompletionMessageParam[] {
-    if (typeof msg.content === 'string') {
-      return [{ role: 'user', content: msg.content }];
-    }
-
-    const results: ChatCompletionMessageParam[] = [];
-    const textParts: string[] = [];
-
-    for (const block of msg.content) {
-      if (block.type === 'text') {
-        textParts.push((block as TextContent).text);
-      } else if (block.type === 'image') {
-        // Flush any pending text first, then add image
-        if (textParts.length > 0) {
-          results.push({ role: 'user', content: textParts.join('\n') });
-          textParts.length = 0;
-        }
-        const img = block as ImageContent;
-        results.push({
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: { url: `data:${img.mediaType};base64,${img.data}` },
-            },
-          ],
-        } as OpenAI.ChatCompletionMessageParam);
-      } else if (block.type === 'tool_result') {
-        const tr = block as ToolResultContent;
-        results.push({
-          role: 'tool',
-          tool_call_id: tr.toolUseId,
-          content: tr.content,
-        } as ChatCompletionToolMessageParam);
-      }
-    }
-
-    if (textParts.length > 0) {
-      results.push({ role: 'user', content: textParts.join('\n') });
-    }
-
-    return results;
-  }
-
-  private convertAssistantMessage(msg: Message): ChatCompletionMessageParam[] {
-    if (typeof msg.content === 'string') {
-      return [{ role: 'assistant', content: msg.content }];
-    }
-
-    const textParts: string[] = [];
-    const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
-    const reasoningParts: string[] = [];
-
-    for (const block of msg.content) {
-      if (block.type === 'text') {
-        textParts.push((block as TextContent).text);
-      } else if (block.type === 'tool_use') {
-        const tu = block as ToolUseContent;
-        toolCalls.push({
-          id: tu.id,
-          type: 'function',
-          function: {
-            name: tu.name,
-            arguments: JSON.stringify(tu.input),
-          },
-        });
-      } else if (block.type === 'thinking') {
-        // Some OpenAI-compatible providers (e.g. Moonshot/kimi) require
-        // reasoning_content to be preserved in the assistant message for
-        // multi-turn conversations when thinking is enabled. Without this
-        // the API rejects the request with:
-        //   "thinking is enabled but reasoning_content is missing ..."
-        reasoningParts.push((block as { thinking: string }).thinking ?? '');
-      }
-    }
-
-    const assistantMsg: ChatCompletionAssistantMessageParam & {
-      reasoning_content?: string;
-    } = {
-      role: 'assistant',
-      content: textParts.join('\n') || null,
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    };
-
-    // Moonshot/kimi requires reasoning_content on EVERY assistant message when
-    // thinking is enabled, even if empty. Omitting it causes:
-    //   "thinking is enabled but reasoning_content is missing ..."
-    assistantMsg.reasoning_content = reasoningParts.join('\n');
-
-    return [assistantMsg];
-  }
-
-  // ===== Tool Building =====
-
-  private buildTools(tools: ToolDefinition[]): ChatCompletionTool[] {
-    return tools.map(tool => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.inputSchema,
-      },
-    }));
-  }
-
-  // ===== Response Parsing =====
-
-  parseResponse(response: OpenAI.ChatCompletion): ProviderResponse {
-    const choice = response.choices[0];
-    if (!choice) {
-      return {
-        content: [{ type: 'text', text: '(no response)' }],
-        stopReason: 'end_turn',
-        usage: { inputTokens: 0, outputTokens: 0 },
-      };
-    }
-
-    const content: ContentBlock[] = [];
-
-    if (choice.message.content) {
-      content.push({ type: 'text', text: choice.message.content });
-    }
-
-    if (choice.message.tool_calls) {
-      for (const tc of choice.message.tool_calls) {
-        if (!('function' in tc) || !tc.function) continue;
-        content.push({
-          type: 'tool_use',
-          id: tc.id,
-          name: tc.function.name,
-          input: this.parseToolArguments(tc.function.arguments),
-        });
-      }
-    }
-
-    // Some gateways return finish_reason='stop' but omit both content and
-    // tool_calls. Treat this as an invalid gateway response instead of silently
-    // producing an empty assistant message that looks like an agent bug.
-    if (content.length === 0) {
-      throw new Error(
-        `OpenAI-compatible endpoint returned an empty assistant message (no content, no tool_calls). This usually indicates an incompatible gateway or wrong baseUrl. baseUrl=${this.config.baseUrl ?? '(default)'}`,
-      );
-    }
-
-    return {
-      content,
-      stopReason: this.mapStopReason(choice.finish_reason),
-      usage: this.extractUsage(response.usage),
-      rawUsage: response.usage as unknown as Record<string, unknown>,
-      // rawRequest/rawResponse set by chat() caller
-    };
-  }
-
-  private parseToolArguments(raw: string): Record<string, unknown> {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return { _raw: raw };
-    }
-  }
-
-  private mapStopReason(reason: string | null): ProviderResponse['stopReason'] {
-    if (reason === 'tool_calls') return 'tool_use';
-    if (reason === 'length') return 'max_tokens';
-    return 'end_turn';
-  }
-
-  private extractUsage(usage?: OpenAI.CompletionUsage | null): TokenUsage {
-    if (!usage) return { inputTokens: 0, outputTokens: 0 };
-
-    const details = (usage as unknown as Record<string, unknown>)?.prompt_tokens_details as { cached_tokens?: number } | undefined;
-    return {
-      inputTokens: usage.prompt_tokens ?? 0,
-      outputTokens: usage.completion_tokens ?? 0,
-      cacheReadTokens: details?.cached_tokens ?? 0,
-      cacheWriteTokens: 0,
-    };
-  }
 }
 
-function normalizeOpenAIBaseUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) return baseUrl;
-  try {
-    const url = new URL(baseUrl);
-    // Common user mistake: pasting the site origin instead of the API root.
-    // Only normalize the empty-path case. If the user already supplied any path
-    // (/v1, /openai/v1, /proxy/foo), leave it untouched.
-    if (url.pathname === '/' || url.pathname === '') {
-      url.pathname = '/v1';
-      return url.toString().replace(/\/$/, '');
-    }
-    return baseUrl;
-  } catch {
-    return baseUrl;
-  }
+export function normalizeOpenAIBaseUrl(baseUrl?: string): string | undefined {
+  if (!baseUrl) return undefined;
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  if (/\/v\d+(?:\/)?$/i.test(trimmed)) return trimmed;
+  return `${trimmed}/v1`;
 }
 
-function assertValidOpenAIResponse(response: unknown, baseUrl?: string): void {
-  if (!response || typeof response !== 'object') {
-    throw new Error(
-      `OpenAI-compatible endpoint returned a non-JSON response. Check baseUrl (expected an API endpoint like .../v1). baseUrl=${baseUrl ?? '(default)'}`,
-    );
-  }
-  const obj = response as Record<string, unknown>;
-  if (!Array.isArray(obj.choices)) {
-    throw new Error(
-      `OpenAI-compatible endpoint response is missing choices[]. Check baseUrl / gateway compatibility. baseUrl=${baseUrl ?? '(default)'}`,
-    );
-  }
+function assertValidOpenAIResponse(response: unknown, baseUrl?: string): asserts response is OpenAI.ChatCompletion {
+  const obj = response as { choices?: unknown } | null;
+  if (obj && Array.isArray(obj.choices)) return;
+
+  throw new Error(
+    `OpenAI-compatible endpoint returned a non-ChatCompletion response. This usually means the baseUrl is wrong or missing /v1. baseUrl=${baseUrl ?? '(default)'}`,
+  );
 }

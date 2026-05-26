@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { PROJECT_CONTEXT_FILE } from '@berry-agent/core';
 import { createFileMemoryProvider } from '../provider.js';
 
 function makeWorkspace(): string {
@@ -179,16 +180,15 @@ describe('FileMemoryProvider', () => {
     expect(mem).toContain('first entry');
   });
 
-  it('indexes project AGENTS.md under a separate projectDir', async () => {
+  it('indexes SDK project context under a separate projectDir', async () => {
     write(ws, 'MEMORY.md', 'Personal note about dark roast coffee.');
 
     // Separate project directory — simulates teammates pointing at a shared
-    // project path while each having their own workspace. Only AGENTS.md is
-    // recognized: it is the single, human-maintained source of project-level
-    // knowledge visible to every agent bound to this project.
+    // project path while each having their own workspace. Only the SDK
+    // project context file is recognized as shared project knowledge.
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'berry-mem-proj-'));
     try {
-      fs.writeFileSync(path.join(proj, 'AGENTS.md'), 'Project spec lives here. No secrets in logs.');
+      fs.writeFileSync(path.join(proj, PROJECT_CONTEXT_FILE), 'Project spec lives here. No secrets in logs.');
 
       provider = createFileMemoryProvider({ workspaceDir: ws, projectDir: proj });
 
@@ -196,13 +196,13 @@ describe('FileMemoryProvider', () => {
       const personal = await provider.search('dark roast coffee');
       expect(personal.some((r) => r.path === 'MEMORY.md')).toBe(true);
 
-      // Project AGENTS.md surfaces with a project/ prefix so consumers can
+      // Project context surfaces with a project/ prefix so consumers can
       // distinguish shared knowledge from personal notes.
       const spec = await provider.search('no secrets in logs');
-      expect(spec.some((r) => r.path === 'project/AGENTS.md')).toBe(true);
+      expect(spec.some((r) => r.path === `project/${PROJECT_CONTEXT_FILE}`)).toBe(true);
 
       // Excerpt reads resolve via project/ prefix too.
-      const excerpt = await provider.get({ path: 'project/AGENTS.md' });
+      const excerpt = await provider.get({ path: `project/${PROJECT_CONTEXT_FILE}` });
       expect(excerpt.text).toContain('Project spec lives here');
     } finally {
       fs.rmSync(proj, { recursive: true, force: true });

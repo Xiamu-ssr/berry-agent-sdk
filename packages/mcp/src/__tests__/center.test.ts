@@ -2,12 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { MCPToolCenter, createMCPCenterTools } from '../center.js';
 import type { MCPClient, MCPToolInfo } from '../client.js';
 
-function createFakeMCPClient(name: string, tools: MCPToolInfo[]): MCPClient {
+function createFakeMCPClient(
+  name: string,
+  tools: MCPToolInfo[],
+  options: { disconnect?: () => Promise<void> } = {},
+): MCPClient {
   return {
     name,
     connected: true,
     connect: vi.fn(),
-    disconnect: vi.fn(),
+    disconnect: vi.fn(options.disconnect ?? (async () => {})),
     listTools: vi.fn(async () => tools),
     callTool: vi.fn(async (toolName: string, input: Record<string, unknown>) => ({
       content: `${name}:${toolName}:${JSON.stringify(input)}`,
@@ -84,5 +88,19 @@ describe('MCPToolCenter', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid input');
+  });
+
+  it('disconnects every registered client before surfacing a disconnect error', async () => {
+    const center = new MCPToolCenter();
+    const failing = createFakeMCPClient('failing', [], {
+      disconnect: async () => { throw new Error('disconnect failed'); },
+    });
+    const healthy = createFakeMCPClient('healthy', []);
+    center.register(failing);
+    center.register(healthy);
+
+    await expect(center.disconnectAll()).rejects.toThrow('disconnect failed');
+    expect(failing.disconnect).toHaveBeenCalledOnce();
+    expect(healthy.disconnect).toHaveBeenCalledOnce();
   });
 });

@@ -7,6 +7,17 @@
 import { Router } from 'express';
 import type { Observer } from './observer.js';
 import { MetricsCalculator } from './analyzer/metrics.js';
+import {
+  observeCompactionListQuerySchema,
+  observeCompactionQuerySchema,
+  observeCostTrendQuerySchema,
+  observeFilterQuerySchema,
+  observeGuardDecisionQuerySchema,
+  observeInferenceListQuerySchema,
+  observeLimit50QuerySchema,
+  observeRecentSessionsQuerySchema,
+  observeTurnListQuerySchema,
+} from './schema.js';
 
 /**
  * Create an Express Router that serves observe API endpoints.
@@ -19,7 +30,7 @@ export function createObserveRouter(observer: Observer): Router {
 
   // ===== Cost =====
   router.get('/cost', (req, res) => {
-    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId, turnId } = observeFilterQuerySchema.parse(req.query);
     res.json(analyzer.costBreakdown({ sessionId, agentId, turnId }));
   });
 
@@ -28,57 +39,54 @@ export function createObserveRouter(observer: Observer): Router {
   });
 
   router.get('/cost/trend', (req, res) => {
-    const days = parseInt(req.query.days as string) || 30;
+    const { days } = observeCostTrendQuerySchema.parse(req.query);
     res.json(analyzer.costTrend(days));
   });
 
   // ===== Cache =====
   router.get('/cache', (req, res) => {
-    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId, turnId } = observeFilterQuerySchema.parse(req.query);
     res.json(analyzer.cacheEfficiency({ sessionId, agentId, turnId }));
   });
 
   // ===== Tools =====
   router.get('/tools', (req, res) => {
-    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId, turnId } = observeFilterQuerySchema.parse(req.query);
     res.json(analyzer.toolStats({ sessionId, agentId, turnId }));
   });
 
   // ===== Guard =====
   router.get('/guard', (req, res) => {
-    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId, turnId } = observeFilterQuerySchema.parse(req.query);
     res.json(analyzer.guardStats({ sessionId, agentId, turnId }));
   });
 
   router.get('/guard/decisions', (req, res) => {
-    const { sessionId, agentId, turnId, llmCallId, toolName } = req.query as Record<string, string | undefined>;
-    const limit = parseInt(req.query.limit as string) || 100;
+    const { sessionId, agentId, turnId, llmCallId, toolName, limit } =
+      observeGuardDecisionQuerySchema.parse(req.query);
     res.json(analyzer.guardDecisionList({ sessionId, agentId, turnId, llmCallId, toolName, limit }));
   });
 
   router.get('/guard/by-tool', (req, res) => {
-    const { sessionId, agentId, turnId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId, turnId } = observeFilterQuerySchema.parse(req.query);
     res.json(analyzer.guardStatsByTool({ sessionId, agentId, turnId }));
   });
 
   // ===== Compaction =====
   router.get('/compaction', (req, res) => {
-    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
+    const { sessionId, agentId } = observeCompactionQuerySchema.parse(req.query);
     res.json(analyzer.compactionStats({ sessionId, agentId }));
   });
 
   router.get('/compaction/list', (req, res) => {
-    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
-    const limit = parseInt(req.query.limit as string) || 100;
+    const { sessionId, agentId, limit } = observeCompactionListQuerySchema.parse(req.query);
     res.json(analyzer.compactionList({ sessionId, agentId, limit }));
   });
 
   // ===== Inferences =====
   router.get('/inferences', (req, res) => {
-    const { sessionId, agentId, turnId, model } = req.query as Record<string, string | undefined>;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const since = req.query.since ? parseInt(req.query.since as string) : undefined;
-    const until = req.query.until ? parseInt(req.query.until as string) : undefined;
+    const { sessionId, agentId, turnId, model, since, until, limit } =
+      observeInferenceListQuerySchema.parse(req.query);
     res.json(analyzer.inferenceList({ sessionId, agentId, turnId, model, since, until, limit }));
   });
 
@@ -90,8 +98,7 @@ export function createObserveRouter(observer: Observer): Router {
 
   // ===== Turns (NEW) =====
   router.get('/turns', (req, res) => {
-    const { sessionId, agentId } = req.query as Record<string, string | undefined>;
-    const limit = parseInt(req.query.limit as string) || 50;
+    const { sessionId, agentId, limit } = observeTurnListQuerySchema.parse(req.query);
     res.json(analyzer.turnList({ sessionId, agentId, limit }));
   });
 
@@ -102,13 +109,13 @@ export function createObserveRouter(observer: Observer): Router {
   });
 
   router.get('/turns/:id/inferences', (req, res) => {
-    const limit = parseInt(req.query.limit as string) || 50;
+    const { limit } = observeLimit50QuerySchema.parse(req.query);
     res.json(analyzer.inferenceList({ turnId: req.params.id, limit }));
   });
 
   // ===== Sessions =====
   router.get('/sessions', (req, res) => {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const { limit } = observeRecentSessionsQuerySchema.parse(req.query);
     res.json(analyzer.recentSessions(limit));
   });
 
@@ -130,7 +137,7 @@ export function createObserveRouter(observer: Observer): Router {
   });
 
   router.get('/agents/:id/sessions', (req, res) => {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const { limit } = observeRecentSessionsQuerySchema.parse(req.query);
     res.json(analyzer.recentSessions(limit, req.params.id));
   });
 

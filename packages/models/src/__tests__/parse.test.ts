@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseModelRef, formatRawRef } from '../parse.js';
+import { parseModelRef } from '../parse.js';
 
 describe('parseModelRef', () => {
   it('parses tier:X forms', () => {
@@ -27,57 +27,14 @@ describe('parseModelRef', () => {
     });
   });
 
-  it('parses raw:JSON inline', () => {
-    const spec = 'raw:' + JSON.stringify({
-      type: 'anthropic',
-      apiKey: 'sk-xxx',
-      model: 'claude-opus-4.7',
-      baseUrl: 'https://api.anthropic.com',
-    });
-    const parsed = parseModelRef(spec);
-    expect(parsed.kind).toBe('raw');
-    if (parsed.kind === 'raw') {
-      expect(parsed.config.apiKey).toBe('sk-xxx');
-      expect(parsed.config.baseUrl).toBe('https://api.anthropic.com');
-    }
-  });
-
-  it('parses raw:base64(JSON)', () => {
-    const payload = JSON.stringify({
-      type: 'openai',
-      apiKey: 'sk-yyy',
-      model: 'gpt-5',
-    });
-    const b64 = Buffer.from(payload, 'utf-8').toString('base64');
-    const parsed = parseModelRef(`raw:${b64}`);
-    expect(parsed.kind).toBe('raw');
-    if (parsed.kind === 'raw') {
-      expect(parsed.config.type).toBe('openai');
-      expect(parsed.config.apiKey).toBe('sk-yyy');
-    }
-  });
-
-  it('rejects malformed raw payloads', () => {
-    expect(() => parseModelRef('raw:{not json')).toThrow(/not valid JSON/);
-    expect(() => parseModelRef('raw:{"type":"invalid"}')).toThrow(/invalid type/);
-    expect(() => parseModelRef('raw:{"type":"anthropic"}')).toThrow(/missing apiKey/);
+  it('rejects raw provider payloads in model refs', () => {
+    expect(() => parseModelRef('raw:{"type":"anthropic","apiKey":"sk","model":"m"}')).toThrow(
+      /raw: model references are not supported/,
+    );
   });
 
   it('rejects empty input', () => {
     expect(() => parseModelRef('')).toThrow(/Empty model reference/);
   });
 
-  it('round-trips via formatRawRef', () => {
-    const cfg = {
-      type: 'anthropic' as const,
-      apiKey: 'sk-zzz',
-      model: 'claude-opus-4.7',
-    };
-    const spec = formatRawRef(cfg);
-    const parsed = parseModelRef(spec);
-    expect(parsed.kind).toBe('raw');
-    if (parsed.kind === 'raw') {
-      expect(parsed.config).toMatchObject(cfg);
-    }
-  });
 });

@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ToolRegistration } from '@berry-agent/core';
+import { PROJECT_CONTEXT_FILE, type ToolRegistration } from '@berry-agent/core';
 import { chunkMarkdown } from './chunker.js';
 import { hashText } from './hash.js';
 import { ChunkStore, type SearchHit } from './store.js';
@@ -20,8 +20,8 @@ export interface FileMemoryProviderOptions {
   /** Workspace root. MEMORY.md and memory/ are looked up here. */
   workspaceDir: string;
   /**
-   * Optional project root. When set, the provider also indexes the shared
-   * `AGENTS.md` under this directory. Results surface with paths prefixed
+   * Optional project root. When set, the provider also indexes the SDK shared
+   * project context file under this directory. Results surface with paths prefixed
    * `project/` so consumers can distinguish them from personal memory.
    * Intended use case: teammates searching for shared team knowledge.
    */
@@ -46,6 +46,8 @@ const DEFAULT_MIN_SCORE = 0.1; // pure-FTS uses a lower threshold than hybrid 0.
 
 export interface FileMemoryProvider {
   readonly id: 'memory-file';
+  /** Agent startup hook. Builds or refreshes the index. */
+  init(): Promise<void>;
   /** Build or refresh the index. Safe to call repeatedly. */
   sync(): Promise<void>;
   /** Run a memory search directly (for tests / consumers bypassing tools). */
@@ -317,6 +319,7 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
 
   return {
     id: 'memory-file',
+    init: sync,
     sync,
     search,
     get: getExcerpt,
@@ -345,9 +348,9 @@ function listMemoryFiles(workspaceDir: string, projectDir?: string): string[] {
   // with `project/` in the virtual index path so search results make it
   // obvious they're shared, and so consumers can filter by source.
   if (projectDir) {
-    const abs = path.join(projectDir, 'AGENTS.md');
+    const abs = path.join(projectDir, PROJECT_CONTEXT_FILE);
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-      results.push(PROJECT_PREFIX + 'AGENTS.md');
+      results.push(PROJECT_PREFIX + PROJECT_CONTEXT_FILE);
     }
   }
   return results;

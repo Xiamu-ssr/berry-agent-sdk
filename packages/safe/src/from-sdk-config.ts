@@ -12,17 +12,24 @@ import type { ClassifierConfig } from './types.js';
 import { readFileSync } from 'node:fs';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { safeNamespaceSchema } from './schema.js';
+import { resolveClassifierConfig } from './classifier-config.js';
 
 interface RawSdkConfig {
   models?: ModelsRegistry;
   safe?: unknown;
 }
 
+interface ValidSdkConfig {
+  models: ModelsRegistry;
+  safe?: unknown;
+}
+
 /**
  * Derive classifier config fields from an SDK config file.
  *
- * Reads `safe.classifier.*` and `models` from berry-sdk.json.
- * Throws if the file is missing or `safe.classifier.model` is absent.
+ * Reads `safe.classifier.*` and `models` from berry-sdk.json. If
+ * `safe.classifier.model` is absent, the safe package default (`tier:fast`)
+ * is used when that tier exists.
  */
 export function classifierConfigFromSdk(
   sdkConfigPath: string,
@@ -38,25 +45,17 @@ export function classifierConfigFromSdk(
 > {
   const sdkConfig = readSdkConfig(sdkConfigPath);
   const safeConfig = sdkConfig.safe === undefined ? undefined : safeNamespaceSchema.parse(sdkConfig.safe);
-  const modelRef = safeConfig?.classifier?.model;
-  if (!modelRef) {
+  const resolved = resolveClassifierConfig({ safe: safeConfig, registry: sdkConfig.models });
+  if (!resolved) {
     throw new Error(
-      `safe.classifier.model is required in SDK config "${sdkConfigPath}", ` +
-        'but it was not found. Add it or pass modelRef + registry directly.',
+      `safe.classifier could not be resolved from SDK config "${sdkConfigPath}". ` +
+        'Set safe.classifier.model, configure models.tiers.fast, or pass modelRef + registry directly.',
     );
   }
-  return {
-    modelRef,
-    registry: sdkConfig.models,
-    blockRules: safeConfig?.classifier?.blockRules as string[] | undefined,
-    allowExceptions: safeConfig?.classifier?.allowExceptions as string[] | undefined,
-    skipStage2: safeConfig?.classifier?.skipStage2,
-    maxConsecutiveDenials: safeConfig?.classifier?.maxConsecutiveDenials,
-    maxTotalDenials: safeConfig?.classifier?.maxTotalDenials,
-  };
+  return resolved;
 }
 
-function readSdkConfig(path: string): RawSdkConfig {
+function readSdkConfig(path: string): ValidSdkConfig {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -78,5 +77,8 @@ function readSdkConfig(path: string): RawSdkConfig {
   if (!value.models || typeof value.models !== 'object') {
     throw new Error(`models namespace is required in SDK config "${path}"`);
   }
-  return value;
+  return {
+    models: value.models,
+    safe: value.safe,
+  };
 }

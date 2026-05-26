@@ -111,6 +111,21 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
     ],
   },
 
+  'zenmux-openai': {
+    id: 'zenmux-openai',
+    name: 'ZenMux (OpenAI-compatible)',
+    type: 'openai',
+    baseUrl: 'https://zenmux.ai/api/v1',
+    listModelsPath: '/models',
+    apiKeyDocsUrl: 'https://zenmux.ai/dashboard',
+    knownModels: [
+      'google/gemini-3.1-pro-preview',
+      'openai/gpt-5.1',
+      'anthropic/claude-opus-4.7',
+      'moonshot/kimi-k2.6',
+    ],
+  },
+
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',

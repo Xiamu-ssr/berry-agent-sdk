@@ -6,15 +6,14 @@ import type {
   Session,
   SessionTodoState,
   TodoItem,
-  ToolDefinition,
-  ToolRegistration,
-} from './types.js';
+} from '../session-types.js';
+import type { ToolDefinition, ToolRegistration } from '../tool-types.js';
 import {
   TOOL_TODO_READ,
   TOOL_TODO_WRITE,
   TOOL_SLEEP,
-} from './tool-names.js';
-import { ToolGroup } from './types.js';
+} from '../tool-names.js';
+import { ToolGroup } from '../tool-types.js';
 
 /** Hard upper bound on a single sleep call, to stop agents sleeping forever. */
 export const SLEEP_MAX_SECONDS = 300; // 5 minutes

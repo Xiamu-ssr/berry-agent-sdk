@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { AgentHome } from '../../agent-home.js';
 import { initWorkspace, type AgentMetadata } from '../initializer.js';
 import { FileAgentMemory } from '../file-memory.js';
 import { FileProjectContext } from '../file-project.js';
+import { projectSharedPaths } from '../project-layout.js';
 
 // ===== initWorkspace =====
 
@@ -21,12 +23,13 @@ describe('initWorkspace', () => {
 
   it('creates workspace structure with all expected files', async () => {
     await initWorkspace(root);
+    const home = new AgentHome(root);
 
     // Verify all files exist
-    await access(join(root, 'agent.json'));
-    await access(join(root, 'AGENTS.md'));
-    await access(join(root, 'MEMORY.md'));
-    await access(join(root, 'sessions'));
+    await access(home.metadataPath);
+    await access(home.agentMdPath);
+    await access(home.memoryPath);
+    await access(home.sessionsDir);
   });
 
   it('returns agent metadata with correct fields', async () => {
@@ -59,7 +62,7 @@ describe('initWorkspace', () => {
 
   it('persists metadata as valid JSON in agent.json', async () => {
     await initWorkspace(root);
-    const raw = await readFile(join(root, 'agent.json'), 'utf-8');
+    const raw = await readFile(new AgentHome(root).metadataPath, 'utf-8');
     const parsed = JSON.parse(raw) as AgentMetadata;
     expect(parsed.id).toBeTruthy();
     expect(parsed.name).toBeTruthy();
@@ -138,8 +141,8 @@ describe('FileProjectContext', () => {
     expect(content).toBe('');
   });
 
-  it('loadContext() reads AGENTS.md when it exists', async () => {
-    await writeFile(join(root, 'AGENTS.md'), '# Agents\nTeam guidelines.');
+  it('loadContext() reads the SDK project context file when it exists', async () => {
+    await writeFile(projectSharedPaths(root).contextPath, '# Agents\nTeam guidelines.');
     const content = await ctx.loadContext();
     expect(content).toBe('# Agents\nTeam guidelines.');
   });

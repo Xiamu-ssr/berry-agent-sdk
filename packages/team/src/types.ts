@@ -1,8 +1,8 @@
 /**
  * Team type model.
  *
- * A Team is a named group of Agents rooted at a Project directory, with one
- * Leader and zero or more Teammates. All inter-agent state (message log,
+ * A Team is a named group of managed agent runtimes rooted at a Project
+ * directory, with one Leader and zero or more Teammates. All inter-agent state (message log,
  * worklist) lives under `project/.berry/`.
  *
  * Topology in v1:
@@ -16,9 +16,8 @@
 export type TeammateId = string;
 
 /**
- * A member of the team. Metadata only — the actual Agent instance lives in
- * the host's agent registry (v1.2+: teammates are regular agents, not
- * team-scoped ephemerals).
+ * A member of the team. Metadata only — the live runtime facade lives in
+ * the host registry; Team persists relation state, not runtime state.
  */
 export interface TeammateRecord {
   id: TeammateId;

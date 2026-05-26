@@ -19,9 +19,10 @@
 
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { safeNamespaceSchema } from '@berry-agent/safe';
-import { toolsCommonNamespaceSchema } from '@berry-agent/tools-common';
-import { observeNamespaceSchema } from '@berry-agent/observe';
+import {
+  BERRY_SDK_CONFIG_FIELDS,
+  berrySdkConfigSchema,
+} from './schema.js';
 import type { BerrySdkConfig } from './types.js';
 
 /** Error raised for any failure while reading or validating an SDK config. */
@@ -68,13 +69,6 @@ export function loadSdkConfig(path: string): BerrySdkConfig {
 // Internals
 // ──────────────────────────────────────────────
 
-const ALLOWED_TOP_LEVEL_FIELDS: ReadonlySet<string> = new Set([
-  'models',
-  'safe',
-  'tools-common',
-  'observe',
-]);
-
 function assertExplicitPath(path: unknown): asserts path is string {
   if (typeof path !== 'string' || path.length === 0) {
     throw new SdkConfigError(
@@ -86,131 +80,59 @@ function assertExplicitPath(path: unknown): asserts path is string {
 }
 
 function validateConfig(value: unknown, path: string): BerrySdkConfig {
-  if (!isRecord(value)) {
-    throw new SdkConfigError(
-      `loadSdkConfig: "${path}" must be a JSON object at the top level`,
-      path,
-    );
-  }
-
-  for (const key of Object.keys(value)) {
-    if (!ALLOWED_TOP_LEVEL_FIELDS.has(key)) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${path}" has unknown top-level field "${key}". ` +
-          `Allowed: ${[...ALLOWED_TOP_LEVEL_FIELDS].join(', ')}`,
-        path,
-      );
-    }
-  }
-
-  if (!isRecord(value.models)) {
-    throw new SdkConfigError(
-      `loadSdkConfig: "${path}" is missing required field "models" (must be an object)`,
-      path,
-    );
-  }
-
-  validateModelsRegistry(value.models, path);
-
-  // Optional namespace validation (zod schemas from each package)
-  if (value.safe !== undefined) validateWithZod(safeNamespaceSchema, 'safe', value.safe, path);
-  if (value['tools-common'] !== undefined) validateWithZod(toolsCommonNamespaceSchema, 'tools-common', value['tools-common'], path);
-  if (value.observe !== undefined) validateWithZod(observeNamespaceSchema, 'observe', value.observe, path);
-
-  return value as unknown as BerrySdkConfig;
-}
-
-function validateModelsRegistry(registry: Record<string, unknown>, configPath: string): void {
-  // ── Required sub-objects ──
-  for (const key of ['providers', 'models', 'tiers'] as const) {
-    if (!isRecord(registry[key])) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" has invalid "models.${key}" (expected object)`,
-        configPath,
-      );
-    }
-  }
-
-  const providers = registry.providers as Record<string, unknown>;
-  const bindings = registry.models as Record<string, unknown>;
-  const tiers = registry.tiers as Record<string, unknown>;
-
-  // ── Providers must each be an object with at least an apiKey and presetId ──
-  for (const [providerId, inst] of Object.entries(providers)) {
-    if (!isRecord(inst)) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.providers.${providerId} must be an object`,
-        configPath,
-      );
-    }
-    if (typeof inst.presetId !== 'string' || inst.presetId.length === 0) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.providers.${providerId}.presetId must be a non-empty string`,
-        configPath,
-      );
-    }
-    if (typeof inst.apiKey !== 'string') {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.providers.${providerId}.apiKey must be a string`,
-        configPath,
-      );
-    }
-  }
-
-  // ── Bindings must have non-empty providers[] referencing real providerIds ──
-  for (const [modelId, binding] of Object.entries(bindings)) {
-    if (!isRecord(binding)) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.models.${modelId} must be an object`,
-        configPath,
-      );
-    }
-    if (!Array.isArray(binding.providers) || binding.providers.length === 0) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.models.${modelId}.providers must be a non-empty array`,
-        configPath,
-      );
-    }
-    for (const ref of binding.providers) {
-      if (!isRecord(ref) || typeof ref.providerId !== 'string') {
-        throw new SdkConfigError(
-          `loadSdkConfig: "${configPath}" — models.models.${modelId}.providers[] entries must be objects with a string "providerId"`,
-          configPath,
-        );
-      }
-      if (!(ref.providerId in providers)) {
-        throw new SdkConfigError(
-          `loadSdkConfig: "${configPath}" — models.models.${modelId} references unknown providerId "${ref.providerId}"`,
-          configPath,
-        );
-      }
-    }
-  }
-
-  // ── Tier entries must all point at existing bindings ──
-  for (const [tier, modelId] of Object.entries(tiers)) {
-    if (typeof modelId !== 'string' || !(modelId in bindings)) {
-      throw new SdkConfigError(
-        `loadSdkConfig: "${configPath}" — models.tiers.${tier} points at unknown model "${String(modelId)}"`,
-        configPath,
-      );
-    }
-  }
-}
-
-function validateWithZod(schema: z.ZodTypeAny, namespace: string, value: unknown, configPath: string): void {
-  const result = schema.safeParse(value);
+  const result = berrySdkConfigSchema.safeParse(value);
   if (!result.success) {
-    const details = result.error.issues
-      .map((i) => `${namespace}.${i.path.join('.')}: ${i.message}`)
-      .join('; ');
     throw new SdkConfigError(
-      `loadSdkConfig: "${configPath}" — ${details}`,
-      configPath,
+      formatConfigError(path, result.error.issues),
+      path,
     );
   }
+  return result.data;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+function formatConfigError(configPath: string, issues: z.ZodIssue[]): string {
+  const first = issues[0];
+  if (first && first.code === z.ZodIssueCode.invalid_type && first.path.length === 0) {
+    return `loadSdkConfig: "${configPath}" must be a JSON object at the top level`;
+  }
+
+  if (first && first.code === z.ZodIssueCode.unrecognized_keys && first.path.length === 0) {
+    const keyList = first.keys.map((key) => `"${key}"`).join(', ');
+    return `loadSdkConfig: "${configPath}" has unknown top-level field ${keyList}. ` +
+      `Allowed: ${BERRY_SDK_CONFIG_FIELDS.join(', ')}`;
+  }
+
+  if (first && first.code === z.ZodIssueCode.invalid_type) {
+    const path = formatIssuePath(first.path);
+    if (path === 'models' && first.received === 'undefined') {
+      return `loadSdkConfig: "${configPath}" is missing required field "models" (must be an object)`;
+    }
+    if (
+      (path === 'models.providers' || path === 'models.models' || path === 'models.tiers') &&
+      first.expected === 'object'
+    ) {
+      return `loadSdkConfig: "${configPath}" has invalid "${path}" (expected object)`;
+    }
+  }
+
+  const details = issues.map(formatIssue).join('; ');
+  return `loadSdkConfig: "${configPath}" — ${details}`;
+}
+
+function formatIssue(issue: z.ZodIssue): string {
+  const path = formatIssuePath(issue.path);
+  if (!path) return issue.message;
+
+  if (issue.code === z.ZodIssueCode.invalid_type && issue.expected === 'object') {
+    if (/^models\.models\.[^.]+\.providers\.\d+$/.test(path)) {
+      return `${path} entries must be objects with a string "providerId"`;
+    }
+    return `${path} must be an object`;
+  }
+
+  return `${path} ${issue.message}`;
+}
+
+function formatIssuePath(path: Array<string | number>): string {
+  return path.map(String).join('.');
 }

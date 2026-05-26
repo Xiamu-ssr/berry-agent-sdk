@@ -17,7 +17,7 @@ import { resolve } from 'node:path';
 import { describe, it, expect, beforeAll } from 'vitest';
 
 import { Agent } from '../agent.js';
-import type { AgentConfig, QueryResult, ToolRegistration, AgentEvent } from '../types.js';
+import type { AgentConfig, QueryResult, ToolRegistration, AgentEvent } from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 // Load .env.local from repo root

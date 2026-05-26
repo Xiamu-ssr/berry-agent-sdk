@@ -1,5 +1,5 @@
 // ============================================================
-// SessionController — session lifecycle + crash recovery + manual compaction
+// SessionController — session lifecycle + crash recovery + session views
 // ============================================================
 // Extracted from agent.ts to keep the god class thin. Owns the
 // `crashCheckedSessions` per-process cache internally so Agent doesn't
@@ -8,48 +8,72 @@
 // holds stale refs after Agent.switchModel() / setSystemPrompt() /
 // addTool().
 
+import type { SystemPromptBlock } from '@berry-agent/small-shared-core';
+import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import type {
-  AgentConfig,
   AgentEvent,
   CreateSessionOptions,
-  Provider,
-  ProviderConfig,
   QueryOptions,
-  Session,
-  SessionStore,
-  SystemPromptBlock,
-  TodoItem,
-  ToolRegistration,
-} from '../types.js';
-import { normalizeSystemPrompt } from '../types.js';
-import type { CompactionStrategy } from '../compaction/types.js';
+} from '../agent-runtime-types.js';
+import type { CompactionConfig, CompactionStrategy } from '../compaction/types.js';
+import type { Provider, ProviderConfig } from '../provider-types.js';
+import type { Session, SessionStore, TodoItem } from '../session-types.js';
+import type { ToolRegistration } from '../tool-types.js';
+import { toAgentSessionSummary, toAgentSessionView } from '../chat.js';
+import type { AgentSessionView } from '../chat-types.js';
 import type { CompactionResult } from '../compaction/compactor.js';
-import type { EventLogStore, SessionEvent } from '../event-log/types.js';
+import type { EventLogStore, SessionEvent, SessionEventDraft, SessionEventType } from '../event-log/types.js';
 import type { PromptPack } from '../prompts.js';
 import { detectCrashArtifacts, formatCrashInterject } from '../event-log/crash-detector.js';
-import { preCompactMemoryFlush, runCompaction } from '../compaction-runner.js';
 import type { AgentMemory, ProjectContext } from '../workspace/types.js';
 import {
   createEmptySessionMetadata,
   normalizeLoadedSession,
 } from './session.js';
 import { generateEventId, generateId } from './ids.js';
+import { compactSessionMessages } from './session-compaction.js';
+
+const UI_EVENT_TYPES: SessionEventType[] = [
+  'user_message',
+  'assistant_message',
+  'tool_use',
+  'tool_result',
+  'thinking',
+  'query_start',
+  'query_end',
+  'compaction_marker',
+  'guard_decision',
+  'approval_request',
+  'approval_decision',
+  'delegate_start',
+  'delegate_end',
+  'api_call',
+  'memory_flush',
+  'metadata',
+  'session_start',
+  'api_response',
+  'tool_use_start',
+  'tool_use_end',
+  'crash_recovered',
+];
+
+const SESSION_DETAIL_EVENT_LIMIT = 600;
+const SESSION_LIST_EVENT_LIMIT = 80;
 
 /**
- * Live-ref dependency bag. Fields that can be hot-reloaded on the Agent
- * (provider, providerConfig, systemPrompt, tools map) are exposed as getters
- * so the controller always reads the current value.
+ * Live-ref dependency bag. Fields that can be changed by Agent runtime
+ * controls are exposed as getters so the controller never keeps stale facts.
  */
 export interface SessionControllerDeps {
   readonly sessionStore: SessionStore;
   readonly eventLogStore?: EventLogStore;
-  readonly projectContext?: ProjectContext;
-  readonly memory?: AgentMemory;
-  readonly compactionConfig: AgentConfig['compaction'];
-  readonly compactionStrategy?: CompactionStrategy;
   readonly toolGuardEnabled: boolean;
 
-  /** Live reads of state that Agent may replace. */
+  /** Live reads of state that Agent may replace or learn at runtime. */
+  getProjectContext(): ProjectContext | undefined;
+  getMemory(): AgentMemory | undefined;
+  getCompactionConfig(): CompactionConfig | undefined;
+  getCompactionStrategy(): CompactionStrategy | undefined;
   getProvider(): Provider;
   getProviderConfig(): ProviderConfig;
   getSystemPrompt(): readonly SystemPromptBlock[];
@@ -159,8 +183,10 @@ export class SessionController {
 
     // DURABILITY: write session_start event with complete initial state
     if (d.eventLogStore) {
-      const projectCtx = d.projectContext
-        ? await d.projectContext.loadContext().catch(() => undefined)
+      const projectContext = d.getProjectContext();
+      const compactionConfig = d.getCompactionConfig();
+      const projectCtx = projectContext
+        ? await projectContext.loadContext().catch(() => undefined)
         : undefined;
       const providerConfig = d.getProviderConfig();
       await d.eventLogStore.append(newSession.id, {
@@ -175,8 +201,8 @@ export class SessionController {
         guardEnabled: d.toolGuardEnabled,
         providerType: providerConfig.type,
         model: providerConfig.model,
-        compactionConfig: d.compactionConfig
-          ? { ...d.compactionConfig, enabledLayers: d.compactionConfig.enabledLayers }
+        compactionConfig: compactionConfig
+          ? { ...compactionConfig, enabledLayers: compactionConfig.enabledLayers }
           : undefined,
       });
     }
@@ -222,6 +248,78 @@ export class SessionController {
     await d.sessionStore.save(cleared);
   }
 
+  /** Permanently delete a session's provider context and event log. */
+  async deleteSession(id: string): Promise<void> {
+    await this.deps.sessionStore.delete(id);
+    if (this.deps.eventLogStore) await this.deps.eventLogStore.clear(id);
+  }
+
+  /**
+   * Hydrate a UI/session view from SDK-owned data. `events.jsonl` is used
+   * when present so products can render full history without maintaining
+   * their own message cache.
+   */
+  async getSessionView(
+    id: string,
+    options?: { agentId?: string; eventLimit?: number; fullHistory?: boolean },
+  ): Promise<AgentSessionView | null> {
+    const session = await this.getSession(id);
+    if (!session) return null;
+    const events = this.deps.eventLogStore
+      ? await this.deps.eventLogStore.getEvents(id, options?.fullHistory
+        ? { types: UI_EVENT_TYPES }
+        : { tail: options?.eventLimit ?? SESSION_DETAIL_EVENT_LIMIT, types: UI_EVENT_TYPES })
+      : undefined;
+    return toAgentSessionView(session, { events, agentId: options?.agentId });
+  }
+
+  /** Append a host/runtime event into the SDK-owned session event log. */
+  async appendSessionEvent(sessionId: string, draft: SessionEventDraft): Promise<SessionEvent | null> {
+    if (!this.deps.eventLogStore) return null;
+    const event = {
+      ...draft,
+      id: draft.id ?? generateEventId(),
+      timestamp: draft.timestamp ?? Date.now(),
+      sessionId,
+    } as SessionEvent;
+    await this.deps.eventLogStore.append(sessionId, event);
+    return event;
+  }
+
+  /** List all sessions as hydrated SDK views, newest first. */
+  async listSessionViews(
+    options?: { agentId?: string; includeMessages?: boolean; eventLimit?: number },
+  ): Promise<AgentSessionView[]> {
+    const ids = new Set(await this.listSessions());
+    if (this.deps.eventLogStore) {
+      for (const id of await this.deps.eventLogStore.listSessions()) ids.add(id);
+    }
+    const views: AgentSessionView[] = [];
+    for (const id of ids) {
+      if (options?.includeMessages) {
+        const view = await this.getSessionView(id, {
+          agentId: options.agentId,
+          eventLimit: options.eventLimit ?? SESSION_DETAIL_EVENT_LIMIT,
+        });
+        if (view) views.push(view);
+        continue;
+      }
+
+      const summary = this.deps.sessionStore.loadSummary
+        ? await this.deps.sessionStore.loadSummary(id)
+        : await this.getSession(id);
+      if (!summary) continue;
+      const events = this.deps.eventLogStore
+        ? await this.deps.eventLogStore.getEvents(id, {
+          tail: options?.eventLimit ?? SESSION_LIST_EVENT_LIMIT,
+          types: UI_EVENT_TYPES,
+        })
+        : undefined;
+      views.push(toAgentSessionSummary(summary, { events, agentId: options?.agentId }));
+    }
+    return views.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+
   /** Todos for a session — empty array when none. */
   async getTodos(sessionId: string): Promise<TodoItem[]> {
     const session = await this.deps.sessionStore.load(sessionId);
@@ -239,74 +337,6 @@ export class SessionController {
     sessionId: string,
     options?: { reason?: string },
   ): Promise<CompactionResult> {
-    const d = this.deps;
-    const session = await d.sessionStore.load(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
-
-    // Manual compact always runs hard (user explicitly requested it)
-    const compactLevel: 'hard' = 'hard';
-
-    const fullSystemPrompt = await d.buildSystemPrompt(d.getSystemPrompt());
-    const allowedTools = Array.from(d.getTools().values());
-    const provider = d.getProvider();
-
-    if (d.memory) {
-      const makeBase = () => ({
-        id: generateId(),
-        timestamp: Date.now(),
-        sessionId,
-        turnId: 'compact',
-      });
-      await preCompactMemoryFlush({
-        session,
-        memory: d.memory,
-        provider,
-        systemPrompt: fullSystemPrompt,
-        promptPack: d.getPromptPack(),
-        emit: () => {},
-        appendEvent: async (event: SessionEvent) => {
-          if (d.eventLogStore) await d.eventLogStore.append(sessionId, event);
-        },
-        makeBase,
-      });
-    }
-
-    const { result: compactResult } = await runCompaction({
-      compactionStrategy: d.compactionStrategy,
-      session,
-      compactionConfig: d.compactionConfig,
-      compactLevel,
-      provider,
-      systemPrompt: fullSystemPrompt,
-      promptPack: d.getPromptPack(),
-      allowedTools,
-      emit: () => {},
-      appendEvent: async (event: SessionEvent) => {
-        if (d.eventLogStore) await d.eventLogStore.append(sessionId, event);
-      },
-      makeBase: () => ({
-        id: generateId(),
-        timestamp: Date.now(),
-        sessionId,
-        turnId: 'compact',
-      }),
-    });
-
-    await d.sessionStore.save(session);
-
-    if (d.eventLogStore) {
-      const snapshot: SessionEvent = {
-        id: generateId(),
-        timestamp: Date.now(),
-        sessionId,
-        turnId: 'compact',
-        type: 'messages_snapshot',
-        messages: session.messages,
-        reason: options?.reason ?? 'manual_compact',
-      } as SessionEvent;
-      await d.eventLogStore.append(sessionId, snapshot);
-    }
-
-    return compactResult;
+    return compactSessionMessages(this.deps, sessionId, options);
   }
 }

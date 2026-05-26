@@ -91,21 +91,35 @@ export function ObserveApp({ baseUrl, fetcher }: Props) {
   const nav = (v: View) => setView(v);
 
   const breadcrumbs = getBreadcrumbs(view);
+  const shellClass = isDark
+    ? 'dark bg-[#1b1e22] text-zinc-200'
+    : 'bg-gray-50 text-gray-900';
 
   const tree = (
-    <div className={`flex h-full bg-gray-50 dark:bg-gray-900 ${isDark ? 'dark' : ''}`} data-theme={isDark ? 'dark' : 'light'}>
+    <div
+      className={`flex h-full min-h-0 overflow-hidden ${shellClass}`}
+      data-theme={isDark ? 'dark' : 'light'}
+    >
       {/* Sidebar */}
-      <div className="w-48 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col py-4">
-        <div className="px-4 mb-4">
-          <h2 className="text-sm font-bold text-gray-800 dark:text-gray-100">🔬 Observe</h2>
+      <div className="flex w-52 flex-col border-r border-gray-200 bg-white py-4 dark:border-white/[0.07] dark:bg-[#15171a]">
+        <div className="mb-4 px-4">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-600 dark:border-sky-300/25 dark:bg-sky-300/10 dark:text-sky-200">
+              <BarChart3 size={16} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-zinc-100">Observe</h2>
+              <p className="truncate text-[11px] text-gray-500 dark:text-zinc-500">SDK telemetry</p>
+            </div>
+          </div>
         </div>
         <NavItem icon={<BarChart3 size={16} />} label="Overview" active={view.page === 'overview'} onClick={() => nav({ page: 'overview' })} />
-        <div className="px-4 mt-3 mb-1"><span className="text-xs font-medium text-gray-500 dark:text-gray-400">Records</span></div>
+        <div className="mb-1 mt-3 px-4"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-zinc-600">Records</span></div>
         <NavItem icon={<Bot size={16} />} label="Agents" active={view.page === 'agents' || view.page === 'agent-detail'} onClick={() => nav({ page: 'agents' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Sessions" active={view.page === 'sessions' || view.page === 'session-detail'} onClick={() => nav({ page: 'sessions' })} />
         <NavItem icon={<MessageSquare size={16} />} label="Turns" active={view.page === 'turn-list' || view.page === 'turn-detail'} onClick={() => nav({ page: 'turn-list' })} />
         <NavItem icon={<Cpu size={16} />} label="Inferences" active={view.page === 'inferences' || view.page === 'inference-detail'} onClick={() => nav({ page: 'inferences' })} />
-        <div className="px-4 mt-3 mb-1"><span className="text-xs font-medium text-gray-500 dark:text-gray-400">Analytics</span></div>
+        <div className="mb-1 mt-3 px-4"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-zinc-600">Analytics</span></div>
         <NavItem icon={<DollarSign size={16} />} label="Cost" active={view.page === 'cost'} onClick={() => nav({ page: 'cost' })} />
         <NavItem icon={<Zap size={16} />} label="Cache" active={view.page === 'cache'} onClick={() => nav({ page: 'cache' })} />
         <NavItem icon={<Shield size={16} />} label="Guard" active={view.page === 'guard'} onClick={() => nav({ page: 'guard' })} />
@@ -113,22 +127,22 @@ export function ObserveApp({ baseUrl, fetcher }: Props) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-w-0 flex-1 overflow-y-auto bg-gray-50 dark:bg-[#1b1e22]">
         {/* Breadcrumbs */}
         {breadcrumbs.length > 1 && (
-          <div className="flex items-center gap-1 px-6 pt-4 pb-0 text-xs text-gray-500 dark:text-gray-400">
+          <div className="flex items-center gap-1 border-b border-gray-200 bg-white/70 px-6 py-3 text-xs text-gray-500 backdrop-blur dark:border-white/[0.07] dark:bg-[#1d2126]/90 dark:text-zinc-500">
             {breadcrumbs.map((crumb, i) => (
               <span key={i} className="flex items-center gap-1">
-                {i > 0 && <span className="text-gray-300 dark:text-gray-600">/</span>}
+                {i > 0 && <span className="text-gray-300 dark:text-zinc-700">/</span>}
                 {i < breadcrumbs.length - 1 ? (
                   <button
                     onClick={() => setView(crumb.view)}
-                    className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 hover:underline"
+                    className="text-blue-600 hover:text-blue-700 hover:underline dark:text-sky-300 dark:hover:text-sky-100"
                   >
                     {crumb.label}
                   </button>
                 ) : (
-                  <span className="text-gray-700 dark:text-gray-200 font-medium">{crumb.label}</span>
+                  <span className="font-medium text-gray-700 dark:text-zinc-200">{crumb.label}</span>
                 )}
               </span>
             ))}
@@ -230,10 +244,10 @@ function NavItem({ icon, label, active, onClick }: {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 text-sm w-full text-left transition-colors border-l-2 ${
+      className={`flex w-full items-center gap-2 border-l-2 px-4 py-2 text-left text-sm transition-colors ${
         active
-          ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium border-indigo-500'
-          : 'border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+          ? 'border-blue-500 bg-blue-50 font-medium text-blue-700 dark:border-sky-300 dark:bg-sky-300/10 dark:text-sky-100'
+          : 'border-transparent text-gray-600 hover:bg-gray-50 dark:text-zinc-500 dark:hover:bg-sky-200/[0.06] dark:hover:text-sky-100'
       }`}
     >
       {icon} {label}

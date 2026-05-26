@@ -3,7 +3,8 @@
 // ============================================================
 
 import type { ToolGuard, ToolGuardDecision, AgentScope } from '@berry-agent/core';
-import { resolve, relative } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, resolve, relative } from 'node:path';
 
 /**
  * Deny tool calls matching any pattern in the list.
@@ -47,15 +48,23 @@ export function directoryScope(allowedDir: string): ToolGuard {
       if (typeof value === 'string') {
         // Resolve relative paths against allowedDir, not process.cwd().
         // Without this, path "." resolves to cwd and gets denied.
-        const abs = resolve(resolved, value);
+        const abs = resolveExisting(resolve(resolved, value));
         const rel = relative(resolved, abs);
-        if (rel.startsWith('..')) {
+        if (rel.startsWith('..') || isAbsolute(rel)) {
           return { action: 'deny', reason: `Path "${value}" is outside allowed directory "${allowedDir}"` };
         }
       }
     }
     return { action: 'allow' };
   };
+}
+
+function resolveExisting(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /**

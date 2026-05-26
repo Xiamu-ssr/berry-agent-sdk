@@ -6,7 +6,7 @@
 // counts as a "crash" — the agent, collector, and any analyzer
 // must call these helpers instead of re-implementing the logic.
 
-import type { Message } from '../types.js';
+import type { Message } from '../content-types.js';
 import type { SessionEvent } from './types.js';
 import { CRASH_KIND, type CrashKind } from './constants.js';
 

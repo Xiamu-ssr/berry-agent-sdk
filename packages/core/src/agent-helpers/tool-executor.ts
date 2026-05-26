@@ -6,21 +6,18 @@
 
 import type {
   ToolUseContent,
-  ToolRegistration,
-  ToolGuard,
-  Middleware,
-  MiddlewareContext,
   ContentBlock,
-  Session,
-  AgentEvent,
-} from './types.js';
-import type { SessionEvent } from './event-log/types.js';
+} from '../content-types.js';
+import type { Session } from '../session-types.js';
+import type { ToolGuard, ToolRegistration } from '../tool-types.js';
+import type { AgentEvent, Middleware, MiddlewareContext } from '../agent-runtime-types.js';
+import type { SessionEvent } from '../event-log/types.js';
 
 export interface ExecuteToolsParams {
   toolUses: ToolUseContent[];
   tools: Map<string, ToolRegistration>;
   toolGuard?: ToolGuard;
-  middleware: Middleware[];
+  middleware: readonly Middleware[];
   session: Session;
   emit: (event: AgentEvent) => void;
   appendEvent: (event: SessionEvent) => Promise<void>;
@@ -56,16 +53,13 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
     abortSignal,
   } = params;
 
-  let toolCalls = 0;
-
-  // Emit all tool_call events first
   for (const toolUse of toolUses) {
-    toolCalls++;
     emit({ type: 'tool_call', name: toolUse.name, input: toolUse.input, toolUseId: toolUse.id });
   }
 
   const toolResultBlocks: ContentBlock[] = await Promise.all(
-    toolUses.map(async (toolUse): Promise<ContentBlock> => {
+    toolUses.map(async (toolUse, index): Promise<ContentBlock> => {
+      const callIndex = index + 1;
       const tool = tools.get(toolUse.name);
       if (!tool) {
         const unknownMsg = `Error: unknown tool "${toolUse.name}"`;
@@ -98,8 +92,9 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
             id: session.id,
             cwd,
             model,
+            turnId: makeBase().turnId,
           },
-          callIndex: toolCalls,
+          callIndex,
         });
         const guardDuration = Date.now() - guardStart;
 
@@ -116,7 +111,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
           toolName: toolUse.name,
           input: toolUse.input,
           decision,
-          callIndex: toolCalls,
+          callIndex,
           durationMs: guardDuration,
         });
 
@@ -223,5 +218,5 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
     }),
   );
 
-  return { results: toolResultBlocks, toolCalls };
+  return { results: toolResultBlocks, toolCalls: toolUses.length };
 }

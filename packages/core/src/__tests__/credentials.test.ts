@@ -19,6 +19,11 @@ describe('MemoryCredentialStore', () => {
     store.delete('A');
     expect(store.get('A')).toBeUndefined();
   });
+
+  it('rejects blank credential values', () => {
+    const store = new MemoryCredentialStore();
+    expect(() => store.set('A', '   ')).toThrow(/non-empty string/);
+  });
 });
 
 describe('DefaultCredentialStore', () => {
@@ -47,6 +52,25 @@ describe('DefaultCredentialStore', () => {
     expect(store.get('BERRY_TEST_KEY')).toBe('from-file');
   });
 
+  it('rejects malformed credential files with a clear error', async () => {
+    await fs.writeFile(filePath, '{ bad json');
+    const store = new DefaultCredentialStore({ filePath });
+    expect(() => store.get('BERRY_TEST_KEY')).toThrow(/Failed to parse credential file/);
+  });
+
+  it('rejects non-string credential values instead of leaking wrong runtime types', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ BERRY_TEST_KEY: 123 }));
+    const store = new DefaultCredentialStore({ filePath });
+    expect(() => store.get('BERRY_TEST_KEY')).toThrow(/non-string value/);
+  });
+
+  it('ignores blank credential values in the file', async () => {
+    await fs.writeFile(filePath, JSON.stringify({ BERRY_TEST_KEY: '   ' }));
+    const store = new DefaultCredentialStore({ filePath });
+    expect(store.get('BERRY_TEST_KEY')).toBeUndefined();
+    expect(store.list()).toEqual([]);
+  });
+
   it('env takes precedence over file', async () => {
     await fs.writeFile(filePath, JSON.stringify({ BERRY_TEST_KEY: 'from-file' }));
     process.env.BERRY_TEST_KEY = 'from-env';
@@ -64,6 +88,11 @@ describe('DefaultCredentialStore', () => {
     await store.set('BERRY_TEST_KEY', 'written');
     const raw = await fs.readFile(filePath, 'utf-8');
     expect(JSON.parse(raw)).toMatchObject({ BERRY_TEST_KEY: 'written' });
+  });
+
+  it('set() rejects blank values; delete() is the clearing API', async () => {
+    const store = new DefaultCredentialStore({ filePath });
+    await expect(store.set('BERRY_TEST_KEY', '')).rejects.toThrow(/non-empty string/);
   });
 
   it('set() applies 600 permissions on POSIX', async () => {

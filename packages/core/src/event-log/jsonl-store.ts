@@ -6,9 +6,15 @@
 // Per AGENTS.md, both messages.json and events.jsonl live under
 // the same sessions/<sid>/ subdirectory.
 
-import { readFile, writeFile, appendFile, readdir, mkdir, stat, unlink, rm } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { appendFile, mkdir, open, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { EventLogStore, SessionEvent, GetEventsOptions } from './types.js';
+import { createInterface } from 'node:readline';
+import type { EventLogStore, SessionEvent, GetEventsOptions, SessionEventType } from './types.js';
+import { zSessionEvent } from './schema.js';
+
+const DEFAULT_TAIL_SCAN_BYTES = 16 * 1024 * 1024;
+const TAIL_CHUNK_BYTES = 256 * 1024;
 
 /**
  * File-based EventLogStore using JSONL (one JSON object per line).
@@ -33,7 +39,7 @@ export class FileEventLogStore implements EventLogStore {
   /** Append a single event. */
   async append(sessionId: string, event: SessionEvent): Promise<void> {
     await this.ensureDir(sessionId);
-    const line = JSON.stringify(event) + '\n';
+    const line = JSON.stringify(zSessionEvent.parse(event)) + '\n';
     await appendFile(this.filePath(sessionId), line, 'utf-8');
   }
 
@@ -41,56 +47,40 @@ export class FileEventLogStore implements EventLogStore {
   async appendBatch(sessionId: string, events: SessionEvent[]): Promise<void> {
     if (events.length === 0) return;
     await this.ensureDir(sessionId);
-    const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n';
+    const lines = events.map(e => JSON.stringify(zSessionEvent.parse(e))).join('\n') + '\n';
     await appendFile(this.filePath(sessionId), lines, 'utf-8');
   }
 
   /** Read events with optional filtering. Handles crash recovery (truncates incomplete last line). */
   async getEvents(sessionId: string, options?: GetEventsOptions): Promise<SessionEvent[]> {
-    const raw = await this.readRaw(sessionId);
-    if (!raw) return [];
-
-    const lines = raw.split('\n');
-    let events: SessionEvent[] = [];
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        events.push(JSON.parse(trimmed) as SessionEvent);
-      } catch {
-        // Incomplete last line from crash — skip it (crash recovery)
-      }
+    if (typeof options?.tail === 'number' && options.tail > 0) {
+      return this.getTailEvents(sessionId, options);
     }
-
-    // Apply filters
-    if (options?.types && options.types.length > 0) {
-      const typeSet = new Set(options.types);
-      events = events.filter(e => typeSet.has(e.type));
-    }
-    if (options?.since !== undefined) {
-      const since = options.since;
-      events = events.filter(e => e.timestamp >= since);
-    }
-    if (options?.from !== undefined || options?.to !== undefined) {
-      const from = options?.from ?? 0;
-      const to = options?.to ?? events.length;
-      events = events.slice(from, to);
-    }
-
-    return events;
+    return this.getForwardEvents(sessionId, options);
   }
 
   /** Get event count without full JSON parsing. */
   async count(sessionId: string): Promise<number> {
-    const raw = await this.readRaw(sessionId);
-    if (!raw) return 0;
-    // Count non-empty lines
+    const path = this.filePath(sessionId);
     let count = 0;
-    const lines = raw.split('\n');
-    for (const line of lines) {
-      if (line.trim()) count++;
+    let sawNonWhitespace = false;
+    let lastByte = 0;
+    try {
+      for await (const chunk of createReadStream(path)) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        for (const byte of buf) {
+          if (byte === 10) count++;
+          if (byte !== 10 && byte !== 13 && byte !== 32 && byte !== 9) sawNonWhitespace = true;
+          lastByte = byte;
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return 0;
+      }
+      throw err;
     }
+    if (sawNonWhitespace && lastByte !== 10) count++;
     return count;
   }
 
@@ -139,14 +129,118 @@ export class FileEventLogStore implements EventLogStore {
     return join(this.sessionsDir, safe, 'events.jsonl');
   }
 
-  private async readRaw(sessionId: string): Promise<string | null> {
+  private async getForwardEvents(sessionId: string, options?: GetEventsOptions): Promise<SessionEvent[]> {
+    const path = this.filePath(sessionId);
+    const typeSet = options?.types && options.types.length > 0 ? new Set(options.types) : undefined;
+    const events: SessionEvent[] = [];
+    let index = 0;
     try {
-      return await readFile(this.filePath(sessionId), 'utf-8');
+      const rl = createInterface({
+        input: createReadStream(path, { encoding: 'utf-8' }),
+        crlfDelay: Infinity,
+      });
+      for await (const line of rl) {
+        const event = this.parseLine(line, typeSet);
+        if (!event) continue;
+        if (options?.since !== undefined && event.timestamp < options.since) continue;
+        if (options?.from !== undefined && index < options.from) {
+          index++;
+          continue;
+        }
+        if (options?.to !== undefined && index >= options.to) break;
+        events.push(event);
+        index++;
+      }
+      return events;
     } catch (err: unknown) {
       if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
+        return [];
       }
       throw err;
+    }
+  }
+
+  private async getTailEvents(sessionId: string, options: GetEventsOptions): Promise<SessionEvent[]> {
+    const typeSet = options.types && options.types.length > 0 ? new Set(options.types) : undefined;
+    const limit = Math.max(1, options.tail ?? 1);
+    const lines = await this.readTailLines(sessionId, {
+      minMatchingLines: limit,
+      maxBytes: options.maxBytes ?? DEFAULT_TAIL_SCAN_BYTES,
+      typeSet,
+    });
+    const events: SessionEvent[] = [];
+    for (const line of lines) {
+      const event = this.parseLine(line, typeSet);
+      if (!event) continue;
+      if (options.since !== undefined && event.timestamp < options.since) continue;
+      events.push(event);
+    }
+    return events.slice(-limit);
+  }
+
+  private async readTailLines(
+    sessionId: string,
+    options: { minMatchingLines: number; maxBytes: number; typeSet?: Set<SessionEventType> },
+  ): Promise<string[]> {
+    const path = this.filePath(sessionId);
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(path, 'r');
+      const { size } = await handle.stat();
+      if (size === 0) return [];
+
+      let position = size;
+      let scanned = 0;
+      let prefix = '';
+      let lines: string[] = [];
+      while (position > 0 && scanned < options.maxBytes) {
+        const readSize = Math.min(TAIL_CHUNK_BYTES, position, options.maxBytes - scanned);
+        position -= readSize;
+        scanned += readSize;
+        const buffer = Buffer.allocUnsafe(readSize);
+        await handle.read(buffer, 0, readSize, position);
+        const text = buffer.toString('utf-8') + prefix;
+        const parts = text.split('\n');
+        prefix = parts.shift() ?? '';
+        lines = parts.concat(lines);
+        const matching = this.countLikelyMatchingLines(lines, options.typeSet);
+        if (matching >= options.minMatchingLines) break;
+      }
+      if (position === 0 && prefix.trim()) {
+        lines.unshift(prefix);
+      }
+      return lines.filter((line) => line.trim()).slice(-Math.max(options.minMatchingLines * 4, options.minMatchingLines));
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return [];
+      }
+      throw err;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  private countLikelyMatchingLines(lines: string[], typeSet?: Set<SessionEventType>): number {
+    let count = 0;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      if (typeSet && !lineMayContainType(line, typeSet)) continue;
+      count++;
+    }
+    return count;
+  }
+
+  private parseLine(line: string, typeSet?: Set<SessionEventType>): SessionEvent | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    if (typeSet && !lineMayContainType(trimmed, typeSet)) return null;
+    try {
+      const event = zSessionEvent.parse(JSON.parse(trimmed));
+      if (typeSet && !typeSet.has(event.type)) return null;
+      return event;
+    } catch {
+      // Incomplete last line from crash — skip it (crash recovery).
+      return null;
     }
   }
 
@@ -157,4 +251,11 @@ export class FileEventLogStore implements EventLogStore {
     await mkdir(join(this.sessionsDir, safe), { recursive: true });
     this.ensuredDirs.add(safe);
   }
+}
+
+function lineMayContainType(line: string, typeSet: Set<SessionEventType>): boolean {
+  for (const type of typeSet) {
+    if (line.includes(`"type":"${type}"`) || line.includes(`"type": "${type}"`)) return true;
+  }
+  return false;
 }

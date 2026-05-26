@@ -7,6 +7,7 @@
 // For OS-level isolation, use SandboxedExecutor from @berry-agent/safe.
 
 import { exec, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createCommandEnvironment } from '@berry-agent/core';
 import type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from '@berry-agent/core';
 
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from '@berry-agent/core';
@@ -24,7 +25,7 @@ export class NodeExecutor implements CommandExecutor {
           cwd: options.cwd,
           timeout: options.timeout,
           maxBuffer: options.maxBuffer ?? 1024 * 1024,
-          env: options.env ? { ...process.env, ...options.env } : undefined,
+          env: createCommandEnvironment({ env: options.env }),
         },
         (error, stdout, stderr) => {
           let output = '';
@@ -46,7 +47,7 @@ export class NodeExecutor implements CommandExecutor {
       cwd: options.cwd,
       shell: true,
       stdio: 'pipe',
-      env: options.env ? { ...process.env, ...options.env } : process.env,
+      env: createCommandEnvironment({ env: options.env }),
     }) as ChildProcessWithoutNullStreams;
 
     child.stdout.setEncoding('utf8');

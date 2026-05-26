@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { z, ZodError, type ZodIssue } from 'zod';
 import {
   SystemPromptCacheMode,
   type SystemPromptBlock,
@@ -18,7 +19,7 @@ export interface PromptPack {
   description?: string;
   /** Bump when prompt semantics change so hosts can audit compacted sessions. */
   version: string;
-  /** General runtime behavior. Product/project AGENTS.md is appended after this. */
+  /** General runtime behavior. SDK workspace/project context is appended after this. */
   baseAgent: SystemPromptInput;
   /** System prompt for the summarizer model used during hard compaction. */
   compactSystem: SystemPromptInput;
@@ -65,14 +66,25 @@ const DEFAULT_FILES = {
   memoryFlush: 'memory-flush.md',
 } as const;
 
-type PromptPackManifest = {
-  schemaVersion: typeof SCHEMA_VERSION;
-  id: string;
-  name: string;
-  description?: string;
-  version: string;
-  files?: Partial<typeof DEFAULT_FILES>;
-};
+const zNonBlankString = z.string().refine((value) => value.trim().length > 0, 'must be a non-empty string');
+const zPromptPackFiles = z.object({
+  baseAgent: z.string().optional(),
+  compactSystem: z.string().optional(),
+  compactSummary: z.string().optional(),
+  handoffResumePrefix: z.string().optional(),
+  handoffResumeSuffix: z.string().optional(),
+  memoryFlush: z.string().optional(),
+}).strict();
+const zPromptPackManifest = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: zNonBlankString,
+  name: zNonBlankString,
+  description: z.string().optional(),
+  version: zNonBlankString,
+  files: zPromptPackFiles.optional(),
+}).strict();
+
+type PromptPackManifest = z.infer<typeof zPromptPackManifest>;
 
 const SHARED_COMPACT_SUMMARY = `重要: 只输出文本,不要调用工具。
 
@@ -424,14 +436,15 @@ function stableBlock(text: string): SystemPromptBlock[] {
 }
 
 function readManifest(path: string): PromptPackManifest {
-  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<PromptPackManifest>;
-  if (parsed.schemaVersion !== SCHEMA_VERSION) {
-    throw new Error(`Unsupported prompt pack schema in ${path}: ${parsed.schemaVersion}`);
+  try {
+    return zPromptPackManifest.parse(JSON.parse(readFileSync(path, 'utf-8')));
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const issue = error.issues[0];
+      throw new Error(`Invalid prompt pack manifest ${path}: ${formatIssuePath(issue?.path ?? [])} ${formatIssueMessage(issue)}`);
+    }
+    throw error;
   }
-  if (!parsed.id || !parsed.name || !parsed.version) {
-    throw new Error(`Invalid prompt pack manifest: ${path}`);
-  }
-  return parsed as PromptPackManifest;
 }
 
 function readText(packDirectory: string, file: string): string {
@@ -445,4 +458,16 @@ function systemPromptToMarkdown(input: SystemPromptInput): string {
 function safePackDirName(id: string): string {
   const name = basename(id).replace(/[^a-zA-Z0-9._-]/g, '-');
   return name || DEFAULT_PROMPT_PACK_ID;
+}
+
+function formatIssuePath(path: Array<string | number>): string {
+  if (path.length === 0) return 'manifest';
+  return path.reduce<string>((out, part) => (
+    typeof part === 'number' ? `${out}[${part}]` : `${out}.${part}`
+  ), 'manifest');
+}
+
+function formatIssueMessage(issue: ZodIssue | undefined): string {
+  if (!issue) return 'is invalid';
+  return issue.message;
 }

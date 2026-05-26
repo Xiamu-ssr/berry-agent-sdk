@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
-import type { ContentBlock, Provider, ProviderConfig, ProviderResponse, Session, ToolRegistration } from '../types.js';
+import type { ContentBlock, Provider, ProviderConfig, ProviderResponse, Session, ToolRegistration } from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 // ---- FakeProvider (same pattern as status.test.ts) ----

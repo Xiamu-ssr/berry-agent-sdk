@@ -34,7 +34,7 @@ import type {
   TokenUsage,
   QueryResult,
   DelegateResult,
-} from '../types.js';
+} from '../index.js';
 import { tmpHome } from './helpers.js';
 import { stablePrompt } from './helpers.js';
 

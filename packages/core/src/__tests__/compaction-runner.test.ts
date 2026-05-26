@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { runCompaction } from '../compaction-runner.js';
+import { runCompaction } from '../compaction/runner.js';
 import type {
   AgentEvent,
   Provider,
@@ -8,7 +8,7 @@ import type {
   ProviderResponse,
   Session,
   ToolRegistration,
-} from '../types.js';
+} from '../index.js';
 import type { SessionEvent } from '../event-log/types.js';
 import { stablePrompt } from './helpers.js';
 

@@ -5,6 +5,7 @@
 export { FileEventLogStore } from './jsonl-store.js';
 export { DefaultContextStrategy } from './context-builder.js';
 export { detectCrashArtifacts, formatCrashInterject } from './crash-detector.js';
+export { zSessionEvent } from './schema.js';
 export type { OrphanedToolInfo, CrashDetectionResult } from './crash-detector.js';
 export {
   TOOL_CALL_STATUS,
@@ -28,6 +29,8 @@ export type {
   QueryEndEvent,
   CompactionMarkerEvent,
   GuardDecisionEvent,
+  ApprovalRequestEvent,
+  ApprovalDecisionEvent,
   DelegateStartEvent,
   DelegateEndEvent,
   ApiCallEvent,
@@ -41,6 +44,7 @@ export type {
   ToolUseStartEvent,
   ToolUseEndEvent,
   CrashRecoveredEvent,
+  SessionEventDraft,
   GetEventsOptions,
   EventLogStore,
   ContextStrategy,

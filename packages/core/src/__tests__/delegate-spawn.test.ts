@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
-import { normalizeSystemPrompt } from '../types.js';
+import { normalizeSystemPrompt } from '../index.js';
 import type {
   Provider,
   ProviderRequest,
@@ -9,7 +9,7 @@ import type {
   TokenUsage,
   Session,
   AgentEvent,
-} from '../types.js';
+} from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 // ===== Test Helpers =====
@@ -108,10 +108,14 @@ describe('delegate', () => {
   });
 
   it('includes main conversation history for cache sharing', async () => {
-    // First, have a regular conversation
-    const mainProvider = new SequenceProvider([
+    const provider = new SequenceProvider([
       {
         content: [{ type: 'text', text: 'Hello there!' }],
+        stopReason: 'end_turn',
+        usage: makeUsage(),
+      },
+      {
+        content: [{ type: 'text', text: 'summary done' }],
         stopReason: 'end_turn',
         usage: makeUsage(),
       },
@@ -120,27 +124,17 @@ describe('delegate', () => {
     const agent = new Agent({
       home: tmpHome(),
       provider: { type: 'anthropic', apiKey: 'test', model: 'test-model' },
-      providerInstance: mainProvider,
+      providerInstance: provider,
       systemPrompt: stablePrompt('You are helpful.'),
     });
 
     await agent.send('Hi');
 
-    // Now swap provider for the delegate call
-    const delegateProvider = new SequenceProvider([
-      {
-        content: [{ type: 'text', text: 'summary done' }],
-        stopReason: 'end_turn',
-        usage: makeUsage(),
-      },
-    ]);
-    // Inject new provider via the internal field
-    (agent as any).provider = delegateProvider;
-
     const result = await agent.delegate('Summarize our conversation');
+    expect(result.text).toBe('summary done');
 
     // The delegate should have received the main conversation messages as cache prefix
-    const request = delegateProvider.chatSpy.mock.calls[0]![0] as ProviderRequest;
+    const request = provider.chatSpy.mock.calls[1]![0] as ProviderRequest;
     // Messages: [user: "Hi", assistant: "Hello there!", user: (tool_result), user: "Summarize..."]
     // Note: the main session stores tool_result messages even when there are no tools
     expect(request.messages.length).toBeGreaterThanOrEqual(3);

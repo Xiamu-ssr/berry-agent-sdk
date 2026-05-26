@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AnthropicProvider } from '../providers/anthropic.js';
 import { OpenAIProvider } from '../providers/openai.js';
-import type { ProviderRequest, ProviderStreamEvent } from '../types.js';
+import type { ProviderRequest, ProviderStreamEvent } from '../index.js';
 import { stablePrompt } from './helpers.js';
 
 async function collect(iterable: AsyncIterable<ProviderStreamEvent>) {
@@ -109,7 +109,11 @@ describe('provider streaming', () => {
           ],
           stopReason: 'tool_use',
           usage: {
-            inputTokens: 11,
+            // TokenUsage contract: inputTokens is the *total* input billed,
+            // cache included. Anthropic wire reports input_tokens=11 excluding
+            // cache, so the synthesized total is 11 + 9 (cache_read) + 2
+            // (cache_creation) = 22.
+            inputTokens: 22,
             outputTokens: 7,
             cacheWriteTokens: 2,
             cacheReadTokens: 9,
@@ -221,5 +225,59 @@ describe('provider streaming', () => {
         }),
       }),
     ]);
+  });
+
+  it('keeps non-object streaming tool arguments as raw boundary data', async () => {
+    const provider = new OpenAIProvider({
+      type: 'openai',
+      apiKey: 'test',
+      model: 'gpt-5.4',
+    });
+
+    (provider as any).client = {
+      chat: {
+        completions: {
+          create: async () => ({
+            async *[Symbol.asyncIterator]() {
+              yield {
+                id: 'chunk_1',
+                model: 'gpt-5.4',
+                choices: [
+                  {
+                    index: 0,
+                    finish_reason: 'tool_calls',
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: 'call_bad',
+                          type: 'function',
+                          function: {
+                            name: 'bad_args',
+                            arguments: '[]',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                ],
+                usage: { prompt_tokens: 1, completion_tokens: 1 },
+              };
+            },
+          }),
+        },
+      },
+    };
+
+    const events = await collect(provider.stream!(request));
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: 'response',
+      response: expect.objectContaining({
+        content: [
+          { type: 'tool_use', id: 'call_bad', name: 'bad_args', input: { _raw: '[]' } },
+        ],
+      }),
+    }));
   });
 });

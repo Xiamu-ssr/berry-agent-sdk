@@ -5,6 +5,7 @@
 // the preset's `knownModels` when the provider doesn't expose an endpoint
 // or the call fails (auth, network, schema drift).
 
+import { z } from 'zod';
 import type { ProviderPreset, ProviderInstance } from './types.js';
 import { getPreset, RAW_PRESET_ID } from './presets.js';
 
@@ -25,6 +26,21 @@ export interface ListModelsResult {
   /** Non-fatal error message when live fetch failed and we fell back. */
   warning?: string;
 }
+
+const modelListItemSchema = z.union([
+  z.string(),
+  z.object({ id: z.string() }),
+]).transform((item) => (typeof item === 'string' ? item : item.id));
+
+const modelListSchema = z.array(modelListItemSchema).transform((ids) =>
+  ids.filter((id) => id.length > 0),
+);
+
+const modelListResponseSchema = z.union([
+  z.object({ data: modelListSchema }).transform((body) => body.data),
+  z.object({ models: modelListSchema }).transform((body) => body.models),
+  modelListSchema,
+]);
 
 /**
  * List available models for a provider instance. Handles built-in presets and
@@ -127,28 +143,8 @@ function joinUrl(base: string, path: string): string {
  *   - [{ id: string }, ...]                    (bare array)
  */
 function extractModelIds(body: unknown): string[] {
-  if (!body || typeof body !== 'object') return [];
-  const anyBody = body as Record<string, unknown>;
-
-  const candidates = [
-    anyBody.data,
-    anyBody.models,
-    Array.isArray(body) ? body : undefined,
-  ].filter(Array.isArray) as unknown[][];
-
-  for (const arr of candidates) {
-    const ids = arr
-      .map((item) => {
-        if (typeof item === 'string') return item;
-        if (item && typeof item === 'object' && 'id' in item && typeof (item as any).id === 'string') {
-          return (item as any).id as string;
-        }
-        return null;
-      })
-      .filter((x): x is string => typeof x === 'string' && x.length > 0);
-    if (ids.length > 0) return ids;
-  }
-  return [];
+  const result = modelListResponseSchema.safeParse(body);
+  return result.success ? result.data : [];
 }
 
 function sortUnique(values: string[]): string[] {

@@ -5,14 +5,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
 import { TOOL_SLEEP } from '../tool-names.js';
-import { SLEEP_MAX_SECONDS } from '../runtime-tools.js';
+import { SLEEP_MAX_SECONDS } from '../agent-helpers/runtime-tools.js';
 import type {
   AgentEvent,
   AgentStatus,
   ProviderConfig,
   ProviderResponse,
   Provider,
-} from '../types.js';
+} from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 const STATUS_WAIT_TIMEOUT_MS = 1_000;

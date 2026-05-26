@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadSkillsFromDir, loadSkill, buildSkillIndex } from '../skills/loader.js';
+import { loadSkillsFromDir, loadSkill, listSkillNamesSync, buildSkillIndex } from '../skills/loader.js';
 
 let tempDir: string;
 
@@ -126,6 +126,13 @@ describe('loadSkillsFromDir', () => {
   it('returns empty for nonexistent directory', async () => {
     const skills = await loadSkillsFromDir('/nonexistent/path');
     expect(skills).toEqual([]);
+  });
+});
+
+describe('listSkillNamesSync', () => {
+  it('lists skill names using the same one-level SKILL.md rules', () => {
+    expect(listSkillNamesSync(tempDir).sort()).toEqual(['code-review', 'quick-test', 'todoist-cli']);
+    expect(listSkillNamesSync('/nonexistent/path')).toEqual([]);
   });
 });
 

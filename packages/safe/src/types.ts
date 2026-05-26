@@ -16,7 +16,7 @@ export type GuardRule = (toolName: string, input: Record<string, unknown>) => To
 export interface ClassifierConfig {
   /**
    * Model reference string resolved via the models registry.
-   * Examples: 'tier:fast', 'model:claude-sonnet-4-20250514', 'raw:...'
+   * Examples: 'tier:fast', 'model:claude-sonnet-4-20250514', or a bare model id.
    * Required unless `sdkConfigPath` is provided.
    */
   modelRef?: string;

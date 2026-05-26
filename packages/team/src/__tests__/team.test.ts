@@ -1,19 +1,22 @@
 /**
  * Team unit tests.
  *
- * We can't easily instantiate a real Agent here without a provider, so we
- * exercise:
+ * The team package speaks to live agents through a narrow runtime facade, so
+ * most unit coverage exercises:
  *   - TeamStore persistence (team.json + messages.jsonl)
  *   - Team state mutation / reload semantics
  *   - Leader-id drift detection on reopen
  *
- * Live leader/teammate Agent wiring is integration-tested by host products.
+ * Live leader/teammate runtime wiring is integration-tested by host products.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TeamStore } from '../store.js';
+import { projectSharedPaths } from '@berry-agent/core';
+import { TeamStore, readTeamLeaderId } from '../store.js';
+import { Team } from '../team.js';
 import { WorklistStore, WorklistError } from '../worklist.js';
 import type { TeamState, TeamMessage } from '../types.js';
 
@@ -46,8 +49,9 @@ describe('TeamStore', () => {
     const loaded = await store.load();
     expect(loaded).toEqual(state);
     // Verify the file is pretty-printed (easier to eyeball during debug).
-    const raw = await readFile(join(project, '.berry', 'team.json'), 'utf-8');
+    const raw = await readFile(projectSharedPaths(project).teamPath, 'utf-8');
     expect(raw).toContain('\n  "name"');
+    expect(await readTeamLeaderId(project)).toBe('orange');
   });
 
   it('persists teammate additions', async () => {
@@ -80,6 +84,26 @@ describe('TeamStore', () => {
     expect(loaded).toEqual(messages);
   });
 
+  it('validates persisted team snapshots and message log rows', async () => {
+    const store = new TeamStore(project);
+    const state: TeamState = {
+      name: 'sdk-dev-team',
+      project,
+      leaderId: 'orange',
+      teammates: [],
+      createdAt: 1000,
+    };
+    await store.save(state);
+    await writeFile(projectSharedPaths(project).teamPath, JSON.stringify({ ...state, teammates: [{}] }), 'utf-8');
+
+    await expect(store.load()).rejects.toThrow();
+
+    await store.appendMessage({ id: 'a', ts: 1, from: '@leader', to: 'reviewer', content: 'please review' });
+    await writeFile(projectSharedPaths(project).teamMessagesPath, '{"id":""}\n', 'utf-8');
+
+    await expect(store.readMessages()).rejects.toThrow();
+  });
+
   it('atomic save survives when tmp file interrupts (no partial write leak)', async () => {
     // Not a true crash sim — but at least verify we never leave a
     // half-written team.json under a torn rename.
@@ -104,6 +128,15 @@ describe('WorklistStore', () => {
     const state = await w.load();
     expect(state.tasks).toEqual([]);
     expect(state.nextId).toBe(1);
+  });
+
+  it('validates persisted worklist snapshots', async () => {
+    const w = new WorklistStore(project);
+    await w.create('@leader', { title: 'build feature X' });
+    await writeFile(projectSharedPaths(project).worklistPath, JSON.stringify({ tasks: [], nextId: -1, updatedAt: 1 }), 'utf-8');
+    const reloaded = new WorklistStore(project);
+
+    await expect(reloaded.load()).rejects.toThrow();
   });
 
   it('leader creates unclaimed tasks, teammate creates self-assigned', async () => {
@@ -187,5 +220,87 @@ describe('WorklistStore', () => {
     // nextId survives so new tasks don't collide
     const t3 = await w2.create('@leader', { title: 'c' });
     expect(t3.id).toBe('T-0003');
+  });
+});
+
+describe('Team hands', () => {
+  it('exposes leader and teammate tools through SDK hands', async () => {
+    const team = await Team.open({
+      leaderId: 'orange',
+      project,
+      name: 'sdk-dev-team',
+    });
+
+    const leaderHand = team.leaderHand();
+    expect(leaderHand.kind).toBe('team');
+    expect(leaderHand.capabilities().map((cap) => cap.id)).toEqual([
+      'spawn_teammate',
+      'message_teammate',
+      'list_team',
+      'disband_teammate',
+      'worklist',
+      'read_team_inbox',
+    ]);
+
+    const teammateHand = team.teammateHand('reviewer');
+    expect(teammateHand.kind).toBe('team');
+    expect(teammateHand.capabilities().map((cap) => cap.id)).toEqual([
+      'message_leader',
+      'worklist',
+    ]);
+  });
+
+  it('validates worklist tool inputs before mutating team state', async () => {
+    const team = await Team.open({
+      leaderId: 'orange',
+      project,
+      name: 'sdk-dev-team',
+    });
+    const leaderHand = team.leaderHand();
+    const context = {
+      cwd: project,
+      handId: leaderHand.id,
+      handKind: leaderHand.kind,
+      capability: leaderHand.capabilities().find((cap) => cap.id === 'worklist')!,
+    };
+
+    const created = await leaderHand.execute({
+      capabilityId: 'worklist',
+      input: { action: 'create', title: 'ship' },
+    }, context);
+    expect(created.isError).toBeUndefined();
+
+    const invalid = await leaderHand.execute({
+      capabilityId: 'worklist',
+      input: { action: 'update', id: 'T-0001', status: 'almost_done' },
+    }, context);
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content).toContain('status');
+
+    const tasks = await team.worklist.list();
+    expect(tasks[0].status).toBe('unclaimed');
+  });
+});
+
+describe('Team disband', () => {
+  it('removes team-owned project artifacts', async () => {
+    const team = await Team.open({
+      leaderId: 'orange',
+      project,
+      name: 'sdk-dev-team',
+    });
+    await team.store.appendMessage({ id: 'm1', ts: 1, from: '@leader', to: '@broadcast', content: 'hello' });
+    await team.worklist.create('@leader', { title: 'ship' });
+
+    const paths = projectSharedPaths(project);
+    expect(existsSync(paths.teamPath)).toBe(true);
+    expect(existsSync(paths.teamMessagesPath)).toBe(true);
+    expect(existsSync(paths.worklistPath)).toBe(true);
+
+    await team.disband();
+
+    expect(existsSync(paths.teamPath)).toBe(false);
+    expect(existsSync(paths.teamMessagesPath)).toBe(false);
+    expect(existsSync(paths.worklistPath)).toBe(false);
   });
 });

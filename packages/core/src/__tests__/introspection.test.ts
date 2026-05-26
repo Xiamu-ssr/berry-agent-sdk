@@ -9,7 +9,7 @@ import type {
   ProviderConfig,
   ProviderResponse,
   ToolRegistration,
-} from '../types.js';
+} from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 class FakeProvider implements Provider {
@@ -107,5 +107,22 @@ describe('getMCP', () => {
     const snap = agent.snapshot();
     expect(snap.mcp).toEqual(agent.getMCP());
     expect(snap.mcp.map((s) => s.server)).toEqual(['alpha', 'beta']);
+  });
+
+  it('snapshot() and currentProvider never expose provider apiKey', () => {
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { ...providerConfig, apiKey: 'sk-secret' },
+      providerInstance: new FakeProvider(),
+      systemPrompt: stablePrompt('x'),
+    });
+
+    expect(agent.currentProvider).toMatchObject({
+      type: 'anthropic',
+      model: 'fake',
+      apiKeyConfigured: true,
+    });
+    expect('apiKey' in agent.currentProvider).toBe(false);
+    expect('apiKey' in agent.snapshot().provider).toBe(false);
   });
 });

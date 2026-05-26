@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { askList } from '../guards/ask-list.js';
 
 const baseCtx = {
-  session: { id: 'test', cwd: '/tmp', model: 'test' },
+  session: { id: 'test', cwd: '/tmp', model: 'test', turnId: 'turn_1' },
   callIndex: 1,
 };
 
@@ -52,11 +52,12 @@ describe('askList', () => {
     expect((result as any).reason).toContain('timed out');
   });
 
-  it('forwards tool name, input, and reason to the bridge', async () => {
+  it('forwards tool name, input, agent/session identity, and reason to the bridge', async () => {
     const ask = vi.fn(async () => ({ approved: true }));
     const guard = askList({
       tools: ['shell'],
       ask,
+      agentId: 'agent_1',
       reason: 'shell exec needs sign-off',
     });
     await guard({ toolName: 'shell', input: { command: 'ls' }, ...baseCtx });
@@ -64,6 +65,8 @@ describe('askList', () => {
     const question = ask.mock.calls[0]![0];
     expect(question.toolName).toBe('shell');
     expect(question.input).toEqual({ command: 'ls' });
+    expect(question.agentId).toBe('agent_1');
+    expect(question.session).toEqual(baseCtx.session);
     expect(question.reason).toBe('shell exec needs sign-off');
   });
 });

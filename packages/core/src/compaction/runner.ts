@@ -4,27 +4,23 @@
 // Extracted from agent.ts: compaction decision-making, memory
 // flush, and compaction orchestration.
 
-import type {
-  Session,
-  CompactionConfig,
-  CompactionLayer,
-  Provider,
-  ToolRegistration,
-  AgentEvent,
-  SystemPromptBlock,
-} from './types.js';
-import type { SessionEvent } from './event-log/types.js';
-import type { AgentMemory } from './workspace/types.js';
-import type { CompactionStrategy } from './compaction/types.js';
-import { compact, estimateTokens, type ForkContext, type CompactionResult } from './compaction/compactor.js';
+import type { SystemPromptBlock } from '@berry-agent/small-shared-core';
+import type { AgentEvent } from '../agent-runtime-types.js';
+import type { CompactionConfig, CompactionLayer, CompactionStrategy } from './types.js';
+import type { Provider } from '../provider-types.js';
+import type { Session } from '../session-types.js';
+import type { ToolRegistration } from '../tool-types.js';
+import type { SessionEvent } from '../event-log/types.js';
+import type { AgentMemory } from '../workspace/types.js';
+import { compact, estimateTokens, type ForkContext, type CompactionResult } from './compactor.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
   DEFAULT_SOFT_COMPACTION_RATIO,
   DEFAULT_SOFT_LAYERS,
   COMPACTION_TRIGGER_REASON,
-} from './constants.js';
-import { DEFAULT_PROMPT_PACK, type PromptPack } from './prompts.js';
+} from '../constants.js';
+import { DEFAULT_PROMPT_PACK, type PromptPack } from '../prompts.js';
 
 /**
  * Determine the current full-context token count for compaction decisions.
@@ -129,8 +125,12 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
 
   const ctxWindow = compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const messageTokensBefore = estimateTokens(session.messages);
-  // contextBefore is the full input tokens (system+tools+messages) from the last API response
-  const contextBefore = session.metadata.lastInputTokens ?? messageTokensBefore;
+  // contextBefore is the full input tokens (system+tools+messages) the model
+  // most recently observed. Prefer the API's authoritative `lastInputTokens`,
+  // but fall back to local estimate when it's missing OR has been zeroed by a
+  // bad upstream response (treat 0 as "no observation", not "empty context").
+  const lastInput = session.metadata.lastInputTokens;
+  const contextBefore = lastInput && lastInput > 0 ? lastInput : messageTokensBefore;
   // Overhead = system_prompt + tools tokens (anything that isn't messages)
   const nonMessageOverhead = Math.max(0, contextBefore - messageTokensBefore);
   const thresholdPct = contextBefore / ctxWindow;
@@ -152,9 +152,18 @@ export async function runCompaction(params: RunCompactionParams): Promise<RunCom
       : compactionConfig?.threshold,
     enabledLayers: layersForLevel,
   };
+  // Pass nonMessageOverhead so the compactor can keep its messages-only
+  // estimate on the same scale as the full-input threshold (see compactor.ts
+  // unit contract). This is what makes the layer loop actually fire when
+  // system+tools are heavy — the historical bug.
   const result = params.compactionStrategy
-    ? await params.compactionStrategy.compact(session.messages, compactCfg, { contextWindow: ctxWindow })
-    : await compact(session.messages, compactCfg, provider, forkCtx, promptPack);
+    ? await params.compactionStrategy.compact(session.messages, compactCfg, {
+        contextWindow: ctxWindow,
+        nonMessageOverhead,
+      })
+    : await compact(session.messages, compactCfg, provider, forkCtx, promptPack, {
+        nonMessageOverhead,
+      });
   const compactDuration = Date.now() - compactStart;
   // contextAfter in full-input terms: system+tools overhead + compressed message tokens
   const messageTokensAfter = estimateTokens(result.messages);

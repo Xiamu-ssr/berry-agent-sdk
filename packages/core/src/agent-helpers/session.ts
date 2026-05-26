@@ -3,7 +3,7 @@
 // ============================================================
 // Pure helpers for constructing / normalizing session state.
 
-import type { Session, SessionMetadata, SessionStore } from '../types.js';
+import type { Session, SessionMetadata, SessionStore } from '../session-types.js';
 
 /** Volatile, single-process session store used when no store is configured. */
 export function createInMemoryStore(): SessionStore {

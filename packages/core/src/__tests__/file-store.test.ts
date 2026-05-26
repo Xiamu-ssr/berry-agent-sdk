@@ -1,11 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { FileSessionStore } from '../session/file-store.js';
-import type { Session } from '../types.js';
+import type { Session } from '../index.js';
 
 const tempDirs: string[] = [];
 
@@ -69,5 +69,18 @@ describe('FileSessionStore', () => {
 
     await expect(store.list()).resolves.toEqual([]);
     await expect(store.load('missing')).resolves.toBeNull();
+  });
+
+  it('validates persisted messages and metadata on load', async () => {
+    const store = await makeStore();
+    await store.save(makeSession('session-1'));
+    const dir = join((store as any).rootDir, encodeURIComponent('session-1'));
+
+    await writeFile(join(dir, 'messages.json'), JSON.stringify([{ role: 'system', content: 'bad' }]), 'utf-8');
+    await expect(store.load('session-1')).rejects.toThrow();
+
+    await store.save(makeSession('session-1'));
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id: 'session-1', createdAt: 1 }), 'utf-8');
+    await expect(store.loadSummary('session-1')).rejects.toThrow();
   });
 });

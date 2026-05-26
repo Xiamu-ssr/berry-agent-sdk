@@ -147,21 +147,22 @@ export function createModelResolver(
 
     reportError(err, hints) {
       lastError = err;
-      if (!shouldFailover(err, hints)) return;
+      if (!shouldFailover(err, hints)) return false;
       // Single-provider short-circuit: rotating the pointer serves no purpose
       // when there is no fallback to rotate to. Advancing the pointer would
       // just set exhausted=true and permanently brick the resolver for the
       // rest of the Agent's lifetime. WithRetry already handles retries on
       // the same provider — the resolver's job is failover, not retry.
-      if (binding.providers.length <= 1) return;
+      if (binding.providers.length <= 1) return false;
       const from = binding.providers[pointer]!;
       pointer += 1;
       if (pointer >= binding.providers.length) {
         exhausted = true;
-        return;
+        return false;
       }
       const to = binding.providers[pointer]!;
       options.onRotate?.(from, to, err);
+      return true;
     },
 
     resetForSession() {

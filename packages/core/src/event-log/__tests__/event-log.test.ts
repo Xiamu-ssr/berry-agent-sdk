@@ -193,6 +193,47 @@ describe('FileEventLogStore', () => {
     expect(events[0].type).toBe('user_message');
   });
 
+  it('skips persisted events that fail the SDK event schema', async () => {
+    const { store, baseDir } = await makeStore();
+    await store.append('ses_bad_event', makeEvent('user_message', 'ses_bad_event', { content: 'valid' }));
+
+    const filePath = join(baseDir, 'sessions', 'ses_bad_event', 'events.jsonl');
+    const raw = await readFile(filePath, 'utf-8');
+    await writeFile(filePath, raw + JSON.stringify({
+      id: 'bad',
+      timestamp: Date.now(),
+      sessionId: 'ses_bad_event',
+      type: 'user_message',
+      content: 123,
+    }) + '\n', 'utf-8');
+
+    const events = await store.getEvents('ses_bad_event');
+    expect(events).toHaveLength(1);
+    expect(events[0].id).not.toBe('bad');
+  });
+
+  it('rejects appending invalid event objects before they enter events.jsonl', async () => {
+    const { store } = await makeStore();
+    await expect(store.append('ses_invalid', {
+      id: 'bad',
+      timestamp: Date.now(),
+      sessionId: 'ses_invalid',
+      type: 'user_message',
+      content: 123,
+    } as never)).rejects.toThrow();
+  });
+
+  it('rejects malformed query_end result objects before they enter events.jsonl', async () => {
+    const { store } = await makeStore();
+    await expect(store.append('ses_invalid_result', {
+      id: 'bad-result',
+      timestamp: Date.now(),
+      sessionId: 'ses_invalid_result',
+      type: 'query_end',
+      result: { text: 'missing required fields' },
+    } as never)).rejects.toThrow();
+  });
+
   it('handles combined filters: types + from/to', async () => {
     const { store } = await makeStore();
     await store.appendBatch('ses_combo', [
@@ -375,5 +416,25 @@ describe('DefaultContextStrategy', () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0].toolUseId).toBe('tu_1');
     expect(blocks[1].toolUseId).toBe('tu_2');
+  });
+
+  it('repairs displaced tool_result events into the immediate user message', () => {
+    const events: SessionEvent[] = [
+      { id: 'e1', timestamp: 1, sessionId: 's', type: 'user_message', content: 'run tool' },
+      { id: 'e2', timestamp: 2, sessionId: 's', type: 'assistant_message', content: [
+        { type: 'tool_use', id: 'tu_1', name: 'lookup', input: {} },
+      ]},
+      { id: 'e3', timestamp: 3, sessionId: 's', type: 'user_message', content: 'extra human note' },
+      { id: 'e4', timestamp: 4, sessionId: 's', type: 'tool_result', toolUseId: 'tu_1', content: 'lookup result', isError: false },
+    ];
+
+    const messages = strategy.buildMessages(events);
+
+    expect(messages).toHaveLength(3);
+    expect(messages[2].role).toBe('user');
+    expect(messages[2].content).toEqual([
+      { type: 'tool_result', toolUseId: 'tu_1', content: 'lookup result', isError: undefined },
+      { type: 'text', text: 'extra human note' },
+    ]);
   });
 });

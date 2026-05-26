@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { compact, estimateTokens } from '../compaction/compactor.js';
-import { normalizeSystemPrompt } from '../types.js';
-import type { Message, Provider, ProviderRequest, ProviderResponse, ContentBlock } from '../types.js';
+import { normalizeSystemPrompt } from '../index.js';
+import type { Message, Provider, ProviderRequest, ProviderResponse, ContentBlock } from '../index.js';
 import { stablePrompt } from './helpers.js';
 
 class FakeProvider implements Provider {
@@ -145,11 +145,71 @@ describe('compact', () => {
 
       const userMsg = result.messages[i * 2 + 1];
       expect(userMsg.compacted).toBe(true);
-      expect((userMsg.content as any[])[0].content).toBe('[compacted]');
+      // user side is degraded to a plain text block — the tool_result
+      // structure (and toolUseId) is dropped on purpose so it can never go
+      // out of sync with the assistant side and produce orphan references.
+      const userBlocks = userMsg.content as ContentBlock[];
+      expect(userBlocks).toHaveLength(1);
+      expect(userBlocks[0].type).toBe('text');
+      expect((userBlocks[0] as any).text).toBe('[tool results compacted]');
+      // Sanity: no tool_result blocks survive on compacted user messages.
+      expect(userBlocks.some(b => b.type === 'tool_result')).toBe(false);
     }
     // Last 5 pairs (indices 6-15) should be untouched
     const lastToolUse = result.messages[6];
     expect(lastToolUse.compacted).toBeUndefined();
+  });
+
+  // Regression: historical 400 from Anthropic was caused by clear_tool_pairs
+  // dropping tool_use blocks on the assistant side while keeping tool_result
+  // (with its toolUseId) on the user side. The orphan tool_use_id triggered:
+  //   "unexpected `tool_use_id` found in `tool_result` blocks: ... .
+  //    Each `tool_result` block must have a corresponding `tool_use` block
+  //    in the previous message."
+  // After compaction, every surviving tool_result.toolUseId MUST resolve to a
+  // tool_use.id in the immediately preceding assistant message.
+  it('clear_tool_pairs never produces orphan tool_result references', async () => {
+    const messages: Message[] = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `t_${i}`, name: `tool_${i}`, input: { n: i, payload: 'x'.repeat(200) } }],
+      });
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', toolUseId: `t_${i}`, content: `${'result-data '.repeat(50)} ${i}` }],
+      });
+    }
+
+    const result = await compact(
+      messages,
+      { ...FORCE_COMPACT, enabledLayers: ['clear_tool_pairs'] },
+      new FakeProvider(),
+    );
+
+    // Walk the result and assert every tool_result has a matching tool_use
+    // in the previous message.
+    for (let i = 0; i < result.messages.length; i++) {
+      const msg = result.messages[i];
+      if (!Array.isArray(msg.content)) continue;
+      const toolResults = (msg.content as ContentBlock[]).filter(b => b.type === 'tool_result');
+      if (toolResults.length === 0) continue;
+
+      const prev = result.messages[i - 1];
+      expect(prev, `tool_result at msg[${i}] has no previous assistant message`).toBeDefined();
+      expect(Array.isArray(prev.content)).toBe(true);
+      const toolUseIds = new Set(
+        (prev.content as ContentBlock[])
+          .filter(b => b.type === 'tool_use')
+          .map(b => (b as any).id as string),
+      );
+      for (const tr of toolResults) {
+        expect(
+          toolUseIds.has((tr as any).toolUseId),
+          `orphan tool_result.toolUseId=${(tr as any).toolUseId} at msg[${i}]`,
+        ).toBe(true);
+      }
+    }
   });
 
   // ===== Layer 4: merge_messages =====
@@ -433,6 +493,43 @@ describe('compact', () => {
 
     expect(result.layersApplied).not.toContain('truncate_oldest');
     expect(result.messages).toHaveLength(2);
+  });
+
+  // ===== Unit-contract regression =====
+  // Historical bug: compactor compared `estimateTokens(messages)` (messages-only)
+  // against `threshold` (full-input scale). When system+tools were heavy, the
+  // comparison was permanently optimistic — the loop broke on the very first
+  // layer, layersApplied stayed [], hard compaction "ran" but freed nothing.
+  // The runtime.nonMessageOverhead bridge restores apples-to-apples.
+  it('runtime.nonMessageOverhead bridges messages-only estimate to full-input threshold', async () => {
+    // Build messages that estimate to ~ a few hundred tokens (well under any
+    // sensible threshold). With overhead=0 (old behavior) the loop should
+    // break immediately. With overhead=170_000 the full-input view is now
+    // above threshold=170_000 so layers must fire.
+    const messages: Message[] = Array.from({ length: 40 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `m${i}`,
+    }));
+
+    // Old-shape call (no overhead): below threshold → nothing applied.
+    const lazy = await compact(
+      messages,
+      { contextWindow: 200_000, threshold: 170_000, enabledLayers: ['truncate_oldest'] },
+      new FakeProvider(),
+    );
+    expect(lazy.layersApplied).toEqual([]);
+
+    // With realistic overhead (system+tools dominated this session), full-input
+    // view exceeds threshold → truncate_oldest must engage.
+    const eager = await compact(
+      messages,
+      { contextWindow: 200_000, threshold: 170_000, enabledLayers: ['truncate_oldest'] },
+      new FakeProvider(),
+      undefined,
+      undefined,
+      { nonMessageOverhead: 170_000 },
+    );
+    expect(eager.layersApplied).toContain('truncate_oldest');
   });
 
   // ===== Pipeline behavior =====

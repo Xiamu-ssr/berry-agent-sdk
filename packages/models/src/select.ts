@@ -6,12 +6,10 @@
 //
 //   tier:X   → ProviderResolver (Layer 3 → Layer 2)
 //   model:X  → ProviderResolver (Layer 2)
-//   raw:...  → ProviderConfig   (bypasses models entirely)
-//
 // Host products wire this into their agent registry so user config strings
 // map onto whichever of core's two accepted provider shapes is appropriate.
 
-import type { ProviderInput, ProviderConfig, ProviderResolver } from '@berry-agent/core';
+import type { ProviderInput, ProviderResolver } from '@berry-agent/core';
 import type { ModelsRegistry } from './types.js';
 import { parseModelRef } from './parse.js';
 import { createModelResolver, createTierResolver, type CreateModelResolverOptions } from './resolver.js';
@@ -30,14 +28,11 @@ export function selectProvider(
   const ref = (options.parse ?? parseModelRef)(spec);
 
   switch (ref.kind) {
-    case 'raw':
-      return ref.config satisfies ProviderConfig;
-
     case 'model': {
       const binding = registry.models[ref.modelId];
       if (!binding) {
         throw new Error(
-          `Model "${ref.modelId}" is not configured. Check your registry.models or switch to raw:.`,
+          `Model "${ref.modelId}" is not configured. Check your registry.models.`,
         );
       }
       return createModelResolver(binding, registry, options) satisfies ProviderResolver;

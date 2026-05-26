@@ -22,10 +22,12 @@ export interface AgentMemory {
   exists(): Promise<boolean>;
 }
 
-/** Project context interface — shared knowledge across agents. Read-only from the agent's side (humans maintain AGENTS.md). */
+/** Project context interface — shared knowledge across agents. Agents read it; hosts may expose human editing through SDK APIs. */
 export interface ProjectContext {
   /** Project root directory. */
   readonly root: string;
-  /** Load `{project}/AGENTS.md`. Returns empty string if not present. */
+  /** Load the SDK project context file. Returns empty string if not present. */
   loadContext(): Promise<string>;
+  /** Replace the SDK project context file. Intended for human/host editing, not agent self-mutation. */
+  writeContext(content: string): Promise<void>;
 }

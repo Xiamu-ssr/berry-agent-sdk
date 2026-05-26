@@ -13,8 +13,19 @@
 // On-disk extensions (`shared`, `prefix`, `enabled`) are opt-in;
 // a vanilla Claude Code config parses without edits.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { z, ZodError, type ZodIssue } from 'zod';
 import type { MCPTransportConfig } from './types.js';
+import {
+  DEFAULT_PLAYWRIGHT_MCP_BIN,
+  DEFAULT_PLAYWRIGHT_MCP_PACKAGE,
+  DEFAULT_PLAYWRIGHT_MCP_TEMPLATE,
+} from './defaults.js';
+
+/** Standard filename used by Claude Code / Cursor compatible MCP config layers. */
+export const MCP_CONFIG_FILENAME = '.mcp.json' as const;
 
 // ============================================================
 // Public types
@@ -68,6 +79,36 @@ export interface LoadMergedMCPConfigOptions {
   layers: MCPLayerSpec[];
 }
 
+export type MCPPackageBinResolver = (
+  packageName: string,
+  binRelativePath: string,
+) => string | null | undefined;
+
+export interface MCPNpxPackageRewrite {
+  /** Package argument inside `npx`, for example `@playwright/mcp`. */
+  packageName: string;
+  /** Package-relative JS entrypoint executed with the current Node binary. */
+  binRelativePath: string;
+}
+
+export interface NormalizeMCPServerConfigOptions {
+  /**
+   * Resolve a package-relative bin path from the host package graph.
+   * Hosts pass a resolver rooted at their own module URL when the package is
+   * a product dependency instead of an SDK dependency.
+   */
+  resolvePackageBin?: MCPPackageBinResolver;
+  /** Node executable used when rewriting `npx package` to `node package/bin`. */
+  nodePath?: string;
+  /** `npx` packages that should be rewritten to stable local JS entrypoints. */
+  npxPackageRewrites?: MCPNpxPackageRewrite[];
+}
+
+export interface EnsureMCPConfigFileOptions {
+  /** Raw `.mcp.json` template to write when the file is missing. */
+  template?: unknown;
+}
+
 // ============================================================
 // Internal shapes
 // ============================================================
@@ -90,28 +131,28 @@ interface MergingMCPServerConfig {
   sharedDefaultForLayer: boolean;
 }
 
+const zStringRecord = z.record(z.string());
+
 /** Raw on-disk entry (Claude Code standard + berry extensions). */
-interface RawMCPEntry {
+const zRawMCPEntry = z.object({
   // stdio fields
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: zStringRecord.optional(),
+  cwd: z.string().optional(),
 
   // sse / http fields
-  type?: string; // 'stdio' | 'sse' | 'http' | 'streamable_http' — case-insensitive
-  url?: string;
-  headers?: Record<string, string>;
+  type: z.string().optional(), // 'stdio' | 'sse' | 'http' | 'streamable_http' — case-insensitive
+  url: z.string().optional(),
+  headers: zStringRecord.optional(),
 
   // berry extensions
-  shared?: boolean;
-  prefix?: string;
-  enabled?: boolean;
-}
+  shared: z.boolean().optional(),
+  prefix: z.string().optional(),
+  enabled: z.boolean().optional(),
+});
 
-interface RawMCPJson {
-  mcpServers?: Record<string, RawMCPEntry>;
-}
+type RawMCPEntry = z.infer<typeof zRawMCPEntry>;
 
 // ============================================================
 // Public API
@@ -157,6 +198,100 @@ export function mergeMCPConfigs(
   return resolveDefaults(mergeRawLayers(merging));
 }
 
+/**
+ * Ensure a `.mcp.json` file exists. Returns true when the file was created.
+ * Products choose the target path; the SDK owns the file write mechanics and
+ * built-in template shape.
+ */
+export function ensureMCPConfigFile(
+  filePath: string,
+  options: EnsureMCPConfigFileOptions = {},
+): boolean {
+  if (existsSync(filePath)) return false;
+  const parent = dirname(filePath);
+  if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
+  writeFileSync(filePath, JSON.stringify(options.template ?? { mcpServers: {} }, null, 2) + '\n', 'utf-8');
+  return true;
+}
+
+/** Ensure the SDK's default Playwright MCP template exists at `filePath`. */
+export function ensureDefaultPlaywrightMCPConfig(filePath: string): boolean {
+  return ensureMCPConfigFile(filePath, { template: DEFAULT_PLAYWRIGHT_MCP_TEMPLATE });
+}
+
+/** Normalize one resolved server config without changing cascade semantics. */
+export function normalizeMCPServerConfig(
+  entry: MCPServerConfig,
+  options: NormalizeMCPServerConfigOptions = {},
+): MCPServerConfig {
+  if (entry.transport.type !== 'stdio') return entry;
+  if (!isNpxCommand(entry.transport.command)) return entry;
+
+  const rewrites = options.npxPackageRewrites ?? [];
+  if (rewrites.length === 0 || !options.resolvePackageBin) return entry;
+
+  const args = entry.transport.args ?? [];
+  for (const rewrite of rewrites) {
+    const packageIndex = args.findIndex((arg) => isNpxPackageArg(arg, rewrite.packageName));
+    if (packageIndex < 0) continue;
+
+    const cliPath = options.resolvePackageBin(rewrite.packageName, rewrite.binRelativePath);
+    if (!cliPath) continue;
+
+    return {
+      ...entry,
+      transport: {
+        ...entry.transport,
+        command: options.nodePath ?? process.execPath,
+        args: [cliPath, ...args.slice(packageIndex + 1)],
+      },
+    };
+  }
+
+  return entry;
+}
+
+/** Normalize every server in a resolved MCP record. */
+export function normalizeMCPConfigRecord(
+  record: Record<string, MCPServerConfig>,
+  options: NormalizeMCPServerConfigOptions = {},
+): Record<string, MCPServerConfig> {
+  const out: Record<string, MCPServerConfig> = {};
+  for (const [name, entry] of Object.entries(record)) {
+    out[name] = normalizeMCPServerConfig(entry, options);
+  }
+  return out;
+}
+
+/** SDK default normalizer for built-in template packages such as Playwright MCP. */
+export function normalizeDefaultMCPServerConfig(
+  entry: MCPServerConfig,
+  options: Omit<NormalizeMCPServerConfigOptions, 'npxPackageRewrites'> = {},
+): MCPServerConfig {
+  return normalizeMCPServerConfig(entry, {
+    ...options,
+    npxPackageRewrites: [{
+      packageName: DEFAULT_PLAYWRIGHT_MCP_PACKAGE,
+      binRelativePath: DEFAULT_PLAYWRIGHT_MCP_BIN,
+    }],
+  });
+}
+
+/** Create a resolver rooted at a host module URL, usually `import.meta.url`. */
+export function createNodePackageBinResolver(baseUrl: string | URL): MCPPackageBinResolver {
+  const require = createRequire(baseUrl);
+  const cache = new Map<string, string | null>();
+
+  return (packageName, binRelativePath) => {
+    const key = `${packageName}/${binRelativePath}`;
+    if (cache.has(key)) return cache.get(key);
+
+    const resolved = resolveNodePackageBin(require.resolve.bind(require), packageName, binRelativePath);
+    cache.set(key, resolved);
+    return resolved;
+  };
+}
+
 // ============================================================
 // Internals
 // ============================================================
@@ -166,19 +301,20 @@ function loadRawLayer(
 ): Record<string, MergingMCPServerConfig> {
   const { filePath, label, sharedDefault = false } = spec;
   if (!existsSync(filePath)) return {};
-  let raw: RawMCPJson;
+  let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(filePath, 'utf-8')) as RawMCPJson;
+    raw = JSON.parse(readFileSync(filePath, 'utf-8'));
   } catch (err) {
     console.error(`[MCP] Failed to parse ${filePath}:`, err instanceof Error ? err.message : err);
     return {};
   }
-  if (!raw.mcpServers || typeof raw.mcpServers !== 'object') return {};
+  const servers = readRawMCPServers(raw, filePath);
+  if (!servers) return {};
 
   const out: Record<string, MergingMCPServerConfig> = {};
-  for (const [name, entry] of Object.entries(raw.mcpServers)) {
+  for (const [name, entry] of Object.entries(servers)) {
     try {
-      out[name] = normalizeEntry(name, entry, label, sharedDefault);
+      out[name] = normalizeEntry(name, readRawMCPEntry(name, entry), label, sharedDefault);
     } catch (err) {
       console.error(
         `[MCP] Skipping invalid server "${name}" in ${filePath}:`,
@@ -187,6 +323,34 @@ function loadRawLayer(
     }
   }
   return out;
+}
+
+function readRawMCPServers(raw: unknown, filePath: string): Record<string, unknown> | null {
+  if (!isPlainRecord(raw)) {
+    console.error(`[MCP] Ignoring ${filePath}: root must be a JSON object`);
+    return null;
+  }
+  if (raw.mcpServers === undefined) return null;
+  if (!isPlainRecord(raw.mcpServers)) {
+    console.error(`[MCP] Ignoring ${filePath}: "mcpServers" must be a JSON object`);
+    return null;
+  }
+  return raw.mcpServers;
+}
+
+function readRawMCPEntry(serverName: string, raw: unknown): RawMCPEntry {
+  if (!isPlainRecord(raw)) {
+    throw new Error(`server "${serverName}" must be a JSON object`);
+  }
+  try {
+    return zRawMCPEntry.parse(raw);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const issue = error.issues[0];
+      throw new Error(`server "${serverName}" ${formatIssuePath(issue?.path ?? [])}: ${formatIssueMessage(issue)}`);
+    }
+    throw error;
+  }
 }
 
 function stripDefaults(
@@ -349,4 +513,45 @@ function mergeRecords(
 ): Record<string, string> | undefined {
   if (!base && !over) return undefined;
   return { ...(base ?? {}), ...(over ?? {}) };
+}
+
+function isNpxCommand(command: string): boolean {
+  const executable = command.split(/[\\/]/).pop()?.toLowerCase();
+  return executable === 'npx' || executable === 'npx.cmd';
+}
+
+function isNpxPackageArg(arg: string, packageName: string): boolean {
+  return arg === packageName || arg.startsWith(`${packageName}@`);
+}
+
+function resolveNodePackageBin(
+  resolveModule: (id: string) => string,
+  packageName: string,
+  binRelativePath: string,
+): string | null {
+  try {
+    return resolveModule(`${packageName}/${binRelativePath}`);
+  } catch {
+    try {
+      return join(dirname(resolveModule(`${packageName}/package.json`)), binRelativePath);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatIssuePath(path: Array<string | number>): string {
+  if (path.length === 0) return 'entry';
+  return path.reduce<string>((out, part) => (
+    typeof part === 'number' ? `${out}[${part}]` : `${out}.${part}`
+  ), 'field');
+}
+
+function formatIssueMessage(issue: ZodIssue | undefined): string {
+  if (!issue) return 'is invalid';
+  return issue.message;
 }

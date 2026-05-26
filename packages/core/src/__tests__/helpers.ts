@@ -8,7 +8,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentHome } from '../agent-home.js';
-import { SystemPromptCacheMode, type SystemPromptBlock } from '../types.js';
+import { SystemPromptCacheMode, type SystemPromptBlock } from '../index.js';
 
 /**
  * Create a fresh `AgentHome` rooted at a unique OS temp directory.

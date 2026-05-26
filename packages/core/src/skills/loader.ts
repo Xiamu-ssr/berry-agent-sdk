@@ -11,6 +11,7 @@
 //       references/       ← optional
 //       scripts/          ← optional
 
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, basename, resolve } from 'node:path';
 import matter from 'gray-matter';
@@ -101,6 +102,48 @@ export async function loadSkill(
 }
 
 /**
+ * Synchronously list skill names in a directory without loading full bodies.
+ * This is for host/runtime boot paths that need to compute allow/deny sets
+ * before constructing an Agent. It uses the same SKILL.md frontmatter rules
+ * as `loadSkill()` and scans only one directory level.
+ */
+export function listSkillNamesSync(skillsDir: string): string[] {
+  const resolvedDir = resolve(skillsDir);
+  if (!existsSync(resolvedDir)) return [];
+
+  let entries;
+  try {
+    entries = readdirSync(resolvedDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const skillDir = join(resolvedDir, entry.name);
+    const name = readSkillNameSync(skillDir, entry.name);
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+function readSkillNameSync(skillDir: string, fallback: string): string | null {
+  for (const filename of ['SKILL.md', 'skill.md']) {
+    const filePath = join(skillDir, filename);
+    try {
+      if (!statSync(filePath).isFile()) continue;
+      const raw = readFileSync(filePath, 'utf-8');
+      const { data } = matter(raw);
+      return asString(data.name) ?? fallback;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
  * Parse frontmatter into SkillMeta.
  * Handles CC, ClawHub, and SkillsDirectory fields.
  *
@@ -109,7 +152,7 @@ export async function loadSkill(
  * a hand-written override still round-trips.
  */
 function parseFrontmatter(
-  fm: Record<string, any>,
+  fm: Record<string, unknown>,
   dirName: string,
   options: LoadSkillsOptions,
   fileMtime: Date,

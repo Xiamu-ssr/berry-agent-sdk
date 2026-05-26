@@ -68,9 +68,22 @@ describe('createWebFetchTool', () => {
     });
 
     it('blocks IPv6 loopback', async () => {
+      global.fetch = vi.fn();
       const tool = createWebFetchTool();
       const res = await tool.execute({ url: 'http://[::1]/' });
       expect(res.isError).toBe(true);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('blocks IPv6 private ranges before fetch', async () => {
+      global.fetch = vi.fn();
+      const tool = createWebFetchTool();
+      for (const url of ['http://[fe80::1]/', 'http://[febf::1]/', 'http://[fd00::1]/']) {
+        const res = await tool.execute({ url });
+        expect(res.isError).toBe(true);
+        expect(res.content).toMatch(/private IP/);
+      }
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     it('can be disabled via allowPrivateNetwork', async () => {

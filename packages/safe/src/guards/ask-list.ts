@@ -19,8 +19,10 @@ export interface AskQuestion {
   toolName: string;
   /** Arguments the agent wants to pass. */
   input: Record<string, unknown>;
-  /** Session this call belongs to (id/cwd/model). */
-  session: { id: string; cwd: string; model: string };
+  /** Agent this call belongs to, when the host can provide one. */
+  agentId?: string;
+  /** Session this call belongs to (id/cwd/model/turnId). */
+  session: { id: string; cwd: string; model: string; turnId?: string };
   /** Sequential index within the current query. */
   callIndex: number;
   /** Human-readable reason the guard is requesting approval. */
@@ -38,6 +40,8 @@ export interface AskAnswer {
 /** Bridge function: `(question) => Promise<answer>`. */
 export type AskBridge = (question: AskQuestion) => Promise<AskAnswer>;
 
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
+
 export interface AskListOptions {
   /**
    * Tool names that must be approved. Everything else is allowed
@@ -52,6 +56,8 @@ export interface AskListOptions {
    * to fail open when there's no human to ask.
    */
   ask?: AskBridge;
+  /** Agent this guard instance protects. Used for durable approval audit events. */
+  agentId?: string;
   /**
    * Max ms to wait for an answer before auto-denying (default: 5 min).
    * Set 0 to wait indefinitely (not recommended — the agent run blocks
@@ -72,7 +78,7 @@ export interface AskListOptions {
  */
 export function askList(options: AskListOptions): ToolGuard {
   const matched = new Set(options.tools);
-  const timeoutMs = options.timeoutMs ?? 5 * 60_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const reason = options.reason ?? 'HITL approval required';
   const ask = options.ask;
 
@@ -89,7 +95,7 @@ export function askList(options: AskListOptions): ToolGuard {
       };
     }
 
-    const question: AskQuestion = { toolName, input, session, callIndex, reason };
+    const question: AskQuestion = { toolName, input, agentId: options.agentId, session, callIndex, reason };
     try {
       const answer = await withTimeout(ask(question), timeoutMs);
       if (answer.approved) return { action: 'allow' };

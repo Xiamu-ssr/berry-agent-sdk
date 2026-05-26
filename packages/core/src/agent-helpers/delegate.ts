@@ -10,38 +10,42 @@
 // Kept as pure functions taking an explicit dependency bag, so the
 // Agent class can stay a thin facade over the big branches of logic.
 
+import type { SystemPromptBlock, SystemPromptInput } from '@berry-agent/small-shared-core';
+import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import type {
   AgentEvent,
   AgentStatus,
-  ContentBlock,
   DelegateConfig,
   DelegateResult,
-  Message,
   Middleware,
   MiddlewareContext,
+  QueryOptions,
+} from '../agent-runtime-types.js';
+import type { ContentBlock, Message, ToolUseContent } from '../content-types.js';
+import type {
   Provider,
   ProviderConfig,
   ProviderRequest,
   ProviderResponse,
-  QueryOptions,
-  Session,
-  SessionStore,
-  SystemPromptBlock,
   TokenUsage,
-  ToolGuard,
-  ToolRegistration,
-  ToolUseContent,
-  SystemPromptInput,
-} from '../types.js';
-import { normalizeSystemPrompt } from '../types.js';
+} from '../provider-types.js';
+import type { Session, SessionStore } from '../session-types.js';
+import type { ToolGuard, ToolRegistration } from '../tool-types.js';
 import { DEFAULT_MAX_TURNS } from '../constants.js';
+import { TOOL_DELEGATE } from '../tool-names.js';
 import {
   extractText,
   accumulateUsage,
   mergeToolsByName,
-  createEmptySessionMetadata,
-} from './index.js';
+} from './messages.js';
+import { createEmptySessionMetadata } from './session.js';
 import { createProvider } from './provider.js';
+import {
+  applyBeforeApiCall,
+  notifyAfterApiCall,
+  notifyApiCallError,
+} from './middleware.js';
+import { executeTools } from './tool-executor.js';
 
 /**
  * Dependencies delegate() reaches into on the Agent. Keeps the extraction
@@ -138,6 +142,9 @@ export async function runDelegate(
   if (config?.additionalTools) {
     delegateTools = mergeToolsByName(config.additionalTools, delegateTools);
   }
+  // A delegate is already the forked worker; do not let it recursively spawn
+  // another delegate through the inherited built-in tool.
+  delegateTools = delegateTools.filter((tool) => tool.definition.name !== TOOL_DELEGATE);
 
   // Transient provider — same instance for cache sharing, or fresh for model override.
   const delegateProvider = config?.model
@@ -170,17 +177,18 @@ export async function runDelegate(
         provider: deps.providerConfig.type,
         cwd: deps.cwd,
       };
-      for (const mw of deps.middleware) {
-        if (mw.onBeforeApiCall) request = await mw.onBeforeApiCall(request, mwCtx);
-      }
+      request = await applyBeforeApiCall(request, deps.middleware, mwCtx);
 
-      const response =
-        config?.stream && delegateProvider.stream
-          ? await streamProvider(delegateProvider, request, emit)
-          : await delegateProvider.chat(request);
-
-      for (const mw of deps.middleware) {
-        if (mw.onAfterApiCall) await mw.onAfterApiCall(request, response, mwCtx);
+      let response: ProviderResponse;
+      try {
+        response =
+          config?.stream && delegateProvider.stream
+            ? await streamProvider(delegateProvider, request, emit)
+            : await delegateProvider.chat(request);
+        await notifyAfterApiCall(request, response, deps.middleware, mwCtx);
+      } catch (err) {
+        await notifyApiCallError(request, err, deps.middleware, mwCtx);
+        throw err;
       }
 
       totalUsage = accumulateUsage(totalUsage, response.usage);
@@ -202,71 +210,27 @@ export async function runDelegate(
       if (response.stopReason !== 'tool_use' && toolUses.length > 0) {
         response.stopReason = 'tool_use';
       }
-      const toolResultBlocks: ContentBlock[] = [];
+      const execResult = await executeTools({
+        toolUses,
+        tools: toolMap,
+        toolGuard: delegateGuard,
+        middleware: deps.middleware,
+        session: delegateSession,
+        emit,
+        appendEvent: async () => {},
+        makeBase: () => ({
+          id: `delegate_evt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: Date.now(),
+          sessionId: delegateSessionId,
+        }),
+        middlewareContext: mwCtx,
+        cwd: deps.cwd,
+        model: mwCtx.model,
+        abortSignal: config?.abortSignal,
+      });
 
-      for (const toolUse of toolUses) {
-        toolCalls++;
-        const tool = toolMap.get(toolUse.name);
-        if (!tool) {
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: `Error: unknown tool "${toolUse.name}"`,
-            isError: true,
-          });
-          continue;
-        }
-
-        let guardedInput = toolUse.input;
-        if (delegateGuard) {
-          const decision = await delegateGuard({
-            toolName: toolUse.name,
-            input: toolUse.input,
-            session: { id: mwCtx.sessionId, cwd: deps.cwd, model: mwCtx.model },
-            callIndex: toolCalls,
-          });
-          if (decision.action === 'deny') {
-            toolResultBlocks.push({
-              type: 'tool_result',
-              toolUseId: toolUse.id,
-              content: `Permission denied: ${decision.reason}`,
-              isError: true,
-            });
-            continue;
-          }
-          if (decision.action === 'modify') guardedInput = decision.input;
-        }
-
-        try {
-          for (const mw of deps.middleware) {
-            if (mw.onBeforeToolExec)
-              guardedInput = await mw.onBeforeToolExec(toolUse.name, guardedInput, mwCtx);
-          }
-          const result = await tool.execute(guardedInput, {
-            cwd: deps.cwd,
-            abortSignal: config?.abortSignal,
-          });
-          for (const mw of deps.middleware) {
-            if (mw.onAfterToolExec)
-              await mw.onAfterToolExec(toolUse.name, guardedInput, result, mwCtx);
-          }
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: result.forLLM ?? result.content,
-            isError: result.isError,
-          });
-        } catch (err) {
-          toolResultBlocks.push({
-            type: 'tool_result',
-            toolUseId: toolUse.id,
-            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-            isError: true,
-          });
-        }
-      }
-
-      messages.push({ role: 'user', content: toolResultBlocks, createdAt: Date.now() });
+      toolCalls += execResult.toolCalls;
+      messages.push({ role: 'user', content: execResult.results, createdAt: Date.now() });
     }
 
     const lastMsg = messages[messages.length - 1]!;

@@ -2,17 +2,16 @@
 // Berry Agent SDK — File-based Project Context
 // ============================================================
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { ProjectContext } from './types.js';
-
-/** The single project-level context file. Humans maintain it; agents read only. */
-const CONTEXT_FILE = 'AGENTS.md' as const;
+import { projectSharedPaths } from './project-layout.js';
+export { PROJECT_CONTEXT_FILE } from './project-layout.js';
 
 /**
  * File-based ProjectContext.
- * - `loadContext()` reads `{project}/AGENTS.md`.
- * - No write path: project-level knowledge is team-shared and maintained by humans.
+ * - `loadContext()` reads the SDK project context file.
+ * - `writeContext()` is exposed for human/host editing through SDK APIs.
  */
 export class FileProjectContext implements ProjectContext {
   readonly root: string;
@@ -23,11 +22,17 @@ export class FileProjectContext implements ProjectContext {
 
   async loadContext(): Promise<string> {
     try {
-      return await readFile(join(this.root, CONTEXT_FILE), 'utf-8');
+      return await readFile(projectSharedPaths(this.root).contextPath, 'utf-8');
     } catch (err: unknown) {
       if (isNotFound(err)) return '';
       throw err;
     }
+  }
+
+  async writeContext(content: string): Promise<void> {
+    const path = projectSharedPaths(this.root).contextPath;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content, 'utf-8');
   }
 }
 

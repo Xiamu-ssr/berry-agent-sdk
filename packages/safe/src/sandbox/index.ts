@@ -20,6 +20,7 @@ import type { CommandExecutor } from '@berry-agent/core';
 import type { SandboxConfig, SandboxProfile } from './types.js';
 import { buildSeatbeltProfile } from './profile-builder.js';
 import { createSandboxedExecutor } from './platform-macos.js';
+import { createBubblewrapExecutor } from './platform-linux.js';
 
 export type { SandboxConfig, SandboxProfile } from './types.js';
 export { buildSeatbeltProfile } from './profile-builder.js';
@@ -43,16 +44,7 @@ export function createSandbox(config: SandboxConfig): CommandExecutor | null {
     case 'macos':
       return createSandboxedExecutor(config);
     case 'linux':
-      // Lazy-import to avoid breaking on platforms without bubblewrap
-      try {
-        const { createBubblewrapExecutor } = require('./platform-linux.js') as {
-          createBubblewrapExecutor: (cfg: SandboxConfig) => CommandExecutor | null;
-        };
-        return createBubblewrapExecutor(config);
-      } catch {
-        console.warn('[safe] Linux sandbox unavailable. Commands will run unsandboxed.');
-        return null;
-      }
+      return createBubblewrapExecutor(config);
     default:
       console.warn(`[safe] Sandbox not supported on platform: ${platform}. Commands will run unsandboxed.`);
       return null;

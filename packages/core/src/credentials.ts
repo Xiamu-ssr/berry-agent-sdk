@@ -9,7 +9,8 @@
 //   2. SDK never mandates where secrets live — env / file / vault all work.
 //   3. Per-agent credential isolation is possible by swapping the store.
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 /**
  * Synchronous credential lookup. Tools pass in a required key name; the
@@ -104,6 +105,7 @@ export class DefaultCredentialStore implements CredentialStore {
    */
   async set(key: string, value: string): Promise<void> {
     if (!this.filePath) throw new Error('DefaultCredentialStore: filePath not configured');
+    assertCredentialKeyValue(key, value);
     if (!this.fileLoaded) {
       this.loadFileSync();
       this.fileLoaded = true;
@@ -130,18 +132,42 @@ export class DefaultCredentialStore implements CredentialStore {
   private loadFileSync(): void {
     if (!this.filePath) return;
     try {
-      // Use readFileSync to keep get() sync
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { readFileSync } = require('node:fs');
       const raw = readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        this.fileCache = parsed as Record<string, string>;
-      }
-    } catch {
-      // file missing or unreadable — fine
+      this.fileCache = parseCredentialFile(raw, this.filePath);
+    } catch (err) {
+      if (isNotFoundError(err)) return;
+      throw err;
     }
   }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
+}
+
+function parseCredentialFile(raw: string, filePath: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse credential file "${filePath}": ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Credential file "${filePath}" must be a JSON object`);
+  }
+
+  const credentials: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value !== 'string') {
+      throw new Error(`Credential file "${filePath}" has non-string value for "${key}"`);
+    }
+    if (value.trim().length === 0) {
+      continue;
+    }
+    credentials[key] = value;
+  }
+  return credentials;
 }
 
 /**
@@ -167,6 +193,7 @@ export class MemoryCredentialStore implements CredentialStore {
   }
 
   set(key: string, value: string): void {
+    assertCredentialKeyValue(key, value);
     this.entries[key] = value;
   }
 
@@ -175,9 +202,17 @@ export class MemoryCredentialStore implements CredentialStore {
   }
 }
 
+function assertCredentialKeyValue(key: string, value: string): void {
+  if (!key || key.trim().length === 0) {
+    throw new Error('Credential key must be a non-empty string');
+  }
+  if (value.trim().length === 0) {
+    throw new Error(`Credential "${key}" must be a non-empty string`);
+  }
+}
+
 async function writeJsonAtomic(path: string, data: Record<string, string>): Promise<void> {
-  const dir = path.slice(0, path.lastIndexOf('/'));
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
   await fs.rename(tmp, path);

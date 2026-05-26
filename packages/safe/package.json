@@ -9,27 +9,33 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./levels": {
+      "types": "./dist/levels.d.ts",
+      "import": "./dist/levels.js"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
-    "test": "vitest run"
+    "build": "rm -rf dist && tsc",
+    "test": "vitest run --maxWorkers=2"
   },
   "peerDependencies": {
     "@berry-agent/core": "^0.5.0-alpha.1",
     "@berry-agent/models": "^0.5.0-alpha.1",
     "@berry-agent/config": "^0.5.0-alpha.1"
   },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
   "devDependencies": {
     "@berry-agent/config": "*",
     "@berry-agent/core": "*",
     "@berry-agent/models": "*",
     "vitest": "^3.2.4",
-    "typescript": "^5.8.3",
-    "zod": "^3.24.0"
+    "typescript": "^5.8.3"
   },
   "license": "MIT"
 }

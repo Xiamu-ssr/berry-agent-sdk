@@ -16,6 +16,11 @@ function mkRegistry(): ModelsRegistry {
         presetId: 'zenmux',
         apiKey: 'sk-zen',
       },
+      zenmux_openai: {
+        id: 'zenmux_openai',
+        presetId: 'zenmux-openai',
+        apiKey: 'sk-zen-openai',
+      },
       corp_proxy: {
         id: 'corp_proxy',
         presetId: RAW_PRESET_ID,
@@ -67,6 +72,18 @@ describe('buildProviderConfig', () => {
     );
     expect(cfg.model).toBe('anthropic/claude-opus-4.7');
     expect(cfg.baseUrl).toBe('https://zenmux.ai/api/anthropic');
+  });
+
+  it('uses the ZenMux OpenAI-compatible preset baseUrl and protocol', () => {
+    const reg = mkRegistry();
+    const cfg = buildProviderConfig(
+      { providerId: 'zenmux_openai', remoteModelId: 'google/gemini-3.1-pro-preview' },
+      reg.providers.zenmux_openai!,
+      'gemini-pro',
+    );
+    expect(cfg.type).toBe('openai');
+    expect(cfg.model).toBe('google/gemini-3.1-pro-preview');
+    expect(cfg.baseUrl).toBe('https://zenmux.ai/api/v1');
   });
 
   it('requires baseUrl+type for raw providers', () => {

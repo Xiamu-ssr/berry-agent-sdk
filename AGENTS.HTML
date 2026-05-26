@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Berry Agent SDK 对齐文档</title>
   <style>
-    :root { color-scheme: light dark; --fg: #202124; --muted: #667085; --line: #d0d5dd; --bg: #ffffff; --panel: #f8fafc; --accent: #0f766e; }
-    @media (prefers-color-scheme: dark) { :root { --fg: #e5e7eb; --muted: #9ca3af; --line: #374151; --bg: #0b0f14; --panel: #111827; --accent: #34d399; } }
+    :root { color-scheme: light dark; --fg: #202124; --muted: #667085; --line: #d0d5dd; --bg: #ffffff; --panel: #f8fafc; --accent: #0f766e; --warn: #b45309; --bad: #b91c1c; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #e5e7eb; --muted: #9ca3af; --line: #374151; --bg: #0b0f14; --panel: #111827; --accent: #34d399; --warn: #fbbf24; --bad: #f87171; } }
     body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
     h1 { font-size: 34px; line-height: 1.2; margin: 0 0 8px; }
@@ -24,6 +24,30 @@
     th { background: var(--panel); }
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     a { color: var(--accent); }
+    .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; color: var(--muted); background: var(--panel); font-size: 12px; }
+    .note { border-left: 3px solid var(--accent); background: var(--panel); padding: 12px 14px; border-radius: 6px; }
+    .arch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: ". tools ." "session harness sandbox" ". orchestration ."; gap: 14px; align-items: stretch; margin: 18px 0 24px; }
+    .arch .node { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 16px; min-height: 110px; box-shadow: 0 1px 0 color-mix(in srgb, var(--line) 45%, transparent); }
+    .arch .node strong { display: block; font-size: 18px; margin-bottom: 6px; }
+    .arch .node small { color: var(--muted); }
+    .arch .harness { grid-area: harness; border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); background: color-mix(in srgb, var(--panel) 86%, var(--accent)); }
+    .arch .session { grid-area: session; }
+    .arch .tools { grid-area: tools; }
+    .arch .sandbox { grid-area: sandbox; }
+    .arch .orchestration { grid-area: orchestration; }
+    .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; }
+    .flow .step { position: relative; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel); }
+    .flow .step b { display: block; margin-bottom: 4px; }
+    .status-bad { color: var(--bad); font-weight: 700; }
+    .status-good { color: var(--accent); font-weight: 700; }
+    .status-warn { color: var(--warn); font-weight: 700; }
+    .figure { display: flex; gap: 16px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--panel); }
+    .figure img { width: 160px; height: 160px; object-fit: contain; border-radius: 8px; background: #f7f5ee; }
+    @media (max-width: 760px) {
+      .arch { grid-template-columns: 1fr; grid-template-areas: "harness" "session" "tools" "sandbox" "orchestration"; }
+      .figure { display: block; }
+      .figure img { width: 100%; height: auto; max-height: 260px; margin-bottom: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -34,16 +58,103 @@
   <h2>定位</h2>
   <p><strong>Berry Agent SDK</strong> 是用于构建长期运行、可恢复、可审计、可接入工具/MCP/Skill 的 TypeScript Agent SDK。它不是产品 UI，也不保存产品端实例列表、桌面壳状态或业务导航。</p>
   <div class="grid">
-    <section class="card"><strong>SDK 负责</strong><br>agent 生命周期、provider 调用、messages/events、compaction、tool loop、MCP adapter、Skill loader、PromptPack、Memory、Safety、Observe。</section>
-    <section class="card"><strong>产品负责</strong><br>实例管理、用户交互、前端布局、产品事实展示、跨设备连接、发布包和平台壳。</section>
+    <section class="card"><strong>SDK 负责</strong><br>agent 生命周期、provider 调用、messages/events、session view hydrate、compaction、tool loop、MCP adapter、Skill loader、PromptPack、Memory、Safety、Observe、项目共享布局。</section>
+    <section class="card"><strong>产品负责</strong><br>选择 agent home 根目录、实例管理、用户交互、前端布局、产品事实展示、跨设备连接、发布包和平台壳。</section>
     <section class="card"><strong>唯一事实源</strong><br><code>messages.json</code> 是 LLM 推理上下文事实源；<code>events.jsonl</code> 是 UI/审计/历史 timeline 事实源。</section>
+  </div>
+
+  <h2>重构北极星：Managed Agent Harness</h2>
+  <p class="note">目标不是继续给产品层止血，而是把 Berry Agent SDK 收拢成完整的 managed-agent runtime。参考 Anthropic managed agents 的边界：brain 不直接拥有 hands；<strong>Harness</strong> 连接 Session、Tools/MCP、Sandbox 和 Orchestration。</p>
+  <div class="figure">
+    <img src="../docs/assets/anthropic-managed-agents-architecture.webp" alt="Anthropic managed agents architecture">
+    <div>
+      <span class="pill">Source: Anthropic Engineering</span>
+      <p><strong>对 SDK 的翻译：</strong>SDK 是图中间的 <code>Harness</code> 加左侧 <code>Session</code> 的事实源，同时定义 <code>Tools/MCP</code>、<code>Sandbox</code>、<code>Orchestration</code> 的稳定接口。宿主产品可以提供具体实现，但不重新定义 agent turn 的语义。</p>
+    </div>
+  </div>
+  <div class="arch" aria-label="Berry Agent target architecture">
+    <section class="node tools"><strong>Tools / MCP / Hands</strong><small>统一 capability contract；MCP、shell、filesystem、browser、remote sandbox 都是 hand，不散落在产品层。</small></section>
+    <section class="node session"><strong>Session</strong><small>append-only event log、messages、metadata、approval、resume cursor。context window 只是派生视图。</small></section>
+    <section class="node harness"><strong>Harness Runtime</strong><small>run / pause / resume / wake、context builder、provider call、tool loop、guard、stream events。</small></section>
+    <section class="node sandbox"><strong>Sandbox</strong><small>隔离执行、可写根、进程生命周期、credential proxy；token 默认不进 agent 可读环境。</small></section>
+    <section class="node orchestration"><strong>Orchestration API</strong><small>host 挂载 runtime、注册 hands、订阅 facts、调度后台任务，但不拥有 session 语义。</small></section>
+  </div>
+
+  <h2>目标包边界</h2>
+  <table>
+    <thead><tr><th>目标包</th><th>保留/新增职责</th><th>明确不做</th></tr></thead>
+    <tbody>
+      <tr><td><code>@berry-agent/core</code></td><td>基础 domain type、ContentBlock、chat/session view schema、provider adapter、session/event log、context builder、AgentHome、ProjectSharedPaths、Hand/Capability contract、ExecutionEnvironment contract、对应 zod schema、<code>ManagedAgentRuntime</code>。</td><td>产品配置页、REST/WS、桌面/移动壳。</td></tr>
+      <tr><td><code>@berry-agent/runtime</code></td><td>host-facing managed runtime builder/supervisor/scheduler：把 host 选择的 workspace/home/project、execution environment provider、model registry、credentials、observer、safety、skills、host tools 组装成 <code>ManagedAgentRuntime</code>；<code>ManagedRuntimeSupervisor</code> 把 durable lease/wake facts 接到 live runtime mount/drop/renew/release；<code>ManagedRuntimeWakeScheduler</code> 负责 wake claim/complete/fail 循环。provider resolver、context window、local workspace hand、file memory、managed guard、observe collector、environment prompt、skill loadout 和 runtime-state path 不再由产品层重复实现。</td><td>Claw 专属 facts、UI 事件命名、产品导航、REST/WS。</td></tr>
+      <tr><td><code>@berry-agent/core hand boundary</code></td><td>Hand/Capability + ExecutionEnvironment contract：filesystem、shell、browser、team、remote sandbox、MCP-backed hand 的统一注册、状态、执行位置和生命周期；具体实现可在 tools-common、mcp、team 或 host 包内。</td><td>具体 Electron BrowserView UI、人类注解 overlay。</td></tr>
+      <tr><td><code>@berry-agent/mcp</code></td><td>MCP config cascade、标准 <code>.mcp.json</code> 文件名、默认 Playwright MCP 模板、built-in npx/package normalization、managed server lifecycle、tool adapter、lazy start、status view、Hand projection。</td><td>Claw 设置页布局、市场安装 UI。</td></tr>
+      <tr><td><code>@berry-agent/safe</code></td><td>safety level 常量、managed guard pipeline、approval request/decision schema、pending approval broker、classifier、credential boundary policy。</td><td>审批弹窗 UI。</td></tr>
+      <tr><td><code>@berry-agent/observe</code></td><td>runtime telemetry、cost/cache、audit event、query API。</td><td>产品 dashboard 路由。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>现状差距</h2>
+  <table>
+    <thead><tr><th>区域</th><th>现状</th><th>目标</th><th>重构动作</th></tr></thead>
+    <tbody>
+      <tr><td>Agent lifecycle</td><td><span class="status-good">收口到 runtime facade + SDK builder/registry</span>：<code>ManagedAgentRuntime</code> 接管底层 Agent 创建和 session/chat/control lifecycle；<code>@berry-agent/runtime</code> 接管 provider/safety/observe/workspace hand/file memory/skills/environment prompt 装配和 live runtime mount/drop/replace；Claw <code>AgentManager</code> 只缓存 SDK registry mount，不再暴露或缓存裸 <code>Agent</code>。</td><td><span class="status-good">SDK runtime 单入口</span></td><td>继续补容器/远程 sandbox orchestration API，而不是让产品层再拼 harness。</td></tr>
+      <tr><td>Session / resume</td><td><span class="status-good">event log、session view、approval request/decision durable events、active session lifecycle 已在 SDK 事实源内。</span></td><td><span class="status-good">全部可恢复</span></td><td>继续把 pending tool resume cursor 和更完整的 runtime host API 收到 SDK runtime。</td></tr>
+      <tr><td>Tools / MCP</td><td><span class="status-good">SDK 已有 Hand/Capability contract、ExecutionEnvironment contract/provider、local workspace hand factory、OS sandbox environment provider、adapter、MCPManager、MCP 文件名、默认 Playwright 模板、默认配置写入和 package resolver normalization；Claw 只保留 REST/facts 投影和三层路径语义。</span></td><td><span class="status-good">hands contract + execution boundary + lazy lifecycle</span></td><td>继续把远程 sandbox/container provider 和长期 MCP policy 收到 SDK hands/MCP 层；Claw 只配置和展示。</td></tr>
+      <tr><td>Credentials</td><td><span class="status-good">CredentialStore + sanitized command env</span>：shell、sandbox shell 和 MCP stdio 默认不继承完整 <code>process.env</code>；需要密钥的工具通过 <code>CredentialStore</code> 或显式 scoped env 注入。</td><td><span class="status-good">credential proxy</span></td><td>继续把 tool-specific token/capability 设计成显式代理接口，而不是写进 workspace 或全局 env。</td></tr>
+      <tr><td>Contracts</td><td><span class="status-good">Claw contracts 已复用 SDK content、chat/session、AgentHome、ProjectSharedPaths schema，并承载产品 REST transport envelope。</span></td><td><span class="status-good">SDK schema 派生</span></td><td>继续避免 client/server 各写 payload shape；SDK 只导出 domain schema，Claw 只包产品传输契约。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>重构顺序</h2>
+  <div class="flow">
+    <section class="step"><b>1. 定义 runtime 接口</b>不移动大文件，先让边界可编译：host、session、hands、events、approval。</section>
+    <section class="step"><b>2. Session 语义收口</b>SDK 成为唯一 durable turn state；Claw 不再修补 pending/reconnect。</section>
+    <section class="step"><b>3. Hands/MCP 收口</b>tool lifecycle、lazy start、status、sandbox policy 进入 SDK hands。</section>
+    <section class="step"><b>4. Claw 降级为 host</b><code>AgentManager</code> 只做配置、auth、REST/WS bridge、facts projection。</section>
+    <section class="step"><b>5. Contract 去重</b>Claw contracts 只定义 UI transport；domain schema 从 SDK 导出。</section>
   </div>
 
   <h2>核心原则</h2>
   <ul>
     <li><strong>先写后读</strong>：发给 LLM 的 messages 必须先写入 <code>messages.json</code>，再从文件读出构造 provider 请求。</li>
-    <li><strong>事件追加</strong>：运行过程、工具调用、安全决策、compaction、provider usage 追加到 <code>events.jsonl</code>，不反向替代 provider context。</li>
-    <li><strong>不做隐式默认路径</strong>：宿主决定数据目录；SDK 接受路径，不替产品决定用户数据放哪里。</li>
+    <li><strong>事件追加</strong>：运行过程、工具调用、安全决策、compaction、provider usage 追加到 <code>events.jsonl</code>，不反向替代 provider context；<code>zSessionEvent</code> 是 JSONL 读写 schema，坏事件不能进入或污染恢复流程。</li>
+    <li><strong>根目录由宿主选择，内部结构由 SDK 规定</strong>：宿主只传 <code>AgentHome(root)</code>；<code>sessions/</code>、<code>skills/</code>、<code>.mcp.json</code>、<code>AGENTS.md</code>、<code>MEMORY.md</code>、<code>agent.json</code> 等子路径都由 SDK 统一维护。</li>
+    <li><strong>不做隐式迁移</strong>：<code>agent.json</code> 存在时直接作为事实源读取；初始化 seed 只用于首次创建，不再为已有 agent home 做 back-fill/legacy 修补；<code>zAgentMetadata</code> 是读写 schema，未知产品字段会被拒绝，不能混进 SDK agent home。</li>
+    <li><strong>agent boot 有内部边界</strong>：home 校验、prompt pack/system prompt、<code>agent.json</code> seed/read、provider runtime、session store、event log、memory/project/workspace data 初始化集中在 <code>agent-helpers/boot.ts</code>；构造函数只接线和注册运行期能力。</li>
+    <li><strong>agent config 是独立事实源</strong>：<code>agent-config-types.ts</code> 定义 <code>AgentConfig</code>/<code>AgentCreateConfig</code>；<code>agent-helpers/create-config.ts</code> 只负责 <code>Agent.create()</code> shorthand 到完整 <code>AgentConfig</code> 的转换。</li>
+    <li><strong>agent runtime contract 是独立事实源</strong>：<code>agent-runtime-types.ts</code> 定义 query/delegate/middleware/status/event/result；事件、middleware 和 turn options 不再混在配置类型里。</li>
+    <li><strong>session 数据契约是独立事实源</strong>：<code>session-types.ts</code> 定义 <code>Session</code>、metadata、todo 和 <code>SessionStore</code>；<code>FileSessionStore</code> 用 SDK-owned message/session metadata schema 校验 <code>messages.json</code> 与 <code>metadata.json</code>；产品只通过 SDK API 读取 session view，不复制 messages/events 存储语义。</li>
+    <li><strong>workspace data 有内部边界</strong>：memory、workspace instructions、project knowledge 的 path/error/bytes 处理集中在 <code>AgentWorkspaceData</code>；<code>Agent</code> 只暴露 API，不复制文件布局细节。</li>
+    <li><strong>runtime context 有内部边界</strong>：project context、agent instructions、skill index、runtime todo/sleep tools、allow-list 和 deny-list 解析集中在 <code>agent-helpers/runtime-context.ts</code>。</li>
+    <li><strong>run state 有内部边界</strong>：status、pause abort、sleep wake、interject 队列集中在 <code>agent-helpers/run-state.ts</code>；<code>Agent</code> 只把这些能力接到 turn lifecycle 和 <code>agent-helpers/runtime-tools.ts</code>。</li>
+    <li><strong>managed runtime 是宿主边界</strong>：<code>ManagedAgentRuntime</code> 承载 session/send/delete、pause/interject、快照、prompt/memory/project 编辑、approval event 和 hand 挂载；宿主不应通过 runtime 绕到裸 <code>Agent</code> 内部。</li>
+    <li><strong>runtime builder 是装配边界</strong>：<code>@berry-agent/runtime</code> 拥有 provider resolver、context window、execution environment provider、local workspace hand、file memory、managed safety guard、observe collector、environment prompt 和 skill loadout 的组合规则；宿主只传根目录、registry、credentials、observer、安全配置、host tools 和执行位置策略。</li>
+    <li><strong>runtime registry 是挂载边界</strong>：<code>ManagedRuntimeRegistry</code> 管 live runtime 的 mount/drop/replace/clear 和 destroy 顺序；<code>drop()</code> / <code>replace()</code> / <code>clear()</code> 是可等待 teardown，hand、memory provider 和 execution environment 释放完成后才报告 mount 已删除；产品层可以选择 agent id 和配置，但不再手写第二套 runtime cache 生命周期。</li>
+    <li><strong>runtime supervisor 是运行所有权边界</strong>：<code>ManagedRuntimeSupervisor</code> 把 <code>RuntimeOrchestrator</code> 的 durable lease/wake facts 与 <code>ManagedRuntimeRegistry</code> 的 live mount 连接起来；host 只传 agent entry 和 factory，SDK 负责 acquire/reuse/renew/stop/release、wake schedule/claim 以及 orchestration 文件路径事实源。</li>
+    <li><strong>wake scheduler 是后台唤醒边界</strong>：<code>ManagedRuntimeWakeScheduler</code> claim due wakes、调用 host handler，并把 wake 标记为 <code>completed</code> 或 <code>failed</code>；<code>claimDueWakes({ staleClaimedMs })</code> 会把崩溃后遗留的 stale <code>claimed</code> wake 重排队并递增 <code>claimAttempts</code>，产品层不应再维护第二套后台 job table。</li>
+    <li><strong>减少样板代码优先使用成熟 schema 库</strong>：SDK 已采用 <code>zod</code> 作为运行时 JSON 校验和 TypeScript 类型推导的事实源；新增持久化/transport/domain 数据结构时，优先写 <code>z*</code> schema 并从 schema 推导类型，避免像 Lombok 式代码生成、decorator 魔法或手写 required/optional parser 形成新的隐式构建链；runtime orchestration、SDK config、models registry、MCP raw config、project safety、observe query、team worklist tool input 和 prompt-pack manifest 已按这个方向收敛；所有源码 import <code>zod</code> 的发布包必须把它声明在 <code>dependencies</code>。</li>
+    <li><strong>执行环境是 brain/hands 的边界</strong>：<code>ExecutionEnvironment</code> 描述 local、OS sandbox、container、remote runner 的 command executor、额外 hands、状态和 isolation policy；<code>ExecutionEnvironmentProvider</code> 从 <code>AgentScope</code>、<code>WorkspaceBinding</code> 和 <code>ExecutionIsolationPolicy</code> 供给具体环境；<code>ExecutionEnvironmentRegistry</code> 管多个 runner 的状态、<code>drop()</code>/<code>replace()</code>/<code>disposeAll()</code> 和 all-settled 释放；<code>AgentScope</code> 只提供 workspace/project 权限事实，不再假装生成 sandbox config。</li>
+    <li><strong>命令环境默认无密钥</strong>：<code>createCommandEnvironment()</code> 是 shell/sandbox/MCP stdio 的唯一默认 env 事实源，只复制 PATH/HOME/TMP/LANG 等基础变量；长期 provider/API key 留在 <code>CredentialStore</code>，credential 文件必须是非空字符串字典，只有 host 显式传入 scoped env 时才进入 runner。</li>
+    <li><strong>lifecycle teardown 有内部边界</strong>：destroy 时的 active turn abort、hand dispose、memory provider dispose、execution environment destroy hook 和 capability map 清理集中在 SDK runtime/lifecycle；<code>Agent.destroy()</code> 与 <code>ManagedAgentRuntime.destroy()</code> 都返回 promise，宿主必须 await，不能 fire-and-forget；持久多 agent 拓扑属于 <code>@berry-agent/team</code>。</li>
+    <li><strong>compaction orchestration 有内部边界</strong>：turn-entry soft/hard、inference 前 hard、prompt-too-long retry、memory flush 和 middleware hook 集中在 <code>agent-helpers/compaction-coordinator.ts</code>；<code>Agent</code> 主循环只决定何时进入 provider/tool 阶段。</li>
+    <li><strong>compaction pipeline 有内部边界</strong>：<code>compaction/types.ts</code> 拥有 compaction config/layer/strategy 契约；<code>compaction/runner.ts</code> 拥有阈值判断、pre-compact memory flush 和单次 run 编排；<code>compaction/compactor.ts</code> 只负责编排 layer 顺序和 token 统计；<code>compaction/layers.ts</code> 拥有每一层消息转换与 summarize fork 逻辑。</li>
+    <li><strong>provider runtime 有内部边界</strong>：初始 provider 解析、model ref 解析、host <code>modelResolver</code> 和 <code>ProviderResolver</code> 的纯规则在 <code>agent-helpers/provider-runtime.ts</code>；运行期 provider/config 变更、resolver refresh、error report 和 provider call 统一在 <code>agent-helpers/provider-controller.ts</code>，<code>Agent</code> 不直接持有多套 provider 事实。</li>
+    <li><strong>provider contract 是独立事实源</strong>：<code>provider-types.ts</code> 定义 provider config/resolver/request/response/usage/stream；模型注册和 provider adapter 不再依赖混合类型桶里的隐式约定。</li>
+    <li><strong>provider secret 不进入快照</strong>：<code>ProviderConfig</code> 只给 provider runtime 内部使用；<code>Agent.currentProvider</code>、<code>ManagedAgentRuntime.currentProvider</code> 和 <code>AgentSnapshot.provider</code> 只返回 <code>ProviderPublicConfig</code>，用 <code>apiKeyConfigured</code> 表达状态，不暴露 <code>apiKey</code>。</li>
+    <li><strong>provider adapter 不做空壳转发</strong>：OpenAI/Anthropic runtime class 只负责 SDK 调用与 streaming 生命周期；wire message、tool schema 和 response 解析在 <code>providers/*/messages.ts</code> 与 <code>providers/*/response.ts</code>；model 返回的 tool input 必须在 provider 边界被规范化为对象，数组/原始值保留为 <code>_raw</code>，不能直接伪装成可信 <code>Record</code>。</li>
+    <li><strong>外部输入先窄化</strong>：provider retry error、credential file error、session file-store error、Anthropic usage、Skill frontmatter、classifier response block 都必须先从 <code>unknown</code> 窄化；SDK 核心运行时路径不接受 <code>any</code> 作为边界捷径。</li>
+    <li><strong>provider middleware 有内部边界</strong>：API before/after/error hook 调度集中在 <code>agent-helpers/middleware.ts</code>，主 Agent loop 和 delegate loop 共用同一语义。</li>
+    <li><strong>能力注册有内部边界</strong>：memory provider tools、constructor tools、runtime <code>addTool()</code> 和 hands 到 model-visible tools 的 collision/check/register/unregister 集中在 <code>agent-helpers/capabilities.ts</code>；裸 tool 入口会被包成 SDK-owned Hand，推荐 host 使用 <code>addHand()</code>/<code>removeHand()</code> 管理执行面；runtime <code>removeTool()</code> 是可等待生命周期 API，会释放 backing hand；tool registration 可以提供 <code>dispose()</code>，由 hand teardown 统一调用；hand registry 批量释放会尝试所有 disposer 后再报告首个错误。</li>
+    <li><strong>内置 agent tool 有内部边界</strong>：<code>load_skill</code> 与 <code>delegate</code> 的注册集中在 <code>agent-helpers/builtin-tools.ts</code>，构造函数只组装 SDK runtime。</li>
+    <li><strong>turn lifecycle 有内部边界</strong>：destroy check、memory readiness、resolver reset、session resolve、query_start/user_message、pause/error 收尾集中在 <code>agent-helpers/turn.ts</code>；<code>Agent.send()</code> 只接入依赖。</li>
+    <li><strong>turn harness 有内部边界</strong>：provider request、prompt-too-long recovery、tool loop、usage/session checkpoint、<code>messages_snapshot</code> 集中在 <code>agent-helpers/query-loop.ts</code>；<code>Agent</code> 只负责生命周期入口和依赖注入。</li>
+    <li><strong>message repair 只有一条路径</strong>：orphan <code>tool_use</code> / displaced <code>tool_result</code> 修复集中在 <code>message-repair.ts</code>；session resume 和 event-log recovery 不再各自维护修复逻辑。</li>
+    <li><strong>tool execution 只有一条路径</strong>：主循环和 delegate 都走 <code>agent-helpers/tool-executor.ts</code> 的 <code>executeTools()</code>；guard、middleware、unknown tool、error result 和事件投影不再维护两份实现，也不作为 public API 暴露给宿主；team/worklist tool input 在 SDK team 边界校验，非法状态不会写入持久 worklist。</li>
+    <li><strong>tool contract 是独立事实源</strong>：<code>tool-types.ts</code> 定义 tool group、registration、result、guard context/decision；public <code>index.ts</code> 直接从窄契约导出。</li>
+    <li><strong>session view 属于 session 层</strong>：<code>SessionController</code> 负责 <code>AgentSessionView</code> hydrate、session list summary 和 <code>appendSessionEvent</code>；手动压缩入口委托给 <code>agent-helpers/session-compaction.ts</code>，产品和 <code>Agent</code> 都不应重建 UI history 或压缩流程；<code>zSessionEvent</code> 也校验 query/delegate result 与 token usage payload，timeline 不是任意 JSON 垃圾桶。</li>
+    <li><strong>content/message 是独立事实源</strong>：<code>content-types.ts</code> 定义 SDK canonical <code>ContentBlock</code>/<code>Message</code>，provider adapters、schema、chat view 和 public <code>index.ts</code> 都围绕它转换/导出。</li>
+    <li><strong>chat 契约和转换分离</strong>：<code>chat-types.ts</code> 定义 SDK session/chat view 类型，<code>chat-schema.ts</code> 只承载 zod 校验；<code>chat-blocks.ts</code> 拥有 content block 文本/预览转换，<code>chat-timeline.ts</code> 拥有 live/session timeline event 投影，<code>chat-messages.ts</code> 拥有 messages/events 到 UI message 的 hydrate 与标题推导，<code>chat.ts</code> 只保留 <code>AgentSessionView</code> 对外装配入口。旧 <code>toChatMessages()</code>/<code>toChatTimeline()</code> 兼容层已删除。</li>
+    <li><strong>项目共享目录由 SDK 规定</strong>：<code>projectSharedPaths(project)</code> 是 <code>AGENTS.md</code>、<code>.berry/team.json</code>、<code>.berry/messages.jsonl</code>、<code>.berry/worklist.json</code>、<code>.berry/safety.json</code> 的唯一路径事实源。</li>
     <li><strong>不放产品逻辑</strong>：团队工作台、服务器切换、手机/桌面连接、ClawHub 市场 UI 等属于产品端。</li>
     <li><strong>PromptPack 是 SDK 能力</strong>：基础行为、压缩摘要、记忆 flush、handoff/resume 统一由 <code>@berry-agent/prompt-pack</code> 管理。</li>
   </ul>
@@ -52,18 +163,19 @@
   <table>
     <thead><tr><th>包</th><th>职责</th></tr></thead>
     <tbody>
-      <tr><td><code>@berry-agent/core</code></td><td>Agent loop、sessions、providers、compaction、event log、workspace、skills、runtime events。</td></tr>
-      <tr><td><code>@berry-agent/models</code></td><td>模型注册、provider preset、tier 解析、价格和上下文窗口信息。</td></tr>
-      <tr><td><code>@berry-agent/tools-common</code></td><td>文件、shell、搜索、web、memory、运行时基础工具。</td></tr>
-      <tr><td><code>@berry-agent/safe</code></td><td>工具安全策略、allow/deny、目录边界、LLM classifier、审计事件。</td></tr>
-      <tr><td><code>@berry-agent/mcp</code></td><td>MCP client、MCP tool adapter、MCP tool center。</td></tr>
-      <tr><td><code>@berry-agent/memory-file</code></td><td>文件型长期记忆 provider。</td></tr>
+      <tr><td><code>@berry-agent/core</code></td><td>Agent loop、sessions、providers、compaction、event log、workspace、skills、memory provider init/dispose lifecycle、runtime events、AgentHome、project shared layout、workspace instructions/project knowledge API、ContentBlock schema、chat/session view schema、event-log <code>zSessionEvent</code>、AgentHome/ProjectSharedPaths schema、<code>zAgentMetadata</code>、ExecutionEnvironment、command environment、credential store、runtime context size 和 live AgentEvent timeline projection。<code>agent-config-types</code> 拥有 AgentConfig/AgentCreateConfig；<code>create-config</code> 拥有 Agent.create shorthand 转换；<code>agent-runtime-types</code> 拥有 query/delegate/middleware/event/status 契约；<code>content-types</code> 拥有 canonical message/content block；<code>message-repair</code> 拥有 provider 协议修复；<code>session-types</code> 拥有 session/store 契约；<code>tool-types</code> 拥有 tool/guard 契约；<code>provider-types</code> 拥有 provider/resolver/usage 契约；<code>boot</code> 拥有 Agent 启动装配；<code>capabilities</code> 拥有 hand/capability 注册边界，constructor tools、runtime <code>addTool()</code> 和 memory provider tools 都会被投影为 SDK-owned Hands，runtime <code>removeTool()</code> 会等待 disposer；<code>AgentWorkspaceData</code> 拥有 SDK-owned data access；<code>runtime-context</code> 拥有 prompt/tool runtime context assembly；<code>lifecycle</code> 拥有 runtime teardown；<code>SessionController</code> 拥有 session view/event hydrate，并通过 getter 读取可学习的 compaction/runtime 配置；<code>provider-runtime</code> 拥有 model ref/provider resolver 解析；<code>provider-controller</code> 拥有 live provider/config mutation、resolver refresh、error report 和 provider call；<code>middleware</code> 拥有 provider hook 调度；<code>builtin-tools</code> 拥有 SDK 内置 agent tool 注册；<code>turn</code> 拥有 turn lifecycle；<code>query-loop</code> 拥有单 turn harness 算法；<code>compaction/types</code> / <code>compaction/runner</code> / <code>compactor</code> / <code>compaction/layers</code> 拥有 compaction 契约、编排和层转换；<code>chat-blocks</code> / <code>chat-messages</code> / <code>chat-timeline</code> 拥有 chat 转换子域。Agent workspace initializer 和 <code>FileAgentMemory</code> 必须通过 <code>AgentHome</code> 取路径。</td></tr>
+      <tr><td><code>@berry-agent/runtime</code></td><td>SDK managed runtime assembly：<code>createManagedRuntime()</code> / <code>createManagedRuntimeAsync()</code> 将 host 输入转成 <code>ManagedAgentRuntime</code>，并接收 host 的 <code>ExecutionEnvironmentProvider</code> 作为 shell/container/remote runner 供给边界；<code>ManagedRuntimeRegistry</code> 拥有 live runtime mount/drop/replace/clear，并且 teardown 可等待；<code>RuntimeOrchestrator</code> + <code>FileRuntimeOrchestrationStore</code> / <code>MemoryRuntimeOrchestrationStore</code> 拥有 run lease 和 wake schedule/claim/complete/fail/stale-requeue 事实；runtime orchestration facts 由 <code>zod</code> schema 推导类型并校验持久 JSON；<code>ManagedRuntimeSupervisor</code> 将 lease/wake 与 live mount 组合成 acquire/reuse/renew/stop/release 运行所有权 API；<code>ManagedRuntimeWakeScheduler</code> 提供 host-local wake 调度循环；<code>runtimeOrchestrationPath()</code> / <code>createFileRuntimeOrchestrationStore()</code> 是 runtime-state path 单一事实源；<code>buildEnvironmentContext()</code> / <code>createEnvironmentSystemPrompt()</code> 是环境 prompt 单一事实源；<code>mcp.ensureDefaultConfig</code> 可写入 SDK-owned agent-local 默认 MCP 配置。Claw 不再持有 provider/safety/observe/workspace hand/file memory/skill loadout/context-window/default MCP seed/runtime cache 的组合逻辑。</td></tr>
+      <tr><td><code>@berry-agent/models</code></td><td>模型注册、provider preset、tier 解析、provider type schema、价格和上下文窗口信息。<code>modelsNamespaceSchema</code> 是 provider/model/tier registry 的 schema 事实源，会补齐 key-derived provider/model id 并校验 dangling provider/tier 引用；<code>listModels()</code> 的 provider response 也通过 zod schema 提取 id，不再手写 loose record cast。模型引用只允许 <code>tier:X</code>、<code>model:X</code> 或 bare model id；<code>raw:</code> model ref 在 parser 边界直接拒绝；secret-bearing provider config 必须停留在 Layer-1 <code>ProviderInstance</code>，不能塞进 model string。它是唯一 provider/model/tier registry，core 不再保留并行 <code>ProviderRegistry</code>。</td></tr>
+      <tr><td><code>@berry-agent/tools-common</code></td><td>文件、shell、搜索、web、memory、运行时基础工具，以及 <code>createLocalWorkspaceHand</code> 统一组装本地 workspace 能力；不再提供 <code>createAllTools()</code> 聚合入口，避免产品绕过 hand/environment 生命周期直接拼 raw tool arrays。<code>createSandboxExecutionEnvironment</code> / <code>createSandboxExecutionEnvironmentProvider</code> 把 OS sandbox 暴露成 SDK execution environment/provider，shell 只消费 command executor；后台 process session 由 shell tool disposer 在 hand/runtime destroy 时统一终止。</td></tr>
+      <tr><td><code>@berry-agent/safe</code></td><td>工具安全策略、allow/deny、目录边界、managed guard pipeline、HITL approval broker、LLM classifier、auto safety classifier 配置解析、项目级 safety 配置读写和 <code>zProjectSafetyConfig</code> 校验、审计事件。默认 classifier model ref 是 <code>tier:fast</code>，由 safe 包统一声明和解析，产品端只能展示/覆写，不能硬编码。</td></tr>
+      <tr><td><code>@berry-agent/mcp</code></td><td>MCP client、MCP tool adapter、managed MCP server lifecycle、MCP tool center、标准 <code>.mcp.json</code> filename、<code>zod</code>-backed raw config shape validation、默认 Playwright MCP template、默认配置写入和内置 MCP package normalization。批量 disconnect 会尽量断开所有 client 再抛出首个错误。</td></tr>
+      <tr><td><code>@berry-agent/memory-file</code></td><td>文件型长期记忆 provider，提供 <code>init()</code> 索引同步和 <code>dispose()</code> 资源释放，由 SDK Agent 生命周期调用。项目知识索引复用 core 的 <code>PROJECT_CONTEXT_FILE</code>，不另写项目文件名。</td></tr>
       <tr><td><code>@berry-agent/small-shared-core</code></td><td>跨包共享的轻量协议类型和纯函数，避免 core、prompt-pack 等包互相循环依赖。</td></tr>
-      <tr><td><code>@berry-agent/prompt-pack</code></td><td>内置/导入/导出 PromptPack，管理提示词目录规范。</td></tr>
-      <tr><td><code>@berry-agent/observe</code></td><td>推理、成本、cache、guard、compaction 的记录、查询和内嵌 UI。</td></tr>
-      <tr><td><code>@berry-agent/team</code></td><td>多 agent 团队和 worklist 原语。</td></tr>
+      <tr><td><code>@berry-agent/prompt-pack</code></td><td>内置/导入/导出 PromptPack，管理提示词目录规范；目录 manifest 由 <code>zod</code> schema 校验并推导类型。</td></tr>
+      <tr><td><code>@berry-agent/observe</code></td><td>推理、成本、cache、guard、compaction 的记录、查询和内嵌 UI；REST query 参数由 observe-owned zod schema 解析，server 不再散落手写 <code>parseInt(req.query...)</code>。</td></tr>
+      <tr><td><code>@berry-agent/team</code></td><td>多 agent 团队关系、leader/teammate hands、worklist 原语、team state / message / worklist zod schema 和持久化读写校验、worklist tool input zod schema、team state 轻量查询（如 <code>readTeamLeaderId</code>）、host teammate runtime hook（<code>SpawnTeammateSpec</code> / <code>TeamAgentRuntime</code>）和 disband artifact lifecycle。Team 只持有 runtime facade，不持有裸 <code>Agent</code>。</td></tr>
       <tr><td><code>@berry-agent/avatar</code></td><td>确定性像素头像生成。</td></tr>
-      <tr><td><code>@berry-agent/config</code></td><td>共享配置加载和 schema 边界。</td></tr>
+      <tr><td><code>@berry-agent/config</code></td><td>共享配置加载和 schema 边界；<code>berrySdkConfigSchema</code> 组合各 SDK 包 namespace schema 并推导 <code>BerrySdkConfig</code>，<code>loadSdkConfig()</code> 只负责读文件和格式化校验错误。</td></tr>
     </tbody>
   </table>
 
@@ -72,19 +184,19 @@
   <table>
     <thead><tr><th>包</th><th class="num">逻辑代码</th><th class="num">前端</th><th class="num">测试</th><th class="num">合计</th><th class="num">文件</th></tr></thead>
     <tbody>
-      <tr><td>core</td><td class="num">6097</td><td class="num">0</td><td class="num">4629</td><td class="num">10726</td><td class="num">69</td></tr>
-      <tr><td>observe</td><td class="num">2007</td><td class="num">1970</td><td class="num">919</td><td class="num">4896</td><td class="num">39</td></tr>
-      <tr><td>tools-common</td><td class="num">1108</td><td class="num">0</td><td class="num">608</td><td class="num">1716</td><td class="num">13</td></tr>
-      <tr><td>safe</td><td class="num">942</td><td class="num">0</td><td class="num">610</td><td class="num">1552</td><td class="num">22</td></tr>
-      <tr><td>models</td><td class="num">651</td><td class="num">0</td><td class="num">500</td><td class="num">1151</td><td class="num">14</td></tr>
-      <tr><td>team</td><td class="num">879</td><td class="num">0</td><td class="num">155</td><td class="num">1034</td><td class="num">6</td></tr>
-      <tr><td>memory-file</td><td class="num">585</td><td class="num">0</td><td class="num">278</td><td class="num">863</td><td class="num">9</td></tr>
-      <tr><td>mcp</td><td class="num">600</td><td class="num">0</td><td class="num">232</td><td class="num">832</td><td class="num">8</td></tr>
-      <tr><td>config</td><td class="num">181</td><td class="num">0</td><td class="num">295</td><td class="num">476</td><td class="num">4</td></tr>
+      <tr><td>core</td><td class="num">8646</td><td class="num">0</td><td class="num">5810</td><td class="num">14456</td><td class="num">90</td></tr>
+      <tr><td>observe</td><td class="num">2007</td><td class="num">1995</td><td class="num">919</td><td class="num">4921</td><td class="num">39</td></tr>
+      <tr><td>tools-common</td><td class="num">1225</td><td class="num">0</td><td class="num">651</td><td class="num">1876</td><td class="num">14</td></tr>
+      <tr><td>safe</td><td class="num">1249</td><td class="num">0</td><td class="num">789</td><td class="num">2038</td><td class="num">30</td></tr>
+      <tr><td>models</td><td class="num">668</td><td class="num">0</td><td class="num">534</td><td class="num">1202</td><td class="num">14</td></tr>
+      <tr><td>team</td><td class="num">970</td><td class="num">0</td><td class="num">206</td><td class="num">1176</td><td class="num">7</td></tr>
+      <tr><td>memory-file</td><td class="num">587</td><td class="num">0</td><td class="num">279</td><td class="num">866</td><td class="num">9</td></tr>
+      <tr><td>mcp</td><td class="num">1047</td><td class="num">0</td><td class="num">428</td><td class="num">1475</td><td class="num">12</td></tr>
+      <tr><td>config</td><td class="num">181</td><td class="num">0</td><td class="num">297</td><td class="num">478</td><td class="num">4</td></tr>
       <tr><td>prompt-pack</td><td class="num">377</td><td class="num">0</td><td class="num">0</td><td class="num">377</td><td class="num">1</td></tr>
       <tr><td>avatar</td><td class="num">83</td><td class="num">0</td><td class="num">17</td><td class="num">100</td><td class="num">2</td></tr>
       <tr><td>small-shared-core</td><td class="num">22</td><td class="num">0</td><td class="num">0</td><td class="num">22</td><td class="num">1</td></tr>
-      <tr><th>合计</th><th class="num">13532</th><th class="num">1970</th><th class="num">8243</th><th class="num">23745</th><th class="num">188</th></tr>
+      <tr><th>合计</th><th class="num">17062</th><th class="num">1995</th><th class="num">9930</th><th class="num">28987</th><th class="num">223</th></tr>
     </tbody>
   </table>
 
@@ -99,7 +211,15 @@
 └── sessions/
     └── &lt;session-id&gt;/
         ├── messages.json
+        ├── metadata.json
         └── events.jsonl</code></pre>
+  <pre><code>&lt;project-root&gt;/
+├── AGENTS.md
+└── .berry/
+    ├── team.json
+    ├── messages.jsonl
+    ├── worklist.json
+    └── safety.json</code></pre>
 
   <h2>代码规范</h2>
   <ul>

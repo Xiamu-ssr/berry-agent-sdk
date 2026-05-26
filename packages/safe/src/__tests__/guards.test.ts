@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { denyList, allowList, directoryScope, rateLimiter, compositeGuard } from '../guards/rules.js';
 
 const baseCtx = {
@@ -66,6 +69,28 @@ describe('directoryScope', () => {
       ...baseCtx,
     });
     expect(result.action).toBe('allow');
+  });
+
+  it('denies symlinks that resolve outside the directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'directory-scope-'));
+    const outside = mkdtempSync(join(tmpdir(), 'directory-scope-outside-'));
+    try {
+      const target = join(outside, 'secret.txt');
+      const link = join(root, 'secret-link.txt');
+      writeFileSync(target, 'secret');
+      symlinkSync(target, link);
+
+      const result = await directoryScope(root)({
+        toolName: 'read_file',
+        input: { path: link },
+        ...baseCtx,
+      });
+
+      expect(result.action).toBe('deny');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

@@ -177,8 +177,23 @@ interface ReadabilityResult {
 }
 
 // Lazy-load heavy deps (tree-shaking friendly for environments that skip readability)
-/* eslint-disable @typescript-eslint/no-explicit-any */
-let readabilityDepsPromise: Promise<{ Readability: any; parseHTML: any } | null> | undefined;
+type ReadabilityArticle = {
+  title?: string | null;
+  content?: string | null;
+};
+type ReadabilityInstance = {
+  parse(): ReadabilityArticle | null;
+};
+type ReadabilityConstructor = new (
+  document: unknown,
+  options?: { charThreshold?: number },
+) => ReadabilityInstance;
+type ParseHTML = (html: string) => { document: { baseURI?: string } };
+
+let readabilityDepsPromise: Promise<{
+  Readability: ReadabilityConstructor;
+  parseHTML: ParseHTML;
+} | null> | undefined;
 
 async function loadReadabilityDeps() {
   if (!readabilityDepsPromise) {
@@ -186,7 +201,10 @@ async function loadReadabilityDeps() {
       import('@mozilla/readability'),
       import('linkedom'),
     ])
-      .then(([r, l]) => ({ Readability: r.Readability, parseHTML: l.parseHTML }))
+      .then(([r, l]) => ({
+        Readability: r.Readability as ReadabilityConstructor,
+        parseHTML: l.parseHTML as ParseHTML,
+      }))
       .catch(() => null);
   }
   return readabilityDepsPromise;
@@ -199,7 +217,7 @@ async function readabilityExtract(html: string, url: string): Promise<Readabilit
   const { Readability, parseHTML } = deps;
   const { document } = parseHTML(html);
   try {
-    (document as any).baseURI = url;
+    document.baseURI = url;
   } catch {
     // ignore — some linkedom versions are readonly
   }
@@ -239,7 +257,7 @@ async function ssrfGuard(urlString: string): Promise<string | null> {
     return `scheme "${url.protocol}" not allowed (http/https only)`;
   }
 
-  const host = url.hostname;
+  const host = normalizeUrlHostname(url.hostname);
   if (!host) return 'missing host';
 
   // Reject obvious bypasses
@@ -287,7 +305,11 @@ function isPrivateIp(ip: string): boolean {
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
     if (lower === '::1' || lower === '::') return true;
-    if (lower.startsWith('fe80:') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    const firstHextet = parseInt(lower.split(':', 1)[0] || '0', 16);
+    if (Number.isFinite(firstHextet)) {
+      if ((firstHextet & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+      if ((firstHextet & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
+    }
     // IPv4-mapped IPv6: ::ffff:x.x.x.x
     const v4mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (v4mapped && isPrivateIp(v4mapped[1])) return true;
@@ -295,4 +317,16 @@ function isPrivateIp(ip: string): boolean {
   }
 
   return false;
+}
+
+function normalizeUrlHostname(hostname: string): string {
+  let host = hostname.trim();
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+  const zoneIndex = host.indexOf('%');
+  if (zoneIndex >= 0) {
+    host = host.slice(0, zoneIndex);
+  }
+  return host;
 }

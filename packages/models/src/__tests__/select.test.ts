@@ -32,22 +32,6 @@ describe('selectProvider', () => {
     expect('resolve' in out).toBe(true);
   });
 
-  it('returns a ProviderConfig for raw:', () => {
-    const reg = mkRegistry();
-    const out = selectProvider(
-      'raw:' +
-        JSON.stringify({
-          type: 'anthropic',
-          apiKey: 'sk-raw',
-          model: 'claude-opus-4.7',
-          baseUrl: 'https://api.anthropic.com',
-        }),
-      reg,
-    );
-    expect('resolve' in out).toBe(false);
-    expect((out as any).apiKey).toBe('sk-raw');
-  });
-
   it('treats bare strings as model ids', () => {
     const reg = mkRegistry();
     const out = selectProvider('claude-opus-4.7', reg);

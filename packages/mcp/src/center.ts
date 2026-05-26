@@ -43,7 +43,11 @@ export class MCPToolCenter {
   }
 
   async disconnectAll(): Promise<void> {
-    await Promise.all([...this.clients.values()].map(client => client.disconnect()));
+    const results = await Promise.allSettled([...this.clients.values()].map(client => client.disconnect()));
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (rejected) {
+      throw rejected.reason;
+    }
   }
 
   async listTools(server?: string): Promise<MCPServerToolInfo[]> {

@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { createCommandEnvironment } from '@berry-agent/core';
 import type { MCPClientConfig } from './types.js';
 
 export class MCPClient {
@@ -112,12 +113,7 @@ export class MCPClient {
         return new StdioClientTransport({
           command: tc.command,
           args: tc.args,
-          env: tc.env
-            ? Object.fromEntries(
-                Object.entries({ ...process.env, ...tc.env })
-                  .filter((pair): pair is [string, string] => pair[1] !== undefined),
-              )
-            : undefined,
+          env: createCommandEnvironment({ env: tc.env }),
           cwd: tc.cwd,
         });
       case 'http':

@@ -1,22 +1,21 @@
 /**
  * @berry-agent/team
  *
- * Team mode for Berry Agent SDK. Provides Leader/Teammate topology on top
- * of @berry-agent/core's `agent.spawn()` primitive, plus project-scoped
- * persistence (team state + message log under `<project>/.berry/`).
+ * Team mode for Berry Agent SDK. Provides leader/teammate topology on top
+ * of host-supplied managed runtimes, plus project-scoped persistence
+ * (team state + message log under `<project>/.berry/`).
  *
  * Quick start:
  *   const team = await Team.open({
  *     leaderId: 'orange',
- *     leader: leaderAgent,
  *     project: '/path/to/project',
  *   });
- *   for (const t of team.leaderTools()) leaderAgent.addTool(t);
+ *   leaderRuntime.addHand(team.leaderHand());
  *   // leader can now call spawn_teammate / message_teammate / etc.
  */
 export { Team } from './team.js';
-export type { CreateTeamOptions } from './team.js';
-export { TeamStore } from './store.js';
+export type { CreateTeamOptions, SpawnTeammateSpec, TeamAgentRuntime, TeammateRuntimeFactory } from './team.js';
+export { TeamStore, readTeamLeaderId } from './store.js';
 export { WorklistStore, WorklistError } from './worklist.js';
 export type { WorklistActor } from './worklist.js';
 export type {
@@ -29,3 +28,11 @@ export type {
   WorklistState,
 } from './types.js';
 export { WORKLIST_STATUS, WORKLIST_STATUS_VALUES } from './types.js';
+export {
+  zTeamMessage,
+  zTeamState,
+  zTeammateRecord,
+  zWorklistState,
+  zWorklistTask,
+  zWorklistTaskStatus,
+} from './schema.js';

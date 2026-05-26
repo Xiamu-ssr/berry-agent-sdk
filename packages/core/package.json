@@ -8,7 +8,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./chat-schema": {
+      "types": "./dist/chat-schema.d.ts",
+      "import": "./dist/chat-schema.js",
+      "default": "./dist/chat-schema.js"
     }
   },
   "files": [
@@ -16,9 +27,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "dev": "tsc --watch",
-    "test": "vitest",
+    "test": "vitest run --maxWorkers=2",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -26,7 +37,8 @@
     "@berry-agent/prompt-pack": "^0.5.0-alpha.1",
     "@berry-agent/small-shared-core": "^0.5.0-alpha.1",
     "gray-matter": "^4.0.3",
-    "openai": "^5.0.0"
+    "openai": "^5.0.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

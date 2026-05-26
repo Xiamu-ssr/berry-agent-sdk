@@ -36,6 +36,18 @@ function safeJsonStringify(value: unknown, maxLen = MAX_JSON_FIELD): string | nu
   }
 }
 
+function errorMessageOf(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(error);
+}
+
+function isImageContentBlock(block: unknown): boolean {
+  return !!block && typeof block === 'object' && 'type' in block && block.type === 'image';
+}
+
 interface PendingApiCall {
   startTime: number;
   request: ProviderRequest;
@@ -183,16 +195,13 @@ export function createCollector(config: CollectorConfig): {
       const startTime = pending?.startTime ?? Date.now();
       const latencyMs = Date.now() - startTime;
 
-      const errorMessage =
-        typeof error === 'object' && error !== null && 'message' in error
-          ? String((error as any).message)
-          : String(error);
+      const errorMessage = errorMessageOf(error);
 
       // Detect images in messages
       const hasImages = request.messages.some(
         (m) =>
           Array.isArray(m.content) &&
-          m.content.some((b: any) => b.type === 'image'),
+          m.content.some(isImageContentBlock),
       );
 
       const id = nanoid();
@@ -504,9 +513,7 @@ export function createCollector(config: CollectorConfig): {
 
       case 'delegate_start':
       case 'delegate_end':
-      case 'child_spawned':
-      case 'child_destroyed':
-        // Future: track delegate/spawn chains
+        // Future: track delegate chains
         break;
 
       default:

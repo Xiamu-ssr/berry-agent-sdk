@@ -23,18 +23,18 @@
 }
 
 [data-theme="dark"] {
-  --observe-bg: #111827;
-  --observe-bg-secondary: #1f2937;
-  --observe-text: #f9fafb;
-  --observe-text-secondary: #9ca3af;
-  --observe-border: #374151;
-  --observe-accent: #60a5fa;
-  --observe-accent-hover: #93c5fd;
-  --observe-success: #34d399;
-  --observe-error: #f87171;
-  --observe-warning: #fbbf24;
-  --observe-card-bg: #1f2937;
-  --observe-card-shadow: 0 1px 3px rgba(0,0,0,0.3);
-  --observe-code-bg: #374151;
-  --observe-highlight-bg: #1e3a5f;
+  --observe-bg: #17191c;
+  --observe-bg-secondary: #1b1e22;
+  --observe-text: #e4e4e7;
+  --observe-text-secondary: #71717a;
+  --observe-border: rgba(255,255,255,0.085);
+  --observe-accent: #9bdcff;
+  --observe-accent-hover: #c8ecff;
+  --observe-success: #87f2c5;
+  --observe-error: #ffb4bd;
+  --observe-warning: #ffe09a;
+  --observe-card-bg: #20242a;
+  --observe-card-shadow: 0 18px 60px rgba(0,0,0,0.16);
+  --observe-code-bg: #20242a;
+  --observe-highlight-bg: rgba(155,220,255,0.10);
 }

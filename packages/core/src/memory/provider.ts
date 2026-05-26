@@ -4,12 +4,13 @@
  * Core defines the contract; concrete implementations live in separate
  * packages (e.g. @berry-agent/memory-file, @berry-agent/memory-mem0).
  *
- * Each provider contributes its own tools to the agent (memory_search,
- * memory_get, etc.). Core never auto-registers memory tools — the provider
- * does it via `tools()`.
+ * Each provider contributes its own capabilities to the agent (memory_search,
+ * memory_get, etc.). Core wraps those tool registrations as an SDK-owned
+ * memory-provider Hand so they share the same capability boundary as local,
+ * MCP, browser, and remote hands.
  */
 
-import type { ToolRegistration } from '../types.js';
+import type { ToolRegistration } from '../tool-types.js';
 
 export interface MemoryInitContext {
   agentId: string;

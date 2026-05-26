@@ -1,4 +1,4 @@
-import { DollarSign, Zap, Shield, Layers } from 'lucide-react';
+import { BarChart3, DollarSign, Zap, Shield, Layers } from 'lucide-react';
 import { useObserveApi } from '../hooks/useObserve';
 
 interface Props {
@@ -14,7 +14,15 @@ export function GlobalDashboard({ baseUrl, onNavigate }: Props) {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">📊 Overview</h2>
+      <div>
+        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 dark:text-zinc-100">
+          <BarChart3 size={20} className="text-blue-600 dark:text-sky-300" />
+          Overview
+        </h2>
+        <p className="mt-1 text-sm text-gray-500 dark:text-zinc-500">
+          Runtime cost, cache, guard, and compaction signals from the SDK observer.
+        </p>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -62,15 +70,15 @@ function StatCard({ icon, label, value, sub, color, onClick }: {
       : 'border-gray-200 dark:border-gray-700';
   return (
     <div
-      className={`bg-white dark:bg-gray-800 rounded-xl border ${borderColor} p-4 cursor-pointer hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-black/20 transition-shadow`}
+      className={`cursor-pointer rounded-xl border bg-white p-4 transition-colors hover:border-blue-300 hover:bg-blue-50/40 dark:border-white/[0.08] dark:bg-[#20242a]/75 dark:hover:border-sky-300/25 dark:hover:bg-sky-300/[0.06] ${borderColor}`}
       onClick={onClick}
     >
-      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 mb-2">
+      <div className="mb-2 flex items-center gap-2 text-gray-500 dark:text-zinc-500">
         {icon}
         <span className="text-sm font-medium">{label}</span>
       </div>
-      <div className="text-2xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
-      <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{sub}</div>
+      <div className="text-2xl font-semibold text-gray-900 dark:text-zinc-100">{value}</div>
+      <div className="mt-1 text-xs text-gray-400 dark:text-zinc-600">{sub}</div>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { isolationPolicyFromScope } from '../execution-environment.js';
 import { AgentScope } from '../scope.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 
 describe('AgentScope', () => {
   const tmps: string[] = [];
@@ -113,24 +114,53 @@ describe('AgentScope', () => {
       const scope = new AgentScope(ws);
       expect(scope.isWritable(ws)).toBe(true);
     });
-  });
 
-  describe('isReadable', () => {
-    it('always returns true', () => {
+    it('denies writable symlinks that resolve outside writable roots', () => {
       const ws = makeTmp();
-      const scope = new AgentScope(ws);
-      expect(scope.isReadable('/etc/shadow')).toBe(true);
-      expect(scope.isReadable('/anything')).toBe(true);
+      const outside = makeTmp();
+      const target = join(outside, 'secret.txt');
+      const link = join(ws, 'secret-link.txt');
+      writeFileSync(target, 'secret');
+      symlinkSync(target, link);
+
+      expect(new AgentScope(ws).isWritable(link)).toBe(false);
     });
   });
 
-  describe('toSandboxConfig', () => {
+  describe('isReadable', () => {
+    it('allows reads inside readable roots', () => {
+      const ws = makeTmp();
+      const proj = makeTmp();
+      const scope = new AgentScope(ws, proj);
+      expect(scope.isReadable(join(proj, 'README.md'))).toBe(true);
+      expect(scope.isReadable(join(ws, 'MEMORY.md'))).toBe(true);
+    });
+
+    it('denies reads outside readable roots', () => {
+      const ws = makeTmp();
+      const scope = new AgentScope(ws);
+      expect(scope.isReadable('/etc/shadow')).toBe(false);
+    });
+
+    it('denies readable symlinks that resolve outside readable roots', () => {
+      const ws = makeTmp();
+      const outside = makeTmp();
+      const target = join(outside, 'secret.txt');
+      const link = join(ws, 'secret-link.txt');
+      writeFileSync(target, 'secret');
+      symlinkSync(target, link);
+
+      expect(new AgentScope(ws).isReadable(link)).toBe(false);
+    });
+  });
+
+  describe('isolationPolicyFromScope', () => {
     it('includes writableRoots + /tmp in allowWrite', () => {
       const ws = makeTmp();
       const proj = makeTmp();
       const scope = new AgentScope(ws, proj);
-      const config = scope.toSandboxConfig();
-      expect(config.allowRead).toEqual(['/']);
+      const config = isolationPolicyFromScope(scope);
+      expect(config.allowRead).toEqual([proj, ws]);
       expect(config.allowWrite).toContain(proj);
       expect(config.allowWrite).toContain(ws);
       expect(config.allowWrite).toContain('/tmp');
@@ -141,7 +171,7 @@ describe('AgentScope', () => {
     it('workspace-only scope still includes /tmp', () => {
       const ws = makeTmp();
       const scope = new AgentScope(ws);
-      const config = scope.toSandboxConfig();
+      const config = isolationPolicyFromScope(scope);
       expect(config.allowWrite).toEqual([ws, '/tmp']);
     });
   });

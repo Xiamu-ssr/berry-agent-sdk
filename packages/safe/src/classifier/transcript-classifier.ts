@@ -163,7 +163,7 @@ export function createClassifierGuard(config: ClassifierConfig): ToolGuard {
     } else if (!config.modelRef || !config.registry) {
       throw new Error(
         'createClassifierGuard: either modelRef + registry must be provided, ' +
-          'or sdkConfigPath must point to a berry-sdk.json with safe.classifier.model.',
+          'or sdkConfigPath must point to a berry-sdk.json with safe.classifier.model or models.tiers.fast.',
       );
     }
   }
@@ -312,11 +312,20 @@ function extractResponseText(response: { content: unknown }): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .filter((b: any) => b.type === 'text')
-      .map((b: any) => b.text)
+      .filter(isTextBlock)
+      .map((b) => b.text)
       .join('\n');
   }
   return '';
+}
+
+function isTextBlock(block: unknown): block is { type: 'text'; text: string } {
+  return !!block &&
+    typeof block === 'object' &&
+    'type' in block &&
+    block.type === 'text' &&
+    'text' in block &&
+    typeof block.text === 'string';
 }
 
 // Export for testing

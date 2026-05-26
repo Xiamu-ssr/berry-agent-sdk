@@ -6,9 +6,16 @@
 //   const tools = await createMCPTools(mcpClient, { prefix: 'mcp_' });
 //   const agent = new Agent({ tools, ... });
 
-import type { ToolRegistration, ToolDefinition } from '@berry-agent/core';
+import { createToolRegistrationHand } from '@berry-agent/core';
+import type { Hand, ToolRegistration, ToolDefinition } from '@berry-agent/core';
 import type { MCPClient } from './client.js';
 import type { MCPToolOptions } from './types.js';
+
+export const MCP_DEFAULT_PREFIX_SEPARATOR = '_' as const;
+
+export function defaultMCPPrefix(serverName: string): string {
+  return `${serverName}${MCP_DEFAULT_PREFIX_SEPARATOR}`;
+}
 
 /**
  * Discover tools from an MCP server and wrap them as Berry ToolRegistrations.
@@ -87,6 +94,25 @@ export async function createMCPTools(
   }
 
   return registrations;
+}
+
+/**
+ * Discover tools from an MCP server and expose them as a Hand.
+ *
+ * This keeps MCP as a separate execution surface while preserving the existing
+ * `source.kind = 'mcp'` provenance on every model-visible tool registration
+ * produced from the hand.
+ */
+export async function createMCPHand(
+  client: MCPClient,
+  options?: MCPToolOptions,
+): Promise<Hand> {
+  return createToolRegistrationHand({
+    id: `mcp:${client.name}`,
+    kind: 'mcp',
+    displayName: `MCP: ${client.name}`,
+    tools: await createMCPTools(client, options),
+  });
 }
 
 /**

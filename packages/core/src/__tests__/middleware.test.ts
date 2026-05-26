@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Agent } from '../agent.js';
-import { normalizeSystemPrompt, SystemPromptCacheMode } from '../types.js';
+import { normalizeSystemPrompt, SystemPromptCacheMode } from '../index.js';
 import type {
   Provider,
   ProviderRequest,
@@ -11,7 +11,7 @@ import type {
   CompactionContext,
   CompactionOutcome,
   CompactionStrategy,
-} from '../types.js';
+} from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 function makeUsage(): TokenUsage {

@@ -11,12 +11,8 @@
 // a callback the Agent passes to let itself re-create its Provider
 // when the resolver swapped the ProviderConfig.
 
-import type {
-  AgentEvent,
-  Provider,
-  ProviderRequest,
-  ProviderResponse,
-} from '../types.js';
+import type { AgentEvent } from '../agent-runtime-types.js';
+import type { Provider, ProviderRequest, ProviderResponse } from '../provider-types.js';
 import { MAX_RETRIES, REQUEST_TIMEOUT_MS } from '../constants.js';
 import { getRetryDelay, isRetryableError } from '../utils/retry.js';
 import { sleep } from './provider.js';
@@ -28,7 +24,7 @@ export interface ProviderCallDeps {
   /** Ask the resolver to re-derive config and swap Provider when it changed. */
   refreshIfNeeded(): void;
   /** Forward a provider error to the resolver; never throws. */
-  reportError(err: unknown, statusCode?: number): void;
+  reportError(err: unknown, statusCode?: number): boolean;
 }
 
 /**
@@ -93,7 +89,7 @@ export async function callProvider(
         }
 
         return finalResponse;
-      } catch (error: any) {
+      } catch (error) {
         lastError = error;
 
         const callerAborted = !!request.signal?.aborted && !idleController.signal.aborted;
@@ -103,18 +99,21 @@ export async function callProvider(
           !callerAborted &&
           (timedOutBeforeFirstToken || isRetryableError(error));
 
+        let failedOver = false;
         if (!callerAborted) {
-          deps.reportError(error, typeof error?.status === 'number' ? error.status : undefined);
+          failedOver = deps.reportError(error, errorStatusCode(error));
           // Let the resolver rotate before the next retry attempt.
           deps.refreshIfNeeded();
         }
 
-        if (!retryableBeforeFirstToken || attempt > MAX_RETRIES) {
+        if (!retryableBeforeFirstToken && !failedOver) {
+          throw error;
+        }
+        if (attempt > MAX_RETRIES) {
           throw error;
         }
 
-        const retryAfter =
-          error.headers?.['retry-after'] ?? error.headers?.get?.('retry-after') ?? null;
+        const retryAfter = retryAfterHeader(error);
         const delayMs = getRetryDelay(attempt, retryAfter);
 
         // Structured retry event so UIs / observe can surface strong-supervision decisions
@@ -124,8 +123,8 @@ export async function callProvider(
           scope: 'stream',
           attempt,
           maxAttempts: MAX_RETRIES + 1,
-          reason: timedOutBeforeFirstToken ? 'stream_idle_timeout' : 'transient_error',
-          errorMessage: typeof error?.message === 'string' ? error.message : String(error),
+          reason: failedOver ? 'transient_error' : timedOutBeforeFirstToken ? 'stream_idle_timeout' : 'transient_error',
+          errorMessage: errorMessage(error),
           delayMs,
         });
 
@@ -140,12 +139,46 @@ export async function callProvider(
 
   try {
     return await providerNow.chat(request);
-  } catch (error: any) {
-    const statusCode = typeof error?.status === 'number' ? error.status : undefined;
+  } catch (error) {
+    const statusCode = errorStatusCode(error);
     const callerAborted = !!request.signal?.aborted;
-    if (!callerAborted) {
-      deps.reportError(error, statusCode);
+    if (!callerAborted && deps.reportError(error, statusCode)) {
+      deps.refreshIfNeeded();
+      return await deps.getProvider().chat(request);
     }
     throw error;
   }
+}
+
+function errorStatusCode(error: unknown): number | undefined {
+  if (error && typeof error === 'object' && 'status' in error && typeof error.status === 'number') {
+    return error.status;
+  }
+  return undefined;
+}
+
+function retryAfterHeader(error: unknown): string | null | undefined {
+  if (!error || typeof error !== 'object' || !('headers' in error)) return null;
+  const headers = error.headers;
+  if (headers && typeof headers === 'object') {
+    if ('retry-after' in headers) {
+      const value = headers['retry-after' as keyof typeof headers];
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number') return String(value);
+    }
+    if ('get' in headers && typeof headers.get === 'function') {
+      const value = headers.get('retry-after');
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number') return String(value);
+      if (value === null) return value;
+    }
+  }
+  return null;
+}
+
+function errorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return String(error);
 }

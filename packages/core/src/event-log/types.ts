@@ -5,15 +5,10 @@
 // The event log is the source of truth; the context window
 // (messages[]) is a derived view built by ContextStrategy.
 
-import type {
-  ContentBlock,
-  QueryResult,
-  ToolGuardDecision,
-  DelegateResult,
-  CompactionLayer,
-  Message,
-  SystemPromptInput,
-} from '../types.js';
+import type { SystemPromptInput } from '@berry-agent/small-shared-core';
+import type { DelegateResult, QueryResult } from '../agent-runtime-types.js';
+import type { ContentBlock, Message } from '../content-types.js';
+import type { ToolGuardDecision } from '../tool-types.js';
 
 // ----- Base Event -----
 
@@ -93,7 +88,8 @@ export interface CompactionMarkerEvent extends BaseEvent {
   contextAfter?: number;
   thresholdPct?: number;
   contextWindow?: number;
-  layersApplied?: CompactionLayer[];
+  /** SDK compaction layers or custom strategy layer labels. */
+  layersApplied?: string[];
   durationMs?: number;
 }
 
@@ -102,6 +98,29 @@ export interface GuardDecisionEvent extends BaseEvent {
   type: 'guard_decision';
   toolName: string;
   decision: ToolGuardDecision;
+}
+
+/** Human approval was requested for a guarded tool call. */
+export interface ApprovalRequestEvent extends BaseEvent {
+  type: 'approval_request';
+  approvalId: string;
+  agentId?: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  callIndex: number;
+  reason: string;
+  cwd: string;
+  model: string;
+}
+
+/** Human approval request was answered. */
+export interface ApprovalDecisionEvent extends BaseEvent {
+  type: 'approval_decision';
+  approvalId: string;
+  approved: boolean;
+  note?: string;
+  toolName?: string;
+  agentId?: string;
 }
 
 /** Start of a delegate sub-task. */
@@ -252,6 +271,8 @@ export type SessionEvent =
   | QueryEndEvent
   | CompactionMarkerEvent
   | GuardDecisionEvent
+  | ApprovalRequestEvent
+  | ApprovalDecisionEvent
   | DelegateStartEvent
   | DelegateEndEvent
   | ApiCallEvent
@@ -268,6 +289,12 @@ export type SessionEvent =
 /** All session event type discriminators. */
 export type SessionEventType = SessionEvent['type'];
 
+/** Draft accepted by SDK APIs that append host/runtime events. */
+export type SessionEventDraft = {
+  [Event in SessionEvent as Event['type']]: Omit<Event, 'id' | 'timestamp' | 'sessionId'> &
+    Partial<Pick<BaseEvent, 'id' | 'timestamp' | 'turnId'>>
+}[SessionEvent['type']];
+
 // ----- EventLogStore Interface -----
 
 /** Options for filtering events when reading. */
@@ -276,6 +303,10 @@ export interface GetEventsOptions {
   from?: number;
   /** End index (exclusive) */
   to?: number;
+  /** Return only the newest N matching events. Implementations should avoid full-file reads when possible. */
+  tail?: number;
+  /** Maximum bytes to scan for tail reads before returning the matching events found so far. */
+  maxBytes?: number;
   /** Only return events with timestamp >= since */
   since?: number;
   /** Only return events matching these types */

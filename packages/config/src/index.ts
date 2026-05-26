@@ -7,6 +7,7 @@
 // Agent, and are done.
 
 export { loadSdkConfig, SdkConfigError } from './loader.js';
+export { berrySdkConfigSchema, BERRY_SDK_CONFIG_FIELDS } from './schema.js';
 export type {
   BerrySdkConfig,
   SafeNamespaceConfig,

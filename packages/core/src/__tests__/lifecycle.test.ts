@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Agent } from '../agent.js';
-import type { ProviderConfig, Provider, ProviderResponse } from '../types.js';
+import type { ProviderConfig, Provider, ProviderResponse } from '../index.js';
 import { stablePrompt, tmpHome } from './helpers.js';
 
 class FakeProvider implements Provider {
@@ -53,23 +53,23 @@ describe('Agent lifecycle', () => {
     it('destroy() marks agent destroyed; send() rejects', async () => {
       const { agent } = makeAgent();
       expect(agent.isDestroyed).toBe(false);
-      agent.destroy();
+      await agent.destroy();
 
       expect(agent.status).toBe('destroyed');
       expect(agent.isDestroyed).toBe(true);
       await expect(agent.send('hi')).rejects.toThrow(/destroyed/i);
     });
 
-    it('destroy() is idempotent', () => {
+    it('destroy() is idempotent', async () => {
       const { agent } = makeAgent();
-      agent.destroy();
-      agent.destroy();
+      await agent.destroy();
+      await agent.destroy();
       expect(agent.status).toBe('destroyed');
     });
 
     it('delegate() rejects on destroyed agent', async () => {
       const { agent } = makeAgent();
-      agent.destroy();
+      await agent.destroy();
       await expect(agent.delegate('hi')).rejects.toThrow(/destroyed/i);
     });
   });
@@ -92,11 +92,11 @@ describe('Agent lifecycle', () => {
       expect(snap.provider.type).toBe('anthropic');
     });
 
-    it('snapshot is frozen at capture time — later state changes do not mutate it', () => {
+    it('snapshot is frozen at capture time — later state changes do not mutate it', async () => {
       const { agent } = makeAgent();
       const snap = agent.snapshot();
       const before = snap.status;
-      agent.destroy();
+      await agent.destroy();
       expect(snap.status).toBe(before);
       expect(agent.status).toBe('destroyed');
     });
