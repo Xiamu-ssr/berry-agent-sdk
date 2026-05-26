@@ -25,8 +25,9 @@ import { z } from 'zod';
 import { AgentHome } from '../agent-home.js';
 import type { CompactionConfig } from '../compaction/types.js';
 
+export const zReasoningEffort = z.enum(['none', 'low', 'medium', 'high', 'max', 'xhigh']);
 /** Reasoning effort levels supported by providers. */
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+export type ReasoningEffort = z.infer<typeof zReasoningEffort>;
 
 /**
  * Agent metadata stored in agent.json. Everything here is runtime-switchable.
@@ -72,8 +73,6 @@ export interface InitWorkspaceSeed {
   toolDenylist?: string[];
   safeLevel?: string;
 }
-
-export const zReasoningEffort = z.enum(['none', 'low', 'medium', 'high', 'max', 'xhigh']);
 
 const zCompactionLayer = z.enum([
   'clear_thinking',
