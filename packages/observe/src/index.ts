@@ -9,7 +9,6 @@ export type { Observer, ObserverConfig } from './observer.js';
 // Analyzer
 export { Analyzer } from './analyzer/analyzer.js';
 export { MetricsCalculator } from './analyzer/metrics.js';
-export type { TurnMetrics, SessionMetrics, AgentMetrics } from './analyzer/metrics.js';
 
 // Database
 export { createDatabase } from './collector/db.js';
@@ -46,6 +45,19 @@ export type {
   CompactionRecord, CompactionStats,
   InferenceRecord, TurnSummary, SessionSummary, AgentStats, AgentDetail,
   DimensionFilter, CleanupResult,
+  StabilityMetrics, TurnMetrics, SessionMetrics, AgentMetrics,
+} from './analyzer/api-types.js';
+
+// Zod schemas for view-model payloads — exported so server can validate
+// outgoing responses and UI can validate fetched payloads at the boundary.
+export {
+  costBreakdownSchema, costByModelSchema, costTrendPointSchema, cacheEfficiencySchema,
+  toolStatSchema, guardStatSchema, guardDecisionRecordSchema, guardByToolStatSchema,
+  compactionRecordSchema, compactionStatsSchema,
+  inferenceRecordSchema, turnSummarySchema, sessionSummarySchema,
+  agentStatsSchema, agentDetailSchema,
+  dimensionFilterSchema, cleanupResultSchema,
+  stabilityMetricsSchema, turnMetricsSchema, sessionMetricsSchema, agentMetricsSchema,
 } from './analyzer/api-types.js';
 
 // Zod schema for SDK config namespace

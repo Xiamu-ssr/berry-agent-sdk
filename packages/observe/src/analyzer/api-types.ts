@@ -4,6 +4,13 @@
 // Single source of truth for all observe API request/response types.
 // Used by: server.ts (response), UI (fetch result), analyzer.ts (implementation).
 // Import from '@berry-agent/observe' or '@berry-agent/observe/api-types'.
+//
+// All view-model types are derived from zod schemas. Exported `*Schema`
+// constants let hosts/UI runtime-validate aggregate payloads at the API
+// boundary; exported types remain identical to the previous hand-written
+// interfaces so existing consumers compile unchanged.
+
+import { z } from 'zod';
 
 // ----- API Paths (single source of truth) -----
 
@@ -34,199 +41,285 @@ export const OBSERVE_API_PATHS = {
   METRICS_AGENT: '/metrics/agent/:agentId',
 } as const;
 
-// ----- Response Types -----
+// ----- Primitive helpers -----
 
-export interface CostBreakdown {
-  inputCost: number;
-  outputCost: number;
-  cacheSavings: number;
-  totalCost: number;
-  callCount: number;
-}
+const nonNegativeNumber = z.number().nonnegative();
+const nonNegativeInt = z.number().int().nonnegative();
+const finiteNumber = z.number().finite();
+const ratio01 = z.number().min(0).max(1);
+const nullableString = z.string().nullable();
 
-export interface CostByModel {
-  model: string;
-  totalCost: number;
-  callCount: number;
-  inputTokens: number;
-  outputTokens: number;
-}
+// ----- Filter (request) -----
 
-export interface CostTrendPoint {
-  date: string;
-  totalCost: number;
-  callCount: number;
-}
+export const dimensionFilterSchema = z.object({
+  sessionId: z.string().optional(),
+  agentId: z.string().optional(),
+  turnId: z.string().optional(),
+}).strip();
+export type DimensionFilter = z.infer<typeof dimensionFilterSchema>;
 
-export interface CacheEfficiency {
-  totalCacheReadTokens: number;
-  totalCacheWriteTokens: number;
-  totalInputTokens: number;
-  cacheHitRate: number;
-  totalSavings: number;
-}
+// ----- Cost -----
 
-export interface ToolStat {
-  name: string;
-  callCount: number;
-  errorCount: number;
-  avgDurationMs: number;
-  totalDurationMs: number;
-}
+export const costBreakdownSchema = z.object({
+  inputCost: nonNegativeNumber,
+  outputCost: nonNegativeNumber,
+  cacheSavings: nonNegativeNumber,
+  totalCost: nonNegativeNumber,
+  callCount: nonNegativeInt,
+}).strip();
+export type CostBreakdown = z.infer<typeof costBreakdownSchema>;
 
-export interface GuardStat {
-  allowCount: number;
-  denyCount: number;
-  modifyCount: number;
-  avgDurationMs: number;
-}
+export const costByModelSchema = z.object({
+  model: z.string(),
+  totalCost: nonNegativeNumber,
+  callCount: nonNegativeInt,
+  inputTokens: nonNegativeInt,
+  outputTokens: nonNegativeInt,
+}).strip();
+export type CostByModel = z.infer<typeof costByModelSchema>;
 
-export interface GuardDecisionRecord {
-  id: string;
-  sessionId: string;
-  llmCallId: string | null;
-  turnId: string | null;
-  toolName: string;
-  input: string;
-  decision: string;
-  reason: string | null;
-  modifiedInput: string | null;
-  callIndex: number;
-  durationMs: number;
-  timestamp: number;
-}
+export const costTrendPointSchema = z.object({
+  date: z.string(),
+  totalCost: nonNegativeNumber,
+  callCount: nonNegativeInt,
+}).strip();
+export type CostTrendPoint = z.infer<typeof costTrendPointSchema>;
 
-export interface GuardByToolStat {
-  toolName: string;
-  allowCount: number;
-  denyCount: number;
-  modifyCount: number;
-  totalCount: number;
-  denyRate: number;
-}
+// ----- Cache -----
 
-export interface CompactionRecord {
-  id: string;
-  sessionId: string;
-  triggerReason: string;
-  contextBefore: number;
-  contextAfter: number;
-  thresholdPct: number;
-  contextWindow: number;
-  layersApplied: string;
-  durationMs: number;
-  tokensFreed: number;
-  timestamp: number;
-}
+export const cacheEfficiencySchema = z.object({
+  totalCacheReadTokens: nonNegativeInt,
+  totalCacheWriteTokens: nonNegativeInt,
+  totalInputTokens: nonNegativeInt,
+  cacheHitRate: ratio01,
+  totalSavings: nonNegativeNumber,
+}).strip();
+export type CacheEfficiency = z.infer<typeof cacheEfficiencySchema>;
 
-export interface CompactionStats {
-  totalCount: number;
-  avgTokensFreed: number;
-  avgDurationMs: number;
-  avgThresholdPct: number;
-  avgReductionPct: number;
-  byTrigger: { reason: string; count: number }[];
-  byLayer: { layer: string; count: number }[];
-}
+// ----- Tools / Guard -----
 
-export interface InferenceRecord {
-  id: string;
-  sessionId: string;
-  agentId: string | null;
-  turnId: string | null;
-  provider: string;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalCost: number;
-  latencyMs: number;
-  stopReason: string;
-  messageCount: number;
-  toolDefCount: number;
-  systemBlockCount: number;
-  hasImages: boolean;
-  requestSystem: string | null;
-  requestMessages: string | null;
-  requestTools: string | null;
-  responseContent: string | null;
-  providerRequest: string | null;
-  providerResponse: string | null;
-  providerDetail: string | null;
-  timestamp: number;
-  toolCalls: Array<{ name: string; input: string; output: string; isError: boolean; durationMs: number }>;
-  guardDecisions: GuardDecisionRecord[];
-}
+export const toolStatSchema = z.object({
+  name: z.string(),
+  callCount: nonNegativeInt,
+  errorCount: nonNegativeInt,
+  avgDurationMs: nonNegativeNumber,
+  totalDurationMs: nonNegativeNumber,
+}).strip();
+export type ToolStat = z.infer<typeof toolStatSchema>;
 
-export interface TurnSummary {
-  id: string;
-  sessionId: string;
-  agentId: string | null;
-  prompt: string | null;
-  startTime: number;
-  endTime: number | null;
-  llmCallCount: number;
-  toolCallCount: number;
-  totalCost: number;
-  status: string;
-  /** v0.4 crash recovery metadata. True iff this turn began with a
-   *  crash_recovered event (previous run crashed). */
-  recoveredFromCrash: boolean;
-  /** Number of tool calls that were orphaned in the previous crashed run. */
-  orphanedToolCount: number;
-  /** ID of the prior turn the crash happened in, if known. */
-  previousTurnId: string | null;
-  // aggregated sub-objects
-  cost: CostBreakdown;
-  cache: CacheEfficiency;
-  guard: GuardStat;
-}
+export const guardStatSchema = z.object({
+  allowCount: nonNegativeInt,
+  denyCount: nonNegativeInt,
+  modifyCount: nonNegativeInt,
+  avgDurationMs: nonNegativeNumber,
+}).strip();
+export type GuardStat = z.infer<typeof guardStatSchema>;
 
-export interface SessionSummary {
-  id: string;
-  agentId: string | null;
-  startTime: number;
-  endTime: number | null;
-  totalCost: number;
-  status: string;
-  llmCallCount: number;
-  toolCallCount: number;
-  guardDecisionCount: number;
-  compactionCount: number;
-  eventCount: number;
-}
+export const guardDecisionRecordSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  llmCallId: nullableString,
+  turnId: nullableString,
+  toolName: z.string(),
+  input: z.string(),
+  decision: z.string(),
+  reason: nullableString,
+  modifiedInput: nullableString,
+  callIndex: nonNegativeInt,
+  durationMs: nonNegativeNumber,
+  timestamp: finiteNumber,
+}).strip();
+export type GuardDecisionRecord = z.infer<typeof guardDecisionRecordSchema>;
 
-export interface AgentStats {
-  agentId: string;
-  sessionCount: number;
-  totalCost: number;
-  llmCallCount: number;
-  toolCallCount: number;
-  avgCostPerSession: number;
-}
+export const guardByToolStatSchema = z.object({
+  toolName: z.string(),
+  allowCount: nonNegativeInt,
+  denyCount: nonNegativeInt,
+  modifyCount: nonNegativeInt,
+  totalCount: nonNegativeInt,
+  denyRate: ratio01,
+}).strip();
+export type GuardByToolStat = z.infer<typeof guardByToolStatSchema>;
 
-export interface AgentDetail {
-  agentId: string;
-  sessionCount: number;
-  totalCost: number;
-  llmCallCount: number;
-  toolCallCount: number;
-  avgCostPerSession: number;
-  cost: CostBreakdown;
-  cache: CacheEfficiency;
-  guard: GuardStat;
-  recentSessions: SessionSummary[];
-}
+// ----- Compaction -----
 
-export interface CleanupResult {
-  removed: number;
-}
+export const compactionRecordSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  triggerReason: z.string(),
+  contextBefore: nonNegativeInt,
+  contextAfter: nonNegativeInt,
+  thresholdPct: nonNegativeNumber,
+  contextWindow: nonNegativeInt,
+  layersApplied: z.string(),
+  durationMs: nonNegativeNumber,
+  tokensFreed: z.number(),
+  timestamp: finiteNumber,
+}).strip();
+export type CompactionRecord = z.infer<typeof compactionRecordSchema>;
 
-// ----- Dimension Filter -----
+export const compactionStatsSchema = z.object({
+  totalCount: nonNegativeInt,
+  avgTokensFreed: z.number(),
+  avgDurationMs: nonNegativeNumber,
+  avgThresholdPct: nonNegativeNumber,
+  avgReductionPct: z.number(),
+  byTrigger: z.array(z.object({ reason: z.string(), count: nonNegativeInt }).strip()),
+  byLayer: z.array(z.object({ layer: z.string(), count: nonNegativeInt }).strip()),
+}).strip();
+export type CompactionStats = z.infer<typeof compactionStatsSchema>;
 
-export interface DimensionFilter {
-  sessionId?: string;
-  agentId?: string;
-  turnId?: string;
-}
+// ----- Inferences -----
+
+const inferenceToolCallSchema = z.object({
+  name: z.string(),
+  input: z.string(),
+  output: z.string(),
+  isError: z.boolean(),
+  durationMs: nonNegativeNumber,
+}).strip();
+
+export const inferenceRecordSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  agentId: nullableString,
+  turnId: nullableString,
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: nonNegativeInt,
+  outputTokens: nonNegativeInt,
+  cacheReadTokens: nonNegativeInt,
+  cacheWriteTokens: nonNegativeInt,
+  totalCost: nonNegativeNumber,
+  latencyMs: nonNegativeNumber,
+  stopReason: z.string(),
+  messageCount: nonNegativeInt,
+  toolDefCount: nonNegativeInt,
+  systemBlockCount: nonNegativeInt,
+  hasImages: z.boolean(),
+  requestSystem: nullableString,
+  requestMessages: nullableString,
+  requestTools: nullableString,
+  responseContent: nullableString,
+  providerRequest: nullableString,
+  providerResponse: nullableString,
+  providerDetail: nullableString,
+  timestamp: finiteNumber,
+  toolCalls: z.array(inferenceToolCallSchema),
+  guardDecisions: z.array(guardDecisionRecordSchema),
+}).strip();
+export type InferenceRecord = z.infer<typeof inferenceRecordSchema>;
+
+// ----- Turn / Session -----
+
+export const turnSummarySchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  agentId: nullableString,
+  prompt: nullableString,
+  startTime: finiteNumber,
+  endTime: finiteNumber.nullable(),
+  llmCallCount: nonNegativeInt,
+  toolCallCount: nonNegativeInt,
+  totalCost: nonNegativeNumber,
+  status: z.string(),
+  recoveredFromCrash: z.boolean(),
+  orphanedToolCount: nonNegativeInt,
+  previousTurnId: nullableString,
+  cost: costBreakdownSchema,
+  cache: cacheEfficiencySchema,
+  guard: guardStatSchema,
+}).strip();
+export type TurnSummary = z.infer<typeof turnSummarySchema>;
+
+export const sessionSummarySchema = z.object({
+  id: z.string(),
+  agentId: nullableString,
+  startTime: finiteNumber,
+  endTime: finiteNumber.nullable(),
+  totalCost: nonNegativeNumber,
+  status: z.string(),
+  llmCallCount: nonNegativeInt,
+  toolCallCount: nonNegativeInt,
+  guardDecisionCount: nonNegativeInt,
+  compactionCount: nonNegativeInt,
+  eventCount: nonNegativeInt,
+}).strip();
+export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+
+// ----- Agents -----
+
+export const agentStatsSchema = z.object({
+  agentId: z.string(),
+  sessionCount: nonNegativeInt,
+  totalCost: nonNegativeNumber,
+  llmCallCount: nonNegativeInt,
+  toolCallCount: nonNegativeInt,
+  avgCostPerSession: nonNegativeNumber,
+}).strip();
+export type AgentStats = z.infer<typeof agentStatsSchema>;
+
+export const agentDetailSchema = agentStatsSchema.extend({
+  cost: costBreakdownSchema,
+  cache: cacheEfficiencySchema,
+  guard: guardStatSchema,
+  recentSessions: z.array(sessionSummarySchema),
+}).strip();
+export type AgentDetail = z.infer<typeof agentDetailSchema>;
+
+// ----- Cleanup -----
+
+export const cleanupResultSchema = z.object({
+  removed: nonNegativeInt,
+}).strip();
+export type CleanupResult = z.infer<typeof cleanupResultSchema>;
+
+// ----- Derived Metrics -----
+
+export const turnMetricsSchema = z.object({
+  turnId: z.string(),
+  toolSuccessRate: ratio01,
+  toolCallCount: nonNegativeInt,
+  guardDenyRate: ratio01,
+  guardDecisionCount: nonNegativeInt,
+  totalInputTokens: nonNegativeInt,
+  totalOutputTokens: nonNegativeInt,
+  estimatedCostUsd: nonNegativeNumber,
+  durationMs: nonNegativeNumber,
+  llmCallCount: nonNegativeInt,
+}).strip();
+export type TurnMetrics = z.infer<typeof turnMetricsSchema>;
+
+export const sessionMetricsSchema = z.object({
+  sessionId: z.string(),
+  turnsCount: nonNegativeInt,
+  totalCost: nonNegativeNumber,
+  totalInputTokens: nonNegativeInt,
+  totalOutputTokens: nonNegativeInt,
+  toolDistribution: z.record(nonNegativeInt),
+  avgToolSuccessRate: ratio01,
+  avgTurnDurationMs: nonNegativeNumber,
+  compactionCount: nonNegativeInt,
+  modelDistribution: z.record(nonNegativeInt),
+}).strip();
+export type SessionMetrics = z.infer<typeof sessionMetricsSchema>;
+
+export const agentMetricsSchema = z.object({
+  agentId: z.string(),
+  sessionCount: nonNegativeInt,
+  totalCost: nonNegativeNumber,
+  totalTokens: nonNegativeInt,
+  avgSessionCost: nonNegativeNumber,
+  topTools: z.array(z.object({ name: z.string(), count: nonNegativeInt }).strip()),
+  modelUsage: z.record(nonNegativeInt),
+}).strip();
+export type AgentMetrics = z.infer<typeof agentMetricsSchema>;
+
+export const stabilityMetricsSchema = z.object({
+  totalTurns: nonNegativeInt,
+  recoveredTurns: nonNegativeInt,
+  crashRate: ratio01,
+  totalOrphanedTools: nonNegativeInt,
+  topOrphanedTools: z.array(z.object({ name: z.string(), count: nonNegativeInt }).strip()),
+}).strip();
+export type StabilityMetrics = z.infer<typeof stabilityMetricsSchema>;

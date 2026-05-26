@@ -5,9 +5,7 @@
 import { eq, sql, desc, gte, and, type SQL } from 'drizzle-orm';
 import type { ObserveDB } from '../collector/db.js';
 import { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from '../collector/schema.js';
-
-// Re-export all API types from shared definition (single source of truth).
-export type {
+import type {
   CostBreakdown, CostByModel, CostTrendPoint, CacheEfficiency,
   ToolStat, GuardStat, GuardDecisionRecord, GuardByToolStat,
   CompactionRecord, CompactionStats,
@@ -15,7 +13,8 @@ export type {
   DimensionFilter,
 } from './api-types.js';
 
-import type {
+// Re-export all API types from shared definition (single source of truth).
+export type {
   CostBreakdown, CostByModel, CostTrendPoint, CacheEfficiency,
   ToolStat, GuardStat, GuardDecisionRecord, GuardByToolStat,
   CompactionRecord, CompactionStats,

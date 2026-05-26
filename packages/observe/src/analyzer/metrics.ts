@@ -8,77 +8,10 @@ import { eq, sql, and } from 'drizzle-orm';
 import type { Analyzer } from './analyzer.js';
 import type { ObserveDB } from '../collector/db.js';
 import { llmCalls, toolCalls, guardDecisions, turns, sessions, compactionEvents } from '../collector/schema.js';
+import type { StabilityMetrics, TurnMetrics, SessionMetrics, AgentMetrics } from './api-types.js';
 
-// ----- Stability Metrics (v0.4 crash recovery) -----
-
-/** Crash / stability metrics for an agent or session. */
-export interface StabilityMetrics {
-  /** Total turns observed. */
-  totalTurns: number;
-  /** Turns that started with a crash_recovered event. */
-  recoveredTurns: number;
-  /** Ratio recoveredTurns / totalTurns (0..1). */
-  crashRate: number;
-  /** Sum of orphaned_tool_count across all recovered turns. */
-  totalOrphanedTools: number;
-  /** Top N tools by orphan frequency (most likely to crash). */
-  topOrphanedTools: Array<{ name: string; count: number }>;
-}
-
-// ----- Turn Metrics -----
-
-/** Derived metrics for a single turn */
-export interface TurnMetrics {
-  turnId: string;
-  /** Fraction of tool_calls where isError === false (0..1) */
-  toolSuccessRate: number;
-  toolCallCount: number;
-  /** Fraction of guard decisions that were deny (0..1) */
-  guardDenyRate: number;
-  guardDecisionCount: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  /** Estimated cost in USD */
-  estimatedCostUsd: number;
-  /** Duration from first to last event timestamp (ms) */
-  durationMs: number;
-  llmCallCount: number;
-}
-
-// ----- Session Metrics -----
-
-/** Derived metrics aggregated across all turns in a session */
-export interface SessionMetrics {
-  sessionId: string;
-  turnsCount: number;
-  totalCost: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  /** Tool name to call count */
-  toolDistribution: Record<string, number>;
-  /** Average tool success rate across all turns (0..1) */
-  avgToolSuccessRate: number;
-  /** Average turn duration in ms */
-  avgTurnDurationMs: number;
-  compactionCount: number;
-  /** Model name to call count */
-  modelDistribution: Record<string, number>;
-}
-
-// ----- Agent Metrics -----
-
-/** Derived metrics aggregated across all sessions for an agent */
-export interface AgentMetrics {
-  agentId: string;
-  sessionCount: number;
-  totalCost: number;
-  totalTokens: number;
-  avgSessionCost: number;
-  /** Top tools by call count (descending) */
-  topTools: Array<{ name: string; count: number }>;
-  /** Model name to call count */
-  modelUsage: Record<string, number>;
-}
+// Re-export the schema-derived view-model types so existing imports keep working.
+export type { StabilityMetrics, TurnMetrics, SessionMetrics, AgentMetrics } from './api-types.js';
 
 // ----- Calculator -----
 
