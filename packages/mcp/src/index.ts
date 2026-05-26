@@ -9,12 +9,13 @@ export type { MCPClientConfig, MCPTransportConfig, MCPToolOptions } from './type
 export { createMCPHand, createMCPTools, defaultMCPPrefix, MCP_DEFAULT_PREFIX_SEPARATOR } from './adapter.js';
 export { MCPToolCenter, createMCPCenterTools } from './center.js';
 export type { MCPServerToolInfo, MCPCenterToolOptions } from './center.js';
-export { MCPManager } from './manager.js';
+export { MCPManager, MCP_SERVER_STATES, mcpServerStatusSchema, mcpServerStatusViewSchema, mcpManagerStatusSchema } from './manager.js';
 export type {
   MCPClientFactoryConfig,
   MCPManagerOptions,
   MCPServerStatus,
   MCPServerStatusView,
+  MCPManagerStatus,
 } from './manager.js';
 
 // Configuration cascade (load N `.mcp.json` files, field-level merge).

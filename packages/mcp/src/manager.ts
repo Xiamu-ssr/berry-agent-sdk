@@ -2,21 +2,31 @@
 // Berry Agent SDK - Managed MCP Runtime
 // ============================================================
 
+import { z } from 'zod';
 import type { Hand } from '@berry-agent/core';
 import { MCPClient } from './client.js';
 import type { MCPServerConfig } from './config.js';
 import { createMCPHand, defaultMCPPrefix } from './adapter.js';
 
-export type MCPServerStatus = 'connecting' | 'connected' | 'failed' | 'disabled';
+export const MCP_SERVER_STATES = ['connecting', 'connected', 'failed', 'disabled'] as const;
+export const mcpServerStatusSchema = z.enum(MCP_SERVER_STATES);
+export type MCPServerStatus = z.infer<typeof mcpServerStatusSchema>;
 
-export interface MCPServerStatusView {
-  name: string;
-  connected: boolean;
-  toolCount: number;
-  status: MCPServerStatus;
-  lastError?: string;
-  lastStartedAt?: string;
-}
+export const mcpServerStatusViewSchema = z.object({
+  name: z.string().min(1),
+  connected: z.boolean(),
+  toolCount: z.number().int().nonnegative(),
+  status: mcpServerStatusSchema,
+  lastError: z.string().optional(),
+  lastStartedAt: z.string().optional(),
+}).strict();
+export type MCPServerStatusView = z.infer<typeof mcpServerStatusViewSchema>;
+
+export const mcpManagerStatusSchema = z.object({
+  shared: z.array(mcpServerStatusViewSchema),
+  perAgent: z.record(z.array(mcpServerStatusViewSchema)),
+}).strict();
+export type MCPManagerStatus = z.infer<typeof mcpManagerStatusSchema>;
 
 export interface MCPManagerOptions {
   onChange?: () => void;
@@ -156,10 +166,7 @@ export class MCPManager {
     return hands;
   }
 
-  getStatus(): {
-    shared: MCPServerStatusView[];
-    perAgent: Record<string, MCPServerStatusView[]>;
-  } {
+  getStatus(): MCPManagerStatus {
     const shared = [...this.sharedServers.entries()].map(([name, managed]) => this.describe(managed, name));
     const perAgent: Record<string, MCPServerStatusView[]> = {};
     for (const [agentId, servers] of this.agentServers) {

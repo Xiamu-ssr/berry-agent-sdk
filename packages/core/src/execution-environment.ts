@@ -6,6 +6,7 @@
 // A host product can provide a local process, OS sandbox, container, or
 // remote runner without changing model-visible tools or session semantics.
 
+import { z } from 'zod';
 import type { CommandExecutor } from './executor.js';
 import type { Hand } from './hands.js';
 import type { AgentScope } from './scope.js';
@@ -17,13 +18,26 @@ export type ExecutionEnvironmentKind =
   | 'remote'
   | (string & {});
 
-export type ExecutionEnvironmentState =
-  | 'idle'
-  | 'provisioning'
-  | 'ready'
-  | 'busy'
-  | 'failed'
-  | 'disposed';
+export const EXECUTION_ENVIRONMENT_STATES = [
+  'idle',
+  'provisioning',
+  'ready',
+  'busy',
+  'failed',
+  'disposed',
+] as const;
+
+export const executionEnvironmentStateSchema = z.enum(EXECUTION_ENVIRONMENT_STATES);
+export type ExecutionEnvironmentState = z.infer<typeof executionEnvironmentStateSchema>;
+
+export const executionEnvironmentStatusSchema = z.object({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+  displayName: z.string().optional(),
+  state: executionEnvironmentStateSchema,
+  detail: z.string().optional(),
+}).strict();
+export type ExecutionEnvironmentStatus = z.infer<typeof executionEnvironmentStatusSchema>;
 
 export type ExecutionNetworkPolicy = 'allow' | 'deny' | { allowDomains: string[] };
 
@@ -56,14 +70,6 @@ export interface ScopeIsolationOptions {
   denyPaths?: string[];
   network?: ExecutionNetworkPolicy;
   allowExec?: boolean;
-}
-
-export interface ExecutionEnvironmentStatus {
-  id: string;
-  kind: ExecutionEnvironmentKind;
-  displayName?: string;
-  state: ExecutionEnvironmentState;
-  detail?: string;
 }
 
 export interface ExecutionEnvironmentProvisionRequest {

@@ -47,6 +47,9 @@ export type { CompactionStrategy, CompactionStrategyResult } from './compaction/
 // Hands / capability boundary
 export {
   HandRegistry,
+  HAND_STATES,
+  handStateSchema,
+  handStatusSchema,
   createHandToolRegistrations,
   createToolRegistrationHand,
 } from './hands.js';
@@ -171,7 +174,10 @@ export type { CommandEnvironment, CommandEnvironmentOptions } from './command-en
 // Execution environments (local process / OS sandbox / container / remote)
 export {
   ExecutionEnvironmentRegistry,
+  EXECUTION_ENVIRONMENT_STATES,
   createExecutionEnvironment,
+  executionEnvironmentStateSchema,
+  executionEnvironmentStatusSchema,
   isolationPolicyFromScope,
   workspaceBindingFromScope,
 } from './execution-environment.js';

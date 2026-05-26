@@ -7,6 +7,7 @@
 // The harness talks to capabilities; host products decide whether a hand runs
 // in-process, as a subprocess, in a container, or on a remote machine.
 
+import { z } from 'zod';
 import type { ToolContext, ToolDefinition, ToolRegistration, ToolResult } from './tool-types.js';
 
 export type HandKind =
@@ -19,7 +20,19 @@ export type HandKind =
   | 'system'
   | (string & {});
 
-export type HandState = 'idle' | 'starting' | 'ready' | 'busy' | 'failed' | 'stopped';
+export const HAND_STATES = ['idle', 'starting', 'ready', 'busy', 'failed', 'stopped'] as const;
+
+export const handStateSchema = z.enum(HAND_STATES);
+export type HandState = z.infer<typeof handStateSchema>;
+
+export const handStatusSchema = z.object({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+  displayName: z.string().optional(),
+  state: handStateSchema,
+  detail: z.string().optional(),
+}).strict();
+export type HandStatus = z.infer<typeof handStatusSchema>;
 
 export interface HandCapability {
   /** Stable id inside the hand. Defaults to `definition.name` for tool-backed hands. */
@@ -43,14 +56,6 @@ export interface HandContext extends ToolContext {
   handId: string;
   handKind: HandKind;
   capability: HandCapability;
-}
-
-export interface HandStatus {
-  id: string;
-  kind: HandKind;
-  displayName?: string;
-  state: HandState;
-  detail?: string;
 }
 
 export interface Hand {
