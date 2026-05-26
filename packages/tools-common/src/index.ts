@@ -29,6 +29,39 @@ export {
 } from './workspace-hand.js';
 export type { LocalWorkspaceHandOptions, LocalWorkspaceSandboxOptions } from './workspace-hand.js';
 
+// Container / remote runners — alternative ExecutionEnvironment implementations
+// for hosts that want to move command execution off the local machine.
+export {
+  createContainerExecutionEnvironment,
+  createContainerExecutionEnvironmentProvider,
+  createDefaultDockerDriver,
+} from './container-environment.js';
+export type {
+  ContainerDriver,
+  ContainerExecConfig,
+  ContainerSpawnConfig,
+  ContainerStartConfig,
+  ContainerVolumeMount,
+  CreateContainerExecutionEnvironmentOptions,
+} from './container-environment.js';
+
+export {
+  createRemoteExecutionEnvironment,
+  createRemoteExecutionEnvironmentProvider,
+  createDefaultRemoteTransport,
+  remoteExecRequestSchema,
+  remoteExecReplySchema,
+  remoteSpawnRequestSchema,
+} from './remote-environment.js';
+export type {
+  RemoteTransport,
+  RemoteSpawnStream,
+  RemoteExecRequest,
+  RemoteExecReply,
+  RemoteSpawnRequest,
+  CreateRemoteExecutionEnvironmentOptions,
+} from './remote-environment.js';
+
 // Zod schema for SDK config namespace
 export { toolsCommonNamespaceSchema } from './schema.js';
 export type { ToolsCommonNamespaceConfig } from './schema.js';
