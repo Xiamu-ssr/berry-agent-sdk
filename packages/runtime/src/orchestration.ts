@@ -13,6 +13,7 @@ export const RUNTIME_ORCHESTRATION_FILENAME = 'runtime-orchestration.json';
 
 export const RUNTIME_LEASE_STATES = ['active', 'released', 'expired'] as const;
 export const RUNTIME_WAKE_STATES = ['pending', 'claimed', 'completed', 'failed', 'cancelled'] as const;
+export const RUNTIME_WORKER_STATES = ['active', 'draining', 'evicted', 'withdrawn'] as const;
 
 const zNonEmptyString = z.string({
   invalid_type_error: 'expected non-empty string',
@@ -40,10 +41,12 @@ const zUnknownRecord = z.record(z.unknown());
 
 export const zRuntimeLeaseState = z.enum(RUNTIME_LEASE_STATES);
 export const zRuntimeWakeState = z.enum(RUNTIME_WAKE_STATES);
+export const zRuntimeWorkerState = z.enum(RUNTIME_WORKER_STATES);
 export const zRuntimeLease = z.object({
   leaseId: zNonEmptyString,
   agentId: zNonEmptyString,
   holderId: zNonEmptyString,
+  workerId: z.string().optional(),
   sessionId: z.string().optional(),
   state: zRuntimeLeaseState,
   acquiredAt: zFiniteNumber,
@@ -69,15 +72,31 @@ export const zRuntimeWake = z.object({
   errorMessage: z.string().optional(),
   payload: zUnknownRecord.optional(),
 }, { invalid_type_error: 'expected object' }).strict();
+export const zRuntimeWorker = z.object({
+  workerId: zNonEmptyString,
+  holderId: zNonEmptyString,
+  state: zRuntimeWorkerState,
+  capacity: zNonNegativeInteger,
+  registeredAt: zFiniteNumber,
+  heartbeatAt: zFiniteNumber,
+  heartbeatExpiresAt: zFiniteNumber,
+  drainedAt: zFiniteNumber.optional(),
+  evictedAt: zFiniteNumber.optional(),
+  withdrawnAt: zFiniteNumber.optional(),
+  labels: z.record(z.string()).optional(),
+  metadata: zUnknownRecord.optional(),
+}, { invalid_type_error: 'expected object' }).strict();
 export const zRuntimeOrchestrationSnapshot = z.object({
   leases: z.array(zRuntimeLease, { invalid_type_error: 'expected array', required_error: 'expected array' }),
   wakes: z.array(zRuntimeWake, { invalid_type_error: 'expected array', required_error: 'expected array' }),
+  workers: z.array(zRuntimeWorker, { invalid_type_error: 'expected array', required_error: 'expected array' }),
 }, { invalid_type_error: 'expected object' }).strict();
 export const zAcquireRuntimeLeaseInput = z.object({
   agentId: zNonEmptyString,
   holderId: zNonEmptyString,
   ttlMs: zPositiveNumber,
   sessionId: zNonEmptyString.optional(),
+  workerId: zNonEmptyString.optional(),
   metadata: zUnknownRecord.optional(),
 }, { invalid_type_error: 'expected object' }).strict();
 export const zScheduleRuntimeWakeInput = z.object({
@@ -92,11 +111,21 @@ export const zClaimDueWakesOptions = z.object({
   limit: zPositiveNumber.optional(),
   staleClaimedMs: zPositiveNumber.optional(),
 }, { invalid_type_error: 'expected object' }).strict();
+export const zRegisterRuntimeWorkerInput = z.object({
+  holderId: zNonEmptyString,
+  capacity: zNonNegativeInteger,
+  heartbeatTtlMs: zPositiveNumber,
+  workerId: zNonEmptyString.optional(),
+  labels: z.record(z.string()).optional(),
+  metadata: zUnknownRecord.optional(),
+}, { invalid_type_error: 'expected object' }).strict();
 
 export type RuntimeLeaseState = z.infer<typeof zRuntimeLeaseState>;
 export type RuntimeWakeState = z.infer<typeof zRuntimeWakeState>;
+export type RuntimeWorkerState = z.infer<typeof zRuntimeWorkerState>;
 export type RuntimeLease = z.infer<typeof zRuntimeLease>;
 export type RuntimeWake = z.infer<typeof zRuntimeWake>;
+export type RuntimeWorker = z.infer<typeof zRuntimeWorker>;
 export type RuntimeOrchestrationSnapshot = z.infer<typeof zRuntimeOrchestrationSnapshot>;
 
 export interface RuntimeOrchestrationStore {
@@ -107,7 +136,7 @@ export interface RuntimeOrchestrationStore {
 export interface RuntimeOrchestratorOptions {
   store: RuntimeOrchestrationStore;
   now?: () => number;
-  idFactory?: (prefix: 'lease' | 'wake') => string;
+  idFactory?: (prefix: 'lease' | 'wake' | 'worker') => string;
 }
 
 export type AcquireRuntimeLeaseInput = z.infer<typeof zAcquireRuntimeLeaseInput>;
@@ -119,6 +148,19 @@ export type AcquireRuntimeLeaseResult =
 export type ScheduleRuntimeWakeInput = z.infer<typeof zScheduleRuntimeWakeInput>;
 
 export type ClaimDueWakesOptions = z.infer<typeof zClaimDueWakesOptions>;
+
+export type RegisterRuntimeWorkerInput = z.infer<typeof zRegisterRuntimeWorkerInput>;
+
+export interface RuntimeWorkerCapacityReport {
+  worker: RuntimeWorker;
+  activeLeases: number;
+  available: number;
+}
+
+export interface EvictStaleWorkersResult {
+  evicted: RuntimeWorker[];
+  releasedLeases: RuntimeLease[];
+}
 
 export class MemoryRuntimeOrchestrationStore implements RuntimeOrchestrationStore {
   private snapshot: RuntimeOrchestrationSnapshot = emptySnapshot();
@@ -166,7 +208,7 @@ export function createFileRuntimeOrchestrationStore(rootDir: string): FileRuntim
 
 export class RuntimeOrchestrator {
   private readonly now: () => number;
-  private readonly idFactory: (prefix: 'lease' | 'wake') => string;
+  private readonly idFactory: (prefix: 'lease' | 'wake' | 'worker') => string;
 
   constructor(private readonly options: RuntimeOrchestratorOptions) {
     this.now = options.now ?? Date.now;
@@ -185,10 +227,26 @@ export class RuntimeOrchestrator {
       return { acquired: false, active };
     }
 
+    if (leaseInput.workerId !== undefined) {
+      const worker = snapshot.workers.find((entry) => entry.workerId === leaseInput.workerId);
+      if (!worker || worker.state !== 'active') {
+        await this.options.store.save(snapshot);
+        throw new Error(`worker ${leaseInput.workerId} is not accepting new leases`);
+      }
+      const activeForWorker = snapshot.leases.filter(
+        (lease) => lease.workerId === worker.workerId && isActiveLease(lease, now),
+      ).length;
+      if (activeForWorker >= worker.capacity) {
+        await this.options.store.save(snapshot);
+        throw new Error(`worker ${worker.workerId} is at capacity (${worker.capacity})`);
+      }
+    }
+
     const lease: RuntimeLease = {
       leaseId: this.idFactory('lease'),
       agentId: leaseInput.agentId,
       holderId: leaseInput.holderId,
+      workerId: leaseInput.workerId,
       sessionId: leaseInput.sessionId,
       state: 'active',
       acquiredAt: now,
@@ -338,6 +396,138 @@ export class RuntimeOrchestrator {
       .sort((a, b) => a.dueAt - b.dueAt || a.createdAt - b.createdAt);
   }
 
+  // ============================================================
+  // Worker registry
+  // ============================================================
+
+  async registerWorker(input: RegisterRuntimeWorkerInput): Promise<RuntimeWorker> {
+    const workerInput = parseSchema(zRegisterRuntimeWorkerInput, input, 'RegisterRuntimeWorkerInput');
+    const now = this.now();
+    const snapshot = await this.loadAndReap(now);
+    const workerId = workerInput.workerId ?? this.idFactory('worker');
+    const existing = snapshot.workers.find((entry) => entry.workerId === workerId);
+    const worker: RuntimeWorker = existing
+      ? {
+          ...existing,
+          holderId: workerInput.holderId,
+          state: 'active',
+          capacity: workerInput.capacity,
+          heartbeatAt: now,
+          heartbeatExpiresAt: now + workerInput.heartbeatTtlMs,
+          labels: workerInput.labels ?? existing.labels,
+          metadata: workerInput.metadata ?? existing.metadata,
+          drainedAt: undefined,
+          evictedAt: undefined,
+          withdrawnAt: undefined,
+        }
+      : {
+          workerId,
+          holderId: workerInput.holderId,
+          state: 'active',
+          capacity: workerInput.capacity,
+          registeredAt: now,
+          heartbeatAt: now,
+          heartbeatExpiresAt: now + workerInput.heartbeatTtlMs,
+          labels: workerInput.labels,
+          metadata: workerInput.metadata,
+        };
+    if (existing) {
+      const index = snapshot.workers.indexOf(existing);
+      snapshot.workers[index] = worker;
+    } else {
+      snapshot.workers.push(worker);
+    }
+    await this.options.store.save(snapshot);
+    return worker;
+  }
+
+  async heartbeatWorker(workerId: string, heartbeatTtlMs: number): Promise<RuntimeWorker | null> {
+    if (!workerId) throw new Error('workerId is required');
+    if (!Number.isFinite(heartbeatTtlMs) || heartbeatTtlMs <= 0) {
+      throw new Error('heartbeatTtlMs must be a positive number');
+    }
+    const now = this.now();
+    const snapshot = await this.loadAndReap(now);
+    const worker = snapshot.workers.find((entry) => entry.workerId === workerId);
+    if (!worker || worker.state === 'evicted' || worker.state === 'withdrawn') {
+      await this.options.store.save(snapshot);
+      return null;
+    }
+    worker.heartbeatAt = now;
+    worker.heartbeatExpiresAt = now + heartbeatTtlMs;
+    await this.options.store.save(snapshot);
+    return worker;
+  }
+
+  async drainWorker(workerId: string): Promise<RuntimeWorker | null> {
+    if (!workerId) throw new Error('workerId is required');
+    const now = this.now();
+    const snapshot = await this.loadAndReap(now);
+    const worker = snapshot.workers.find((entry) => entry.workerId === workerId);
+    if (!worker || worker.state !== 'active') {
+      await this.options.store.save(snapshot);
+      return null;
+    }
+    worker.state = 'draining';
+    worker.drainedAt = now;
+    await this.options.store.save(snapshot);
+    return worker;
+  }
+
+  async withdrawWorker(workerId: string): Promise<EvictStaleWorkersResult | null> {
+    if (!workerId) throw new Error('workerId is required');
+    const now = this.now();
+    const snapshot = await this.loadAndReap(now);
+    const worker = snapshot.workers.find((entry) => entry.workerId === workerId);
+    if (!worker || worker.state === 'withdrawn' || worker.state === 'evicted') {
+      await this.options.store.save(snapshot);
+      return null;
+    }
+    worker.state = 'withdrawn';
+    worker.withdrawnAt = now;
+    const releasedLeases = releaseLeasesForWorker(snapshot, workerId, now);
+    await this.options.store.save(snapshot);
+    return { evicted: [worker], releasedLeases };
+  }
+
+  async evictStaleWorkers(now = this.now()): Promise<EvictStaleWorkersResult> {
+    const snapshot = await this.loadAndReap(now);
+    const evicted: RuntimeWorker[] = [];
+    const releasedLeases: RuntimeLease[] = [];
+    for (const worker of snapshot.workers) {
+      const live = worker.state === 'active' || worker.state === 'draining';
+      if (!live) continue;
+      if (worker.heartbeatExpiresAt > now) continue;
+      worker.state = 'evicted';
+      worker.evictedAt = now;
+      evicted.push(worker);
+      releasedLeases.push(...releaseLeasesForWorker(snapshot, worker.workerId, now));
+    }
+    await this.options.store.save(snapshot);
+    return { evicted, releasedLeases };
+  }
+
+  async listWorkers(): Promise<RuntimeWorker[]> {
+    const snapshot = await this.loadAndReap(this.now());
+    await this.options.store.save(snapshot);
+    return [...snapshot.workers];
+  }
+
+  async workerCapacityReport(now = this.now()): Promise<RuntimeWorkerCapacityReport[]> {
+    const snapshot = await this.loadAndReap(now);
+    await this.options.store.save(snapshot);
+    return snapshot.workers.map((worker) => {
+      const activeLeases = snapshot.leases.filter(
+        (lease) => lease.workerId === worker.workerId && isActiveLease(lease, now),
+      ).length;
+      return {
+        worker,
+        activeLeases,
+        available: Math.max(0, worker.capacity - activeLeases),
+      };
+    });
+  }
+
   private async loadAndReap(now: number): Promise<RuntimeOrchestrationSnapshot> {
     const snapshot = await this.options.store.load();
     reapExpiredLeases(snapshot, now);
@@ -354,6 +544,9 @@ export function parseRuntimeOrchestrationSnapshot(
     parsed = JSON.parse(raw);
   } catch (error) {
     throw new Error(`Failed to parse ${source}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('workers' in parsed)) {
+    (parsed as Record<string, unknown>).workers = [];
   }
   return parseSchema(zRuntimeOrchestrationSnapshot, parsed, source);
 }
@@ -400,15 +593,31 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 function emptySnapshot(): RuntimeOrchestrationSnapshot {
-  return { leases: [], wakes: [] };
+  return { leases: [], wakes: [], workers: [] };
 }
 
 function cloneSnapshot(snapshot: RuntimeOrchestrationSnapshot): RuntimeOrchestrationSnapshot {
   return parseSchema(zRuntimeOrchestrationSnapshot, structuredClone(snapshot), 'runtime orchestration snapshot');
 }
 
-function defaultIdFactory(prefix: 'lease' | 'wake'): string {
+function defaultIdFactory(prefix: 'lease' | 'wake' | 'worker'): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function releaseLeasesForWorker(
+  snapshot: RuntimeOrchestrationSnapshot,
+  workerId: string,
+  now: number,
+): RuntimeLease[] {
+  const released: RuntimeLease[] = [];
+  for (const lease of snapshot.leases) {
+    if (lease.workerId !== workerId) continue;
+    if (lease.state !== 'active') continue;
+    lease.state = 'expired';
+    lease.expiredAt = now;
+    released.push(lease);
+  }
+  return released;
 }
 
 function formatIssuePath(source: string, path: Array<string | number>): string {

@@ -79,11 +79,14 @@ export type {
   ManagedRuntimeSupervisorOptions,
   ManagedRuntimeSupervisorStartInput,
   ManagedRuntimeSupervisorStartResult,
+  ManagedRuntimeSupervisorWorkerOptions,
 } from './supervisor.js';
 export type {
   AcquireRuntimeLeaseInput,
   AcquireRuntimeLeaseResult,
   ClaimDueWakesOptions,
+  EvictStaleWorkersResult,
+  RegisterRuntimeWorkerInput,
   RuntimeLease,
   RuntimeLeaseState,
   RuntimeOrchestrationSnapshot,
@@ -91,6 +94,9 @@ export type {
   RuntimeOrchestratorOptions,
   RuntimeWake,
   RuntimeWakeState,
+  RuntimeWorker,
+  RuntimeWorkerCapacityReport,
+  RuntimeWorkerState,
   ScheduleRuntimeWakeInput,
 } from './orchestration.js';
 
