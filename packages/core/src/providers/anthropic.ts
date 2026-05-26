@@ -6,6 +6,7 @@
 // testable and do not leak through the provider runtime.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import type {
   MessageCreateParamsNonStreaming,
   MessageCreateParamsStreaming,
@@ -40,9 +41,16 @@ import {
 } from './anthropic/response.js';
 import { parseProviderToolInputJSON } from './tool-input.js';
 
-// Extended Anthropic SDK types for beta features (thinking, etc.)
-interface ThinkingDelta { type: 'thinking_delta'; thinking: string }
-interface SignatureDelta { type: 'signature_delta'; signature: string }
+// Extended Anthropic SDK delta shapes for beta streaming features (thinking).
+// The SDK's published delta union does not expose `thinking` / `signature`;
+// we parse them through zod schemas instead of unchecked casts so a wire
+// shape change becomes a soft empty string rather than a type-system lie.
+const anthropicThinkingDeltaSchema = z.object({
+  thinking: z.string().optional(),
+});
+const anthropicSignatureDeltaSchema = z.object({
+  signature: z.string().optional(),
+});
 
 const ANTHROPIC_CACHE_BREAKPOINT_BUDGET = 4;
 const ANTHROPIC_MAX_MESSAGE_CACHE_BREAKPOINTS = 2;
@@ -136,7 +144,7 @@ export class AnthropicProvider implements Provider {
               yield { type: 'text_delta', text };
             }
           } else if (delta.type === 'thinking_delta') {
-            const thinking = (delta as unknown as ThinkingDelta).thinking ?? '';
+            const thinking = anthropicThinkingDeltaSchema.safeParse(delta).data?.thinking ?? '';
             const target = block && block.type === 'thinking'
               ? block
               : ({ type: 'thinking', thinking: '' } satisfies ThinkingContent);
@@ -146,7 +154,7 @@ export class AnthropicProvider implements Provider {
               yield { type: 'thinking_delta', thinking };
             }
           } else if (delta.type === 'signature_delta') {
-            const signature = (delta as unknown as SignatureDelta).signature ?? '';
+            const signature = anthropicSignatureDeltaSchema.safeParse(delta).data?.signature ?? '';
             const target = block && block.type === 'thinking'
               ? block
               : ({ type: 'thinking', thinking: '' } satisfies ThinkingContent);

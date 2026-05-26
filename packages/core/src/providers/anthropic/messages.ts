@@ -18,6 +18,7 @@ import type {
 import type { ToolDefinition } from '../../tool-types.js';
 import type { ProviderRequest } from '../../provider-types.js';
 import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
+import { anthropicThinkingBlockSchema } from './response.js';
 
 export const ANTHROPIC_EMPTY_MESSAGE_TEXT = '(empty message)';
 export const ANTHROPIC_EMPTY_ASSISTANT_TEXT = '(empty assistant message)';
@@ -273,7 +274,8 @@ function sanitizeAnthropicContentBlock(block: ContentBlockParam): ContentBlockPa
   }
 
   if (block.type === 'thinking') {
-    const t = block as unknown as { thinking?: string; signature?: string };
+    const parsed = anthropicThinkingBlockSchema.safeParse(block);
+    const t = parsed.success ? parsed.data : {};
     if (!t.signature || !t.thinking?.trim()) return null;
     return block;
   }

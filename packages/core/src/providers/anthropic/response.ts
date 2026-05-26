@@ -9,6 +9,8 @@ const anthropicThinkingBlockSchema = z.object({
   signature: z.string().optional(),
 });
 
+export { anthropicThinkingBlockSchema };
+
 function parseAnthropicThinkingBlock(block: Anthropic.ContentBlock): ThinkingContent {
   const parsed = anthropicThinkingBlockSchema.safeParse(block);
   const data = parsed.success ? parsed.data : {};
