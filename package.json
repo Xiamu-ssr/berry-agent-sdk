@@ -5,7 +5,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=packages/small-shared-core && npm run build --workspace=packages/prompt-pack && npm run build --workspace=packages/core && npm run build --workspace=packages/models && npm run build --workspace=packages/tools-common && npm run build --workspace=packages/observe && npm run build --workspace=packages/safe && npm run build --workspace=packages/config && npm run build --workspace=packages/mcp && npm run build --workspace=packages/memory-file && npm run build --workspace=packages/runtime && npm run build --workspace=packages/team && npm run build --workspace=packages/avatar",
+    "build": "npm run build --workspace=packages/small-shared-core && npm run build --workspace=packages/prompt-pack && npm run build --workspace=packages/core && npm run build --workspace=packages/models && npm run build --workspace=packages/tools-common && npm run build --workspace=packages/observe && npm run build --workspace=packages/safe && npm run build --workspace=packages/config && npm run build --workspace=packages/mcp && npm run build --workspace=packages/memory-file && npm run build --workspace=packages/runtime && npm run build --workspace=packages/worker && npm run build --workspace=packages/team && npm run build --workspace=packages/avatar",
     "build:core": "npm run build --workspace=packages/core",
     "build:mcp": "npm run build --workspace=packages/mcp",
     "dev": "npm run dev --workspace=packages/core",

@@ -1,0 +1,39 @@
+{
+  "name": "@berry-agent/worker",
+  "version": "0.5.0-alpha.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@berry-agent/core": "*",
+    "@berry-agent/models": "*",
+    "@berry-agent/runtime": "*",
+    "@berry-agent/tools-common": "*"
+  },
+  "peerDependencies": {
+    "@berry-agent/observe": "^0.5.0-alpha.1",
+    "@berry-agent/safe": "^0.5.0-alpha.1"
+  },
+  "devDependencies": {
+    "@berry-agent/observe": "*",
+    "@berry-agent/safe": "*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT"
+}
