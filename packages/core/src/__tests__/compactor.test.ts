@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import { compact, estimateTokens } from '../compaction/compactor.js';
-import { normalizeSystemPrompt } from '../index.js';
 import type { Message, Provider, ProviderRequest, ProviderResponse, ContentBlock } from '../index.js';
 import { stablePrompt } from './helpers.js';
 

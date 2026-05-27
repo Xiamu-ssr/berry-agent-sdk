@@ -50,7 +50,7 @@ export interface ProviderResolver {
   resetForSession?(): void;
 }
 
-/** Input accepted by Agent.provider / AgentCreateConfig.provider. */
+/** Input accepted by AgentConfig.provider — concrete config or a resolver. */
 export type ProviderInput = ProviderConfig | ProviderResolver;
 
 /**

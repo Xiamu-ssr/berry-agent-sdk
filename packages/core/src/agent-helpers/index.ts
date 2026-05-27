@@ -8,7 +8,6 @@
 export { generateId, generateEventId, generateTurnId } from './ids.js';
 export { bootAgent } from './boot.js';
 export type { AgentBootState } from './boot.js';
-export { agentConfigFromCreateConfig } from './create-config.js';
 export {
   sleep,
   createProvider,
@@ -28,7 +27,6 @@ export type { AgentProviderControllerOptions } from './provider-controller.js';
 export {
   createInMemoryStore,
   createEmptySessionMetadata,
-  normalizeLoadedSession,
 } from './session.js';
 export {
   extractText,

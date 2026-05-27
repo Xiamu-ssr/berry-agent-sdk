@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import { Agent } from '../agent.js';
-import { normalizeSystemPrompt, SystemPromptCacheMode } from '../index.js';
+import { SystemPromptCacheMode } from '../index.js';
 import type {
   Provider,
   ProviderRequest,

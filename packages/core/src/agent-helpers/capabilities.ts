@@ -16,29 +16,32 @@ export const RUNTIME_TOOL_HAND_ID_PREFIX = 'sdk:runtime-tool:';
 export function registerConfiguredToolCapabilities(
   registry: AgentCapabilityRegistry,
   tools: readonly ToolRegistration[] | undefined,
+  options?: HandToolAdapterOptions,
 ): void {
   if (!tools?.length) return;
   registerToolRegistrationsAsHand(registry, {
     id: CONFIGURED_TOOLS_HAND_ID,
     displayName: 'Configured tools',
     tools,
-  });
+  }, options);
 }
 
 export function registerRuntimeToolCapability(
   registry: AgentCapabilityRegistry,
   tool: ToolRegistration,
+  options?: HandToolAdapterOptions,
 ): void {
   registerToolRegistrationsAsHand(registry, {
     id: `${RUNTIME_TOOL_HAND_ID_PREFIX}${tool.definition.name}`,
     displayName: `Runtime tool: ${tool.definition.name}`,
     tools: [tool],
-  });
+  }, options);
 }
 
 export function registerMemoryProviderCapabilities(
   registry: AgentCapabilityRegistry,
   memoryProvider: MemoryProvider | undefined,
+  options?: HandToolAdapterOptions,
 ): void {
   if (!memoryProvider) return;
   const tools = memoryProvider.tools();
@@ -47,7 +50,7 @@ export function registerMemoryProviderCapabilities(
     id: `${MEMORY_PROVIDER_HAND_ID_PREFIX}${memoryProvider.id}`,
     displayName: `Memory provider: ${memoryProvider.id}`,
     tools,
-  });
+  }, options);
 }
 
 export async function unregisterToolCapability(
@@ -104,13 +107,14 @@ function registerToolRegistrationsAsHand(
     displayName: string;
     tools: readonly ToolRegistration[];
   },
+  adapterOptions?: HandToolAdapterOptions,
 ): void {
   registerHandCapabilities(registry, createToolRegistrationHand({
     id: options.id,
     kind: 'system',
     displayName: options.displayName,
     tools: options.tools,
-  }));
+  }), adapterOptions);
 }
 
 export function unregisterHandCapabilities(

@@ -1,209 +1,79 @@
 // ============================================================
 // @berry-agent/runtime — Durable Runtime Orchestration
 // ============================================================
-// These primitives are intentionally platform-sized but implementation-light:
-// hosts can persist "who owns this run?" and "when should this runtime wake?"
-// without inventing product-side managed-agent state machines.
+// `RuntimeOrchestrator` owns the lease / wake / worker state machines.
+// Schemas and persistent stores live in companion files so alternative
+// stores (S3, Postgres, Redis) and downstream consumers can import the
+// contract without dragging the orchestrator logic in.
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { z, ZodError, type ZodIssue } from 'zod';
+import {
+  zAcquireRuntimeLeaseInput,
+  zClaimDueWakesOptions,
+  zRegisterRuntimeWorkerInput,
+  zScheduleRuntimeWakeInput,
+  type AcquireRuntimeLeaseInput,
+  type AcquireRuntimeLeaseResult,
+  type ClaimDueWakesOptions,
+  type EvictStaleWorkersResult,
+  type RegisterRuntimeWorkerInput,
+  type RuntimeLease,
+  type RuntimeOrchestrationSnapshot,
+  type RuntimeWake,
+  type RuntimeWorker,
+  type RuntimeWorkerCapacityReport,
+  type ScheduleRuntimeWakeInput,
+} from './orchestration-schemas.js';
+import { parseSchema, type RuntimeOrchestrationStore } from './orchestration-store.js';
 
-export const RUNTIME_ORCHESTRATION_FILENAME = 'runtime-orchestration.json';
+// ----- Public re-exports — keep the orchestration.js import surface stable -----
+export {
+  RUNTIME_LEASE_STATES,
+  RUNTIME_ORCHESTRATION_FILENAME,
+  RUNTIME_WAKE_STATES,
+  RUNTIME_WORKER_STATES,
+  zAcquireRuntimeLeaseInput,
+  zClaimDueWakesOptions,
+  zRegisterRuntimeWorkerInput,
+  zRuntimeLease,
+  zRuntimeLeaseState,
+  zRuntimeOrchestrationSnapshot,
+  zRuntimeWake,
+  zRuntimeWakeState,
+  zRuntimeWorker,
+  zRuntimeWorkerState,
+  zScheduleRuntimeWakeInput,
+} from './orchestration-schemas.js';
+export type {
+  AcquireRuntimeLeaseInput,
+  AcquireRuntimeLeaseResult,
+  ClaimDueWakesOptions,
+  EvictStaleWorkersResult,
+  RegisterRuntimeWorkerInput,
+  RuntimeLease,
+  RuntimeLeaseState,
+  RuntimeOrchestrationSnapshot,
+  RuntimeWake,
+  RuntimeWakeState,
+  RuntimeWorker,
+  RuntimeWorkerCapacityReport,
+  RuntimeWorkerState,
+  ScheduleRuntimeWakeInput,
+} from './orchestration-schemas.js';
+export {
+  FileRuntimeOrchestrationStore,
+  MemoryRuntimeOrchestrationStore,
+  createFileRuntimeOrchestrationStore,
+  parseRuntimeOrchestrationSnapshot,
+  runtimeOrchestrationPath,
+} from './orchestration-store.js';
+export type { RuntimeOrchestrationStore } from './orchestration-store.js';
 
-export const RUNTIME_LEASE_STATES = ['active', 'released', 'expired'] as const;
-export const RUNTIME_WAKE_STATES = ['pending', 'claimed', 'completed', 'failed', 'cancelled'] as const;
-export const RUNTIME_WORKER_STATES = ['active', 'draining', 'evicted', 'withdrawn'] as const;
-
-const zNonEmptyString = z.string({
-  invalid_type_error: 'expected non-empty string',
-  required_error: 'expected non-empty string',
-})
-  .min(1, 'expected non-empty string');
-const zFiniteNumber = z.number({
-  invalid_type_error: 'expected finite number',
-  required_error: 'expected finite number',
-})
-  .finite('expected finite number');
-const zPositiveNumber = z.number({
-  invalid_type_error: 'expected positive number',
-  required_error: 'expected positive number',
-})
-  .finite('expected positive number')
-  .positive('expected positive number');
-const zNonNegativeInteger = z.number({
-  invalid_type_error: 'expected non-negative integer',
-  required_error: 'expected non-negative integer',
-})
-  .int('expected non-negative integer')
-  .nonnegative('expected non-negative integer');
-const zUnknownRecord = z.record(z.unknown());
-
-export const zRuntimeLeaseState = z.enum(RUNTIME_LEASE_STATES);
-export const zRuntimeWakeState = z.enum(RUNTIME_WAKE_STATES);
-export const zRuntimeWorkerState = z.enum(RUNTIME_WORKER_STATES);
-export const zRuntimeLease = z.object({
-  leaseId: zNonEmptyString,
-  agentId: zNonEmptyString,
-  holderId: zNonEmptyString,
-  workerId: z.string().optional(),
-  sessionId: z.string().optional(),
-  state: zRuntimeLeaseState,
-  acquiredAt: zFiniteNumber,
-  expiresAt: zFiniteNumber,
-  renewedAt: zFiniteNumber.optional(),
-  releasedAt: zFiniteNumber.optional(),
-  expiredAt: zFiniteNumber.optional(),
-  metadata: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zRuntimeWake = z.object({
-  wakeId: zNonEmptyString,
-  agentId: zNonEmptyString,
-  sessionId: z.string().optional(),
-  reason: zNonEmptyString,
-  state: zRuntimeWakeState,
-  createdAt: zFiniteNumber,
-  dueAt: zFiniteNumber,
-  claimedAt: zFiniteNumber.optional(),
-  claimAttempts: zNonNegativeInteger.optional(),
-  completedAt: zFiniteNumber.optional(),
-  failedAt: zFiniteNumber.optional(),
-  cancelledAt: zFiniteNumber.optional(),
-  errorMessage: z.string().optional(),
-  payload: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zRuntimeWorker = z.object({
-  workerId: zNonEmptyString,
-  holderId: zNonEmptyString,
-  state: zRuntimeWorkerState,
-  capacity: zNonNegativeInteger,
-  registeredAt: zFiniteNumber,
-  heartbeatAt: zFiniteNumber,
-  heartbeatExpiresAt: zFiniteNumber,
-  drainedAt: zFiniteNumber.optional(),
-  evictedAt: zFiniteNumber.optional(),
-  withdrawnAt: zFiniteNumber.optional(),
-  labels: z.record(z.string()).optional(),
-  metadata: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zRuntimeOrchestrationSnapshot = z.object({
-  leases: z.array(zRuntimeLease, { invalid_type_error: 'expected array', required_error: 'expected array' }),
-  wakes: z.array(zRuntimeWake, { invalid_type_error: 'expected array', required_error: 'expected array' }),
-  workers: z.array(zRuntimeWorker, { invalid_type_error: 'expected array', required_error: 'expected array' }),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zAcquireRuntimeLeaseInput = z.object({
-  agentId: zNonEmptyString,
-  holderId: zNonEmptyString,
-  ttlMs: zPositiveNumber,
-  sessionId: zNonEmptyString.optional(),
-  workerId: zNonEmptyString.optional(),
-  metadata: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zScheduleRuntimeWakeInput = z.object({
-  agentId: zNonEmptyString,
-  dueAt: zFiniteNumber,
-  reason: zNonEmptyString,
-  sessionId: zNonEmptyString.optional(),
-  payload: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zClaimDueWakesOptions = z.object({
-  now: zFiniteNumber.optional(),
-  limit: zPositiveNumber.optional(),
-  staleClaimedMs: zPositiveNumber.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-export const zRegisterRuntimeWorkerInput = z.object({
-  holderId: zNonEmptyString,
-  capacity: zNonNegativeInteger,
-  heartbeatTtlMs: zPositiveNumber,
-  workerId: zNonEmptyString.optional(),
-  labels: z.record(z.string()).optional(),
-  metadata: zUnknownRecord.optional(),
-}, { invalid_type_error: 'expected object' }).strict();
-
-export type RuntimeLeaseState = z.infer<typeof zRuntimeLeaseState>;
-export type RuntimeWakeState = z.infer<typeof zRuntimeWakeState>;
-export type RuntimeWorkerState = z.infer<typeof zRuntimeWorkerState>;
-export type RuntimeLease = z.infer<typeof zRuntimeLease>;
-export type RuntimeWake = z.infer<typeof zRuntimeWake>;
-export type RuntimeWorker = z.infer<typeof zRuntimeWorker>;
-export type RuntimeOrchestrationSnapshot = z.infer<typeof zRuntimeOrchestrationSnapshot>;
-
-export interface RuntimeOrchestrationStore {
-  load(): Promise<RuntimeOrchestrationSnapshot>;
-  save(snapshot: RuntimeOrchestrationSnapshot): Promise<void>;
-}
+// ----- Orchestrator -----
 
 export interface RuntimeOrchestratorOptions {
   store: RuntimeOrchestrationStore;
   now?: () => number;
   idFactory?: (prefix: 'lease' | 'wake' | 'worker') => string;
-}
-
-export type AcquireRuntimeLeaseInput = z.infer<typeof zAcquireRuntimeLeaseInput>;
-
-export type AcquireRuntimeLeaseResult =
-  | { acquired: true; lease: RuntimeLease }
-  | { acquired: false; active: RuntimeLease };
-
-export type ScheduleRuntimeWakeInput = z.infer<typeof zScheduleRuntimeWakeInput>;
-
-export type ClaimDueWakesOptions = z.infer<typeof zClaimDueWakesOptions>;
-
-export type RegisterRuntimeWorkerInput = z.infer<typeof zRegisterRuntimeWorkerInput>;
-
-export interface RuntimeWorkerCapacityReport {
-  worker: RuntimeWorker;
-  activeLeases: number;
-  available: number;
-}
-
-export interface EvictStaleWorkersResult {
-  evicted: RuntimeWorker[];
-  releasedLeases: RuntimeLease[];
-}
-
-export class MemoryRuntimeOrchestrationStore implements RuntimeOrchestrationStore {
-  private snapshot: RuntimeOrchestrationSnapshot = emptySnapshot();
-
-  async load(): Promise<RuntimeOrchestrationSnapshot> {
-    return cloneSnapshot(this.snapshot);
-  }
-
-  async save(snapshot: RuntimeOrchestrationSnapshot): Promise<void> {
-    this.snapshot = cloneSnapshot(snapshot);
-  }
-}
-
-export class FileRuntimeOrchestrationStore implements RuntimeOrchestrationStore {
-  constructor(private readonly filePath: string) {}
-
-  async load(): Promise<RuntimeOrchestrationSnapshot> {
-    let raw: string;
-    try {
-      raw = await readFile(this.filePath, 'utf-8');
-    } catch (error) {
-      if (isNotFoundError(error)) return emptySnapshot();
-      throw error;
-    }
-    return parseRuntimeOrchestrationSnapshot(raw, this.filePath);
-  }
-
-  async save(snapshot: RuntimeOrchestrationSnapshot): Promise<void> {
-    const parsed = parseSchema(zRuntimeOrchestrationSnapshot, snapshot, this.filePath);
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8');
-    await rename(tmp, this.filePath);
-  }
-}
-
-export function runtimeOrchestrationPath(rootDir: string): string {
-  if (!rootDir) throw new Error('rootDir is required');
-  return join(rootDir, RUNTIME_ORCHESTRATION_FILENAME);
-}
-
-export function createFileRuntimeOrchestrationStore(rootDir: string): FileRuntimeOrchestrationStore {
-  return new FileRuntimeOrchestrationStore(runtimeOrchestrationPath(rootDir));
 }
 
 export class RuntimeOrchestrator {
@@ -214,6 +84,10 @@ export class RuntimeOrchestrator {
     this.now = options.now ?? Date.now;
     this.idFactory = options.idFactory ?? defaultIdFactory;
   }
+
+  // ============================================================
+  // Lease state machine
+  // ============================================================
 
   async acquireLease(input: AcquireRuntimeLeaseInput): Promise<AcquireRuntimeLeaseResult> {
     const leaseInput = parseSchema(zAcquireRuntimeLeaseInput, input, 'AcquireRuntimeLeaseInput');
@@ -302,6 +176,10 @@ export class RuntimeOrchestrator {
     await this.options.store.save(snapshot);
     return [...snapshot.leases];
   }
+
+  // ============================================================
+  // Wake state machine
+  // ============================================================
 
   async scheduleWake(input: ScheduleRuntimeWakeInput): Promise<RuntimeWake> {
     const wakeInput = parseSchema(zScheduleRuntimeWakeInput, input, 'ScheduleRuntimeWakeInput');
@@ -535,21 +413,7 @@ export class RuntimeOrchestrator {
   }
 }
 
-export function parseRuntimeOrchestrationSnapshot(
-  raw: string,
-  source = 'runtime orchestration snapshot',
-): RuntimeOrchestrationSnapshot {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Failed to parse ${source}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('workers' in parsed)) {
-    (parsed as Record<string, unknown>).workers = [];
-  }
-  return parseSchema(zRuntimeOrchestrationSnapshot, parsed, source);
-}
+// ----- Private helpers -----
 
 function reapExpiredLeases(snapshot: RuntimeOrchestrationSnapshot, now: number): void {
   for (const lease of snapshot.leases) {
@@ -576,34 +440,6 @@ function isActiveLease(lease: RuntimeLease, now: number): boolean {
   return lease.state === 'active' && lease.expiresAt > now;
 }
 
-function parseSchema<T>(schema: z.ZodType<T>, value: unknown, source: string): T {
-  try {
-    return schema.parse(value);
-  } catch (error) {
-    if (error instanceof ZodError) {
-      const issue = error.issues[0];
-      throw new Error(`Invalid ${formatIssuePath(source, issue?.path ?? [])}: ${formatIssueMessage(issue)}`);
-    }
-    throw error;
-  }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
-}
-
-function emptySnapshot(): RuntimeOrchestrationSnapshot {
-  return { leases: [], wakes: [], workers: [] };
-}
-
-function cloneSnapshot(snapshot: RuntimeOrchestrationSnapshot): RuntimeOrchestrationSnapshot {
-  return parseSchema(zRuntimeOrchestrationSnapshot, structuredClone(snapshot), 'runtime orchestration snapshot');
-}
-
-function defaultIdFactory(prefix: 'lease' | 'wake' | 'worker'): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function releaseLeasesForWorker(
   snapshot: RuntimeOrchestrationSnapshot,
   workerId: string,
@@ -620,13 +456,6 @@ function releaseLeasesForWorker(
   return released;
 }
 
-function formatIssuePath(source: string, path: Array<string | number>): string {
-  return path.reduce<string>((out, part) => (
-    typeof part === 'number' ? `${out}[${part}]` : `${out}.${part}`
-  ), source);
-}
-
-function formatIssueMessage(issue: ZodIssue | undefined): string {
-  if (!issue) return 'invalid value';
-  return issue.message;
+function defaultIdFactory(prefix: 'lease' | 'wake' | 'worker'): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }

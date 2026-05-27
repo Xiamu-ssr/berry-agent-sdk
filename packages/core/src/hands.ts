@@ -8,6 +8,7 @@
 // in-process, as a subprocess, in a container, or on a remote machine.
 
 import { z } from 'zod';
+import { ToolGroup } from './tool-types.js';
 import type { ToolContext, ToolDefinition, ToolRegistration, ToolResult } from './tool-types.js';
 
 export type HandKind =
@@ -33,6 +34,57 @@ export const handStatusSchema = z.object({
   detail: z.string().optional(),
 }).strict();
 export type HandStatus = z.infer<typeof handStatusSchema>;
+
+const toolSourceSchema = z.object({
+  kind: z.enum(['builtin', 'mcp', 'hand']),
+  server: z.string().optional(),
+  hand: z.string().optional(),
+  handKind: z.string().optional(),
+}).strict();
+
+export const handCapabilityPolicySchema = z.object({
+  allowHands: z.array(z.string().min(1)).optional(),
+  denyHands: z.array(z.string().min(1)).optional(),
+  allowKinds: z.array(z.string().min(1)).optional(),
+  denyKinds: z.array(z.string().min(1)).optional(),
+  allowCapabilities: z.array(z.string().min(1)).optional(),
+  denyCapabilities: z.array(z.string().min(1)).optional(),
+  allowTools: z.array(z.string().min(1)).optional(),
+  denyTools: z.array(z.string().min(1)).optional(),
+  allowToolGroups: z.array(z.nativeEnum(ToolGroup)).optional(),
+  denyToolGroups: z.array(z.nativeEnum(ToolGroup)).optional(),
+  allowMcpServers: z.array(z.string().min(1)).optional(),
+  denyMcpServers: z.array(z.string().min(1)).optional(),
+}).strict();
+export type HandCapabilityPolicy = z.infer<typeof handCapabilityPolicySchema>;
+
+export const handCapabilityAuditEventSchema = z.object({
+  timestamp: z.number().int().nonnegative(),
+  phase: z.enum(['expose', 'execute']),
+  action: z.enum(['allow', 'deny']),
+  reason: z.string().optional(),
+  handId: z.string().min(1),
+  handKind: z.string().min(1),
+  capabilityId: z.string().min(1),
+  toolName: z.string().min(1),
+  toolGroup: z.nativeEnum(ToolGroup),
+  source: toolSourceSchema.optional(),
+}).strict();
+export type HandCapabilityAuditEvent = z.infer<typeof handCapabilityAuditEventSchema>;
+export type HandCapabilityAuditSink = (event: HandCapabilityAuditEvent) => void | Promise<void>;
+
+export interface HandCapabilityPolicyContext {
+  handId: string;
+  handKind: HandKind;
+  capabilityId: string;
+  toolName: string;
+  toolGroup: ToolGroup;
+  source?: ToolRegistration['source'];
+}
+
+export type HandCapabilityPolicyDecision =
+  | { action: 'allow' }
+  | { action: 'deny'; reason: string };
 
 export interface HandCapability {
   /** Stable id inside the hand. Defaults to `definition.name` for tool-backed hands. */
@@ -141,6 +193,44 @@ export interface HandToolAdapterOptions {
   include?: readonly string[];
   exclude?: readonly string[];
   onCollision?: 'throw' | 'skip';
+  policy?: HandCapabilityPolicy;
+  auditSink?: HandCapabilityAuditSink;
+  now?: () => number;
+}
+
+export function evaluateHandCapabilityPolicy(
+  policy: HandCapabilityPolicy | undefined,
+  context: HandCapabilityPolicyContext,
+): HandCapabilityPolicyDecision {
+  if (!policy) return { action: 'allow' };
+
+  const denyReason =
+    deniedByList(policy.denyHands, context.handId, `hand "${context.handId}" is denied`) ??
+    deniedByList(policy.denyKinds, context.handKind, `hand kind "${context.handKind}" is denied`) ??
+    deniedByList(policy.denyCapabilities, context.capabilityId, `capability "${context.capabilityId}" is denied`) ??
+    deniedByList(policy.denyTools, context.toolName, `tool "${context.toolName}" is denied`) ??
+    deniedByList(policy.denyToolGroups, context.toolGroup, `tool group "${context.toolGroup}" is denied`) ??
+    deniedByList(
+      policy.denyMcpServers,
+      context.source?.kind === 'mcp' ? context.source.server : undefined,
+      `MCP server "${context.source?.server}" is denied`,
+    );
+  if (denyReason) return { action: 'deny', reason: denyReason };
+
+  const allowReason =
+    missingFromAllowList(policy.allowHands, context.handId, `hand "${context.handId}" is not allowed`) ??
+    missingFromAllowList(policy.allowKinds, context.handKind, `hand kind "${context.handKind}" is not allowed`) ??
+    missingFromAllowList(policy.allowCapabilities, context.capabilityId, `capability "${context.capabilityId}" is not allowed`) ??
+    missingFromAllowList(policy.allowTools, context.toolName, `tool "${context.toolName}" is not allowed`) ??
+    missingFromAllowList(policy.allowToolGroups, context.toolGroup, `tool group "${context.toolGroup}" is not allowed`) ??
+    missingFromAllowList(
+      policy.allowMcpServers,
+      context.source?.kind === 'mcp' ? context.source.server : undefined,
+      `MCP server "${context.source?.server ?? '(none)'}" is not allowed`,
+    );
+  if (allowReason) return { action: 'deny', reason: allowReason };
+
+  return { action: 'allow' };
 }
 
 /**
@@ -158,12 +248,23 @@ export function createHandToolRegistrations(
   const onCollision = options.onCollision ?? 'throw';
   const seen = new Set<string>();
   const tools: ToolRegistration[] = [];
+  const now = options.now ?? Date.now;
 
   for (const hand of hands) {
     for (const capability of hand.capabilities()) {
       const toolName = capability.definition.name;
       if (include && !include.has(toolName) && !include.has(capability.id)) continue;
       if (exclude.has(toolName) || exclude.has(capability.id)) continue;
+      const policyContext = createPolicyContext(hand, capability);
+      const exposeDecision = evaluateHandCapabilityPolicy(options.policy, policyContext);
+      emitHandCapabilityAudit(options.auditSink, {
+        timestamp: now(),
+        phase: 'expose',
+        ...policyContext,
+        action: exposeDecision.action,
+        ...(exposeDecision.action === 'deny' ? { reason: exposeDecision.reason } : {}),
+      });
+      if (exposeDecision.action === 'deny') continue;
       if (seen.has(toolName)) {
         if (onCollision === 'skip') continue;
         throw new Error(`Duplicate hand tool name "${toolName}" from hand "${hand.id}"`);
@@ -172,21 +273,75 @@ export function createHandToolRegistrations(
 
       tools.push({
         definition: capability.definition,
-        execute: async (input, context) => hand.execute(
-          { capabilityId: capability.id, input },
-          {
+        execute: async (input, context) => {
+          const executeDecision = evaluateHandCapabilityPolicy(options.policy, policyContext);
+          emitHandCapabilityAudit(options.auditSink, {
+            timestamp: now(),
+            phase: 'execute',
+            ...policyContext,
+            action: executeDecision.action,
+            ...(executeDecision.action === 'deny' ? { reason: executeDecision.reason } : {}),
+          });
+          if (executeDecision.action === 'deny') {
+            return {
+              content: `Capability denied by hand policy: ${executeDecision.reason}`,
+              isError: true,
+            };
+          }
+          return hand.execute({ capabilityId: capability.id, input }, {
             ...context,
             handId: hand.id,
             handKind: hand.kind,
             capability,
-          },
-        ),
+          });
+        },
         source: capability.source ?? { kind: 'hand', hand: hand.id, handKind: hand.kind },
       });
     }
   }
 
   return tools;
+}
+
+function createPolicyContext(hand: Hand, capability: HandCapability): HandCapabilityPolicyContext {
+  return {
+    handId: hand.id,
+    handKind: hand.kind,
+    capabilityId: capability.id,
+    toolName: capability.definition.name,
+    toolGroup: capability.definition.group ?? ToolGroup.Other,
+    source: capability.source ?? { kind: 'hand', hand: hand.id, handKind: hand.kind },
+  };
+}
+
+function deniedByList<T extends string>(
+  denyList: readonly T[] | undefined,
+  value: T | undefined,
+  reason: string,
+): string | null {
+  return value !== undefined && denyList?.includes(value) ? reason : null;
+}
+
+function missingFromAllowList<T extends string>(
+  allowList: readonly T[] | undefined,
+  value: T | undefined,
+  reason: string,
+): string | null {
+  return allowList?.length && (value === undefined || !allowList.includes(value)) ? reason : null;
+}
+
+function emitHandCapabilityAudit(
+  sink: HandCapabilityAuditSink | undefined,
+  event: HandCapabilityAuditEvent,
+): void {
+  if (!sink) return;
+  try {
+    void Promise.resolve(sink(handCapabilityAuditEventSchema.parse(event))).catch((err) => {
+      console.error('[hand] audit sink rejected:', err);
+    });
+  } catch (err) {
+    console.error('[hand] audit sink threw:', err);
+  }
 }
 
 export class HandRegistry {

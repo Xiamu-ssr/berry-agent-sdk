@@ -26,10 +26,7 @@ import type { EventLogStore, SessionEvent, SessionEventDraft, SessionEventType }
 import type { PromptPack } from '../prompts.js';
 import { detectCrashArtifacts, formatCrashInterject } from '../event-log/crash-detector.js';
 import type { AgentMemory, ProjectContext } from '../workspace/types.js';
-import {
-  createEmptySessionMetadata,
-  normalizeLoadedSession,
-} from './session.js';
+import { createEmptySessionMetadata } from './session.js';
 import { generateEventId, generateId } from './ids.js';
 import { compactSessionMessages } from './session-compaction.js';
 
@@ -106,7 +103,7 @@ export class SessionController {
       // every tool loop turn, so it reflects the last committed state of the
       // conversation. Event log stays for crash detection + audit but is no
       // longer the source of truth for resume.
-      const session = normalizeLoadedSession(await d.sessionStore.load(options.resume));
+      const session = await d.sessionStore.load(options.resume);
       if (!session) throw new Error(`Session not found: ${options.resume}`);
 
       // Crash recovery: if the event log has more turns than messages.json
@@ -158,7 +155,7 @@ export class SessionController {
       return session;
     }
     if (options?.fork) {
-      const source = normalizeLoadedSession(await d.sessionStore.load(options.fork));
+      const source = await d.sessionStore.load(options.fork);
       if (!source) throw new Error(`Session not found: ${options.fork}`);
       return {
         ...structuredClone(source),
@@ -219,7 +216,7 @@ export class SessionController {
 
   /** Load session — messages.json is authoritative. */
   async getSession(id: string): Promise<Session | null> {
-    return normalizeLoadedSession(await this.deps.sessionStore.load(id));
+    return await this.deps.sessionStore.load(id);
   }
 
   /** Enumerate all known session ids from the session store. */

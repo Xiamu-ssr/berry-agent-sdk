@@ -1,6 +1,6 @@
 import type { SystemPromptInput } from '@berry-agent/small-shared-core';
 import type { SkillDirSpec } from './skills/types.js';
-import type { Hand } from './hands.js';
+import type { Hand, HandCapabilityAuditSink, HandCapabilityPolicy } from './hands.js';
 import type { ContentBlock } from './content-types.js';
 import type { Session, SessionStore } from './session-types.js';
 import type { ToolGuard, ToolRegistration } from './tool-types.js';
@@ -9,7 +9,6 @@ import type {
   ModelRefResolver,
   Provider,
   ProviderInput,
-  ProviderType,
 } from './provider-types.js';
 import type { AgentEvent, Middleware, QueryResult } from './agent-runtime-types.js';
 import type { AgentHome } from './agent-home.js';
@@ -33,6 +32,10 @@ export interface AgentConfig {
   providerInstance?: Provider;
   /** Execution surfaces that expose capabilities to the agent. */
   hands?: Hand[];
+  /** SDK-owned long-lived capability policy for hands, MCP, and direct tools. */
+  handPolicy?: HandCapabilityPolicy;
+  /** Audit sink for hand capability expose/execute decisions. */
+  handAuditSink?: HandCapabilityAuditSink;
   /** Direct tool registrations. */
   tools?: ToolRegistration[];
   /** Directories containing skills. */
@@ -76,38 +79,4 @@ export interface AgentConfig {
   onQueryStart?: (session: Session, prompt: string | ContentBlock[]) => void | Promise<void>;
   /** Called at the end of each query before return. */
   onQueryEnd?: (session: Session, result: QueryResult) => void | Promise<void>;
-}
-
-/**
- * Simplified config for `Agent.create()`. Prefer full provider config/resolver;
- * shorthand fields exist for tests and small embeddings.
- */
-export interface AgentCreateConfig {
-  provider?: ProviderInput;
-  providerType?: ProviderType;
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  maxTokens?: number;
-  thinkingBudget?: number;
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
-
-  systemPrompt?: SystemPromptInput;
-  tools?: ToolRegistration[];
-  hands?: Hand[];
-  skillDirs?: Array<string | SkillDirSpec>;
-  disabledSkills?: string[];
-  cwd?: string;
-  sessionStore?: SessionStore;
-  compaction?: CompactionConfig;
-  promptPack?: PromptPackInput;
-  promptPackDir?: string;
-  toolGuard?: ToolGuard;
-  eventLogStore?: EventLogStore;
-  home: AgentHome;
-  memory?: MemoryProvider;
-  project?: string;
-  middleware?: Middleware[];
-  onEvent?: (event: AgentEvent) => void;
-  enableDelegate?: boolean;
 }

@@ -29,7 +29,7 @@ import { DEFAULT_PROMPT_PACK, type PromptPack } from '../prompts.js';
  */
 export function currentContextTokens(params: {
   session: Session;
-  systemPrompt: SystemPromptBlock[];
+  systemPrompt: readonly SystemPromptBlock[];
 }): number {
   const { session, systemPrompt } = params;
   const lastInput = session.metadata.lastInputTokens;
@@ -274,6 +274,6 @@ export async function preCompactMemoryFlush(params: PreCompactMemoryFlushParams)
 
 // ===== Internal Helpers =====
 
-function estimateTokens_system(blocks: SystemPromptBlock[]): number {
+function estimateTokens_system(blocks: readonly SystemPromptBlock[]): number {
   return blocks.reduce((sum, block) => sum + Math.ceil(block.text.length / 4), 0);
 }

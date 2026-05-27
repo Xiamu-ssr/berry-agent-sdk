@@ -3,11 +3,12 @@
 // ============================================================
 //
 // Usage:
+//   import { createManagedRuntime } from '@berry-agent/runtime';
 //   import { createLocalWorkspaceHand } from '@berry-agent/tools-common';
 //
-//   const agent = Agent.create({
-//     hands: [createLocalWorkspaceHand({ scope, credentials })],
-//     ...
+//   const { runtime } = createManagedRuntime({
+//     // ...workspace, home, registry, credentials, model
+//     localWorkspace: { /* options */ },
 //   });
 
 export { createFileTools } from './file.js';

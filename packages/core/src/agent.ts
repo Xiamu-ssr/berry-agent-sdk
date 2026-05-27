@@ -6,7 +6,6 @@
 
 import type {
   AgentConfig,
-  AgentCreateConfig,
 } from './agent-config-types.js';
 import type {
   AgentStatus,
@@ -56,7 +55,6 @@ import type { PromptPack } from './prompts.js';
 import type { AgentSessionView } from './chat-types.js';
 import {
   bootAgent,
-  agentConfigFromCreateConfig,
   snapshotFrom,
   getToolsFrom,
   getSkillMetasFrom,
@@ -89,6 +87,7 @@ export class Agent {
   private tools: Map<string, ToolRegistration>;
   private hands: HandRegistry;
   private handToolNames = new Map<string, Set<string>>();
+  private handAdapterOptions: HandToolAdapterOptions;
   /**
    * Skill bookkeeping — lazy loading and index rendering.
    * Agent delegates to this manager; skill-dir state lives on the manager,
@@ -124,6 +123,11 @@ export class Agent {
   /** The session id used by the most recent send(), or undefined if no turn has been made yet. */
   get lastSessionId(): string | undefined {
     return this._lastSessionId;
+  }
+
+  /** Update the cached last-session id. Used by the managed runtime to keep a single source of truth. */
+  setLastSessionId(sessionId: string | undefined): void {
+    this._lastSessionId = sessionId;
   }
   private runState: AgentRunState;
   private compactionCoordinator: AgentCompactionCoordinator;
@@ -204,6 +208,7 @@ export class Agent {
     this.tools = boot.tools;
     this.hands = boot.hands;
     this.handToolNames = boot.handToolNames;
+    this.handAdapterOptions = boot.handAdapterOptions;
     this.skills = boot.skills;
     this.cwd = boot.cwd;
     this.sessionStore = boot.sessionStore;
@@ -236,7 +241,7 @@ export class Agent {
     // `spawn_teammate` tool). The core Agent has no spawn API — `delegate()`
     // is the only in-core way to fork a sub-turn.
 
-    registerMemoryProviderCapabilities(this.capabilityRegistry(), this._memoryProvider);
+    registerMemoryProviderCapabilities(this.capabilityRegistry(), this._memoryProvider, this.handAdapterOptions);
 
     for (const hand of config.hands ?? []) {
       this.addHand(hand);
@@ -273,18 +278,6 @@ export class Agent {
       emit: (event, onEvent) => this.emit(event, onEvent),
       buildSystemPrompt: (base) => this.buildSystemPrompt(base),
     });
-  }
-
-  /**
-   * Simplified agent creation. Sensible defaults:
-   * - FileSessionStore at `{home.root}/sessions/`
-   * - Default compaction config
-   * - No tools (add via `agent.addHand()` or pass `hands`)
-   *
-   * For full control, use `new Agent(config)` directly.
-   */
-  static create(config: AgentCreateConfig): Agent {
-    return new Agent(agentConfigFromCreateConfig(config));
   }
 
   /**
@@ -413,13 +406,16 @@ export class Agent {
    */
   addTool(tool: ToolRegistration): void {
     this.assertNotDestroyed('addTool');
-    registerRuntimeToolCapability(this.capabilityRegistry(), tool);
+    registerRuntimeToolCapability(this.capabilityRegistry(), tool, this.handAdapterOptions);
   }
 
   /** Register a hand and expose its capabilities as model-visible tools. */
   addHand(hand: Hand, options?: HandToolAdapterOptions): void {
     this.assertNotDestroyed('addHand');
-    registerHandCapabilities(this.capabilityRegistry(), hand, options);
+    registerHandCapabilities(this.capabilityRegistry(), hand, {
+      ...this.handAdapterOptions,
+      ...options,
+    });
   }
 
   hasHand(id: string): boolean {
@@ -553,6 +549,7 @@ export class Agent {
    * Idempotent — calling destroy() twice is a no-op.
    */
   destroy(): Promise<void> {
+    this._lastSessionId = undefined;
     return destroyAgentRuntime({
       runState: this.runState,
       hands: this.hands,

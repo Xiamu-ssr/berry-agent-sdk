@@ -26,7 +26,6 @@ import {
   shouldSoftCompact,
   type RunCompactionResult,
 } from '../compaction/runner.js';
-import { estimateTokens } from '../compaction/compactor.js';
 import { extractContextWindowFromError } from './provider.js';
 
 export interface AgentCompactionCoordinatorDeps {
@@ -106,9 +105,10 @@ export class AgentCompactionCoordinator {
     await this.compact(request, {
       level: 'hard',
       reason: 'overflow_retry',
-      tokensBefore: request.session.metadata.lastInputTokens && request.session.metadata.lastInputTokens > 0
-        ? request.session.metadata.lastInputTokens
-        : estimateTokens(request.session.messages),
+      tokensBefore: currentContextTokens({
+        session: request.session,
+        systemPrompt: request.providerSystemPrompt,
+      }),
     }, COMPACTION_TRIGGER_REASON.OVERFLOW_RETRY);
   }
 

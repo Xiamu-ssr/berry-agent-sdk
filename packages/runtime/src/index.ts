@@ -19,6 +19,8 @@ import {
   type ExecutionEnvironment,
   type ExecutionEnvironmentProvider,
   type Hand,
+  type HandCapabilityAuditSink,
+  type HandCapabilityPolicy,
   type HandKind,
   type ProviderInput,
   type PromptPackInput,
@@ -133,6 +135,10 @@ export interface ManagedRuntimeBuildOptions {
   localWorkspace?: false | Omit<LocalWorkspaceHandOptions, 'scope' | 'credentials' | 'environment' | 'sandbox'>;
   hostHand?: false | ManagedRuntimeHostHandOptions;
   mcp?: false | ManagedRuntimeMcpOptions;
+  /** SDK-owned capability policy applied to local, host, MCP, and environment hands. */
+  handPolicy?: HandCapabilityPolicy;
+  /** Audit sink for hand capability exposure/execution decisions. */
+  handAuditSink?: HandCapabilityAuditSink;
   skills?: ManagedRuntimeSkillLoadout;
   safety?: ManagedRuntimeSafetyOptions;
   observe?: ManagedRuntimeObserveOptions;
@@ -248,6 +254,8 @@ function createManagedRuntimeFromEnvironment(
         contextWindow: inferContextWindow(options.model, options.registry),
       },
       hands: buildHands(scope, options, executionEnvironment),
+      handPolicy: options.handPolicy,
+      handAuditSink: options.handAuditSink,
       cwd: options.projectRoot ?? options.workspace,
       home: options.home,
       project: options.projectRoot,

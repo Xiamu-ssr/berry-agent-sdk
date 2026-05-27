@@ -29,6 +29,3 @@ export function createEmptySessionMetadata(): SessionMetadata {
   };
 }
 
-export function normalizeLoadedSession(session: Session | null): Session | null {
-  return session;
-}

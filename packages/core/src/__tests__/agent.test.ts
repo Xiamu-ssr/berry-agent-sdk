@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
+import { flattenSystemPrompt, normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import { Agent } from '../agent.js';
-import { flattenSystemPrompt, normalizeSystemPrompt } from '../index.js';
 import type {
   Provider,
   ProviderRequest,

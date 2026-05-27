@@ -3,14 +3,11 @@
 // ============================================================
 
 // Core
-export { Agent } from './agent.js';
 export { AgentHome } from './agent-home.js';
 export type { AgentHomeSnapshot } from './agent-home.js';
 export type { AgentSnapshot, MCPSummary } from './agent-helpers/introspection.js';
 export type { CompactionResult } from './compaction/compactor.js';
-export { flattenSystemPrompt, normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 export { toProviderResolver } from './provider-types.js';
-export { providerPublicConfig } from './provider-types.js';
 export {
   BUILTIN_PROMPT_PACKS,
   DEFAULT_PROMPT_PACK,
@@ -40,7 +37,6 @@ export type {
 export { createProvider } from './agent-helpers/provider.js';
 
 // Compaction
-export { compact, estimateTokens, DefaultCompactionStrategy } from './compaction/compactor.js';
 export type { ForkContext } from './compaction/compactor.js';
 export type { CompactionStrategy, CompactionStrategyResult } from './compaction/types.js';
 
@@ -50,6 +46,9 @@ export {
   HAND_STATES,
   handStateSchema,
   handStatusSchema,
+  handCapabilityAuditEventSchema,
+  handCapabilityPolicySchema,
+  evaluateHandCapabilityPolicy,
   createHandToolRegistrations,
   createToolRegistrationHand,
 } from './hands.js';
@@ -58,6 +57,11 @@ export type {
   Hand,
   HandCall,
   HandCapability,
+  HandCapabilityAuditEvent,
+  HandCapabilityAuditSink,
+  HandCapabilityPolicy,
+  HandCapabilityPolicyContext,
+  HandCapabilityPolicyDecision,
   HandContext,
   HandKind,
   HandState,
@@ -66,7 +70,7 @@ export type {
 } from './hands.js';
 
 // Chat / Timeline (UI-friendly format)
-export { createPendingUserChatMessage, timelineEventFromAgentEvent, toAgentSessionView } from './chat.js';
+export { timelineEventFromAgentEvent } from './chat.js';
 export type {
   AgentChatInference,
   AgentChatMessage,
@@ -162,10 +166,6 @@ export { loadSkillsFromDir, loadSkill, listSkillNamesSync, buildSkillIndex, getS
 export type { Skill, SkillMeta, SkillIndex, SkillDirSpec } from './skills/types.js';
 export type { LoadSkillsOptions } from './skills/loader.js';
 
-// Retry utility (for custom providers)
-export { withRetry, isRetryableError, getRetryDelay, classifyError } from './utils/retry.js';
-export type { ErrorKind } from './utils/retry.js';
-
 // Command Executor (sandbox abstraction)
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from './executor.js';
 export { createCommandEnvironment } from './command-environment.js';
@@ -219,7 +219,6 @@ export { AGENT_EVENT_TYPES, GUARD_EVENT_KINDS } from './agent-runtime-types.js';
 // Types
 export type {
   AgentConfig,
-  AgentCreateConfig,
 } from './agent-config-types.js';
 export type {
   AgentEvent,

@@ -21,7 +21,7 @@ import type {
   AgentChatMessage,
   AgentSessionView,
 } from './chat-types.js';
-import { estimateTokens } from './compaction/compactor.js';
+import { currentContextTokens } from './compaction/runner.js';
 import type { AgentSnapshot } from './agent-helpers/introspection.js';
 import type { ProviderPublicConfig } from './provider-types.js';
 import type { Hand, HandToolAdapterOptions } from './hands.js';
@@ -82,7 +82,6 @@ export class ManagedAgentRuntime {
   readonly agentId?: string;
   private readonly agent: Agent;
   private readonly destroyHooks: Array<() => void | Promise<void>>;
-  private activeSessionId?: string;
 
   private constructor(options: ManagedAgentRuntimeOptions) {
     this.agent = options.agent;
@@ -103,12 +102,11 @@ export class ManagedAgentRuntime {
   }
 
   getActiveSessionId(): string | undefined {
-    return this.activeSessionId ?? this.agent.lastSessionId;
+    return this.agent.lastSessionId;
   }
 
   setActiveSessionId(sessionId: string | undefined): void {
-    if (sessionId) this.activeSessionId = sessionId;
-    else this.activeSessionId = undefined;
+    this.agent.setLastSessionId(sessionId);
   }
 
   getStatus(): { status: AgentStatus; detail?: string } {
@@ -126,6 +124,10 @@ export class ManagedAgentRuntime {
     return this.agent.currentProvider;
   }
 
+  switchModel(modelRef: string): void {
+    this.agent.switchModel(modelRef);
+  }
+
   snapshot(): AgentSnapshot {
     return this.agent.snapshot();
   }
@@ -139,7 +141,6 @@ export class ManagedAgentRuntime {
   }
 
   async destroy(): Promise<void> {
-    this.activeSessionId = undefined;
     await this.agent.destroy();
     await Promise.all(this.destroyHooks.map(async (hook) => {
       try {
@@ -265,10 +266,10 @@ export class ManagedAgentRuntime {
     const session = await this.agent.getSession(sessionId);
     if (!session) return { current: 0, window };
 
-    // API-reported input tokens include system/tool context and are the best
-    // ground truth after a provider call. Before the first call, fall back to
-    // a message-only estimate.
-    const current = session.metadata.lastInputTokens ?? estimateTokens(session.messages);
+    const current = currentContextTokens({
+      session,
+      systemPrompt: this.agent.getSystemPrompt(),
+    });
     return { current, window };
   }
 

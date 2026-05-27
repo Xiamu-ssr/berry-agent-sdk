@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { Agent } from '../agent.js';
 import {
-  Agent,
   HandRegistry,
   ManagedAgentRuntime,
+  ToolGroup,
   createHandToolRegistrations,
   createToolRegistrationHand,
+  evaluateHandCapabilityPolicy,
+  handCapabilityAuditEventSchema,
+  handCapabilityPolicySchema,
+  type HandCapabilityAuditEvent,
   type Provider,
   type ProviderRequest,
   type ProviderResponse,
@@ -100,6 +105,81 @@ describe('hands', () => {
       kind: 'mcp',
       server: 'github',
     });
+  });
+
+  it('evaluates capability policy by hand, tool, group, and MCP server', () => {
+    expect(evaluateHandCapabilityPolicy({
+      allowMcpServers: ['github'],
+    }, {
+      handId: 'mcp:docs',
+      handKind: 'mcp',
+      capabilityId: 'search',
+      toolName: 'docs_search',
+      toolGroup: ToolGroup.Other,
+      source: { kind: 'mcp', server: 'docs' },
+    })).toEqual({
+      action: 'deny',
+      reason: 'MCP server "docs" is not allowed',
+    });
+
+    expect(evaluateHandCapabilityPolicy({
+      denyToolGroups: [ToolGroup.Shell],
+    }, {
+      handId: 'local',
+      handKind: 'shell',
+      capabilityId: 'shell',
+      toolName: 'shell',
+      toolGroup: ToolGroup.Shell,
+      source: { kind: 'hand', hand: 'local', handKind: 'shell' },
+    })).toEqual({
+      action: 'deny',
+      reason: 'tool group "shell" is denied',
+    });
+  });
+
+  it('filters capabilities through hand policy and emits audit events', async () => {
+    const events: HandCapabilityAuditEvent[] = [];
+    const allowed = createToolRegistrationHand({
+      id: 'mcp:github',
+      kind: 'mcp',
+      tools: [{
+        ...tool('github_search', 'ok'),
+        definition: {
+          ...tool('github_search').definition,
+          group: ToolGroup.Web,
+        },
+        source: { kind: 'mcp', server: 'github' },
+      }],
+    });
+    const denied = createToolRegistrationHand({
+      id: 'mcp:docs',
+      kind: 'mcp',
+      tools: [{
+        ...tool('docs_search'),
+        source: { kind: 'mcp', server: 'docs' },
+      }],
+    });
+
+    const registrations = createHandToolRegistrations([allowed, denied], {
+      policy: { allowMcpServers: ['github'] },
+      auditSink: (event) => { events.push(event); },
+      now: () => 123,
+    });
+
+    expect(registrations.map((registration) => registration.definition.name)).toEqual(['github_search']);
+    await expect(registrations[0]!.execute({}, { cwd: '/tmp' })).resolves.toMatchObject({
+      content: expect.stringContaining('ok'),
+    });
+    expect(events.map((event) => [event.phase, event.action, event.toolName, event.reason])).toEqual([
+      ['expose', 'allow', 'github_search', undefined],
+      ['expose', 'deny', 'docs_search', 'MCP server "docs" is not allowed'],
+      ['execute', 'allow', 'github_search', undefined],
+    ]);
+    expect(handCapabilityAuditEventSchema.parse(events[0])).toMatchObject({
+      timestamp: 123,
+      toolGroup: ToolGroup.Web,
+    });
+    expect(handCapabilityPolicySchema.parse({ denyHands: ['x'] })).toEqual({ denyHands: ['x'] });
   });
 
   it('tracks registered hand status', async () => {
@@ -241,6 +321,36 @@ describe('hands', () => {
 
     expect(agent.hasHand(CONFIGURED_TOOLS_HAND_ID)).toBe(true);
     expect(agent.getTools().map((definition) => definition.name)).toContain('echo');
+  });
+
+  it('applies Agent hand policy to constructor hands, direct tools, and runtime tools', async () => {
+    const events: HandCapabilityAuditEvent[] = [];
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake' },
+      providerInstance: new SequenceProvider([]),
+      home: tmpHome('berry-hand-policy-'),
+      handPolicy: {
+        denyHands: [CONFIGURED_TOOLS_HAND_ID],
+        denyTools: ['browser_navigate'],
+      },
+      handAuditSink: (event) => { events.push(event); },
+      tools: [tool('configured_echo')],
+      hands: [createToolRegistrationHand({
+        id: 'browser',
+        kind: 'browser',
+        tools: [tool('browser_navigate')],
+      })],
+    });
+
+    expect(agent.hasHand(CONFIGURED_TOOLS_HAND_ID)).toBe(true);
+    expect(agent.getTools().map((definition) => definition.name)).not.toContain('configured_echo');
+    expect(agent.getTools().map((definition) => definition.name)).not.toContain('browser_navigate');
+
+    agent.addTool(tool('runtime_echo'));
+    expect(agent.getTools().map((definition) => definition.name)).toContain('runtime_echo');
+    await agent.removeTool('runtime_echo');
+    expect(events.some((event) => event.action === 'deny' && event.toolName === 'configured_echo')).toBe(true);
+    expect(events.some((event) => event.action === 'deny' && event.toolName === 'browser_navigate')).toBe(true);
   });
 
   it('wraps runtime addTool as a one-tool hand and removes it cleanly', async () => {

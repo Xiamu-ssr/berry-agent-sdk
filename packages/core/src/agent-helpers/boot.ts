@@ -6,7 +6,7 @@ import type { AgentConfig } from '../agent-config-types.js';
 import type { ModelRefResolver, Provider, ProviderConfig, ProviderResolver } from '../provider-types.js';
 import type { Session, SessionStore } from '../session-types.js';
 import type { ToolRegistration } from '../tool-types.js';
-import { HandRegistry } from '../hands.js';
+import { HandRegistry, type HandToolAdapterOptions } from '../hands.js';
 import type { EventLogStore } from '../event-log/types.js';
 import { FileEventLogStore } from '../event-log/jsonl-store.js';
 import type { AgentMemory, ProjectContext } from '../workspace/types.js';
@@ -38,6 +38,7 @@ export interface AgentBootState {
   toolDenylist: Set<string>;
   hands: HandRegistry;
   handToolNames: Map<string, Set<string>>;
+  handAdapterOptions: HandToolAdapterOptions;
   skills: SkillManager;
   cwd: string;
   sessionStore: SessionStore;
@@ -91,7 +92,11 @@ export function bootAgent(config: AgentConfig): AgentBootState {
   const tools = new Map<string, ToolRegistration>();
   const hands = new HandRegistry();
   const handToolNames = new Map<string, Set<string>>();
-  registerConfiguredToolCapabilities({ tools, hands, handToolNames }, config.tools);
+  const handAdapterOptions: HandToolAdapterOptions = {
+    policy: config.handPolicy,
+    auditSink: config.handAuditSink,
+  };
+  registerConfiguredToolCapabilities({ tools, hands, handToolNames }, config.tools, handAdapterOptions);
 
   return {
     provider,
@@ -103,6 +108,7 @@ export function bootAgent(config: AgentConfig): AgentBootState {
     toolDenylist: new Set(metadata.toolDenylist ?? []),
     hands,
     handToolNames,
+    handAdapterOptions,
     skills: new SkillManager({
       skillDirs: (metadata.skills?.extraDirs ?? []).map((dir) => ({ dir })),
       disabledSkills: new Set(config.disabledSkills ?? []),
