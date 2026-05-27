@@ -137,6 +137,18 @@
     </tbody>
   </table>
 
+  <h2>Platform 演进路线</h2>
+  <p>SDK 是底层 — Anthropic 4+1 单 agent 的完整实现。Berry 完整产品蓝图是 4 层:</p>
+  <pre><code>[Products]   berry-claw / 其他 agent 产品 (面向用户)
+                  ↓ API
+[Control]    @berry-agent/a8s          (跨机器调度，类 Nomad)
+                  ↓
+[Worker]     @berry-agent/worker × N    (单机 daemon，含 SDK runtime)
+                  ↓ import
+[Runtime]    @berry-agent/runtime + core + ... (本 SDK)</code></pre>
+  <p>SDK 的角色到 Runtime 层为止 — Worker 和 a8s 是后续工作。已经把 lease/wake/worker registry/cross-process failover 原语备齐，a8s 不需要重新发明，只需暴露成 control plane API。</p>
+  <p>规模目标:<strong>1 本地 + 几台到几十台云</strong>,不是 k8s 规模。anchor capability 是 <strong>long-running task</strong>:agent 跑几小时几天不丢。详细见 <code>docs/anthropic-managed-agents-notes.md</code> 的 Product Strategy 段。</p>
+
   <h2>开发命令</h2>
   <pre><code>npm install
 npm run build
