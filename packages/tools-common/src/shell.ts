@@ -9,6 +9,7 @@
 
 import type { ToolRegistration } from '@berry-agent/core';
 import {
+  errorMessage,
   TOOL_PROCESS_KILL,
   TOOL_PROCESS_LIST,
   TOOL_PROCESS_LOG,
@@ -220,7 +221,7 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
             content: JSON.stringify(result, null, 2),
           };
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },
@@ -244,7 +245,7 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
             content: JSON.stringify(result, null, 2),
           };
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },

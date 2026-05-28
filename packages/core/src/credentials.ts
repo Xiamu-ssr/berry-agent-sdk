@@ -9,8 +9,9 @@
 //   2. SDK never mandates where secrets live — env / file / vault all work.
 //   3. Per-agent credential isolation is possible by swapping the store.
 
-import { promises as fs, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { errorMessage, isNoEntryError } from '@berry-agent/small-shared-core';
+import { writeJsonAtomic } from './atomic-write.js';
 
 /**
  * Synchronous credential lookup. Tools pass in a required key name; the
@@ -112,7 +113,7 @@ export class DefaultCredentialStore implements CredentialStore {
     }
     if (!this.fileCache) this.fileCache = {};
     this.fileCache[key] = value;
-    await writeJsonAtomic(this.filePath, this.fileCache);
+    await writeJsonAtomic(this.filePath, this.fileCache, { mode: 0o600, chmodAfter: true });
   }
 
   /**
@@ -126,7 +127,7 @@ export class DefaultCredentialStore implements CredentialStore {
     }
     if (!this.fileCache || !(key in this.fileCache)) return;
     delete this.fileCache[key];
-    await writeJsonAtomic(this.filePath, this.fileCache);
+    await writeJsonAtomic(this.filePath, this.fileCache, { mode: 0o600, chmodAfter: true });
   }
 
   private loadFileSync(): void {
@@ -135,14 +136,10 @@ export class DefaultCredentialStore implements CredentialStore {
       const raw = readFileSync(this.filePath, 'utf-8');
       this.fileCache = parseCredentialFile(raw, this.filePath);
     } catch (err) {
-      if (isNotFoundError(err)) return;
+      if (isNoEntryError(err)) return;
       throw err;
     }
   }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
 }
 
 function parseCredentialFile(raw: string, filePath: string): Record<string, string> {
@@ -150,7 +147,7 @@ function parseCredentialFile(raw: string, filePath: string): Record<string, stri
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Failed to parse credential file "${filePath}": ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Failed to parse credential file "${filePath}": ${errorMessage(err)}`);
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -211,14 +208,3 @@ function assertCredentialKeyValue(key: string, value: string): void {
   }
 }
 
-async function writeJsonAtomic(path: string, data: Record<string, string>): Promise<void> {
-  await fs.mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  await fs.rename(tmp, path);
-  try {
-    await fs.chmod(path, 0o600);
-  } catch {
-    // best-effort on Windows
-  }
-}

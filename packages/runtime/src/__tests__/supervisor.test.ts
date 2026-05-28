@@ -4,11 +4,11 @@ import { MemoryRuntimeOrchestrationStore, RuntimeOrchestrator } from '../orchest
 import { ManagedRuntimeSupervisor } from '../supervisor.js';
 
 function runtime(id: string) {
-  const destroy = vi.fn();
+  const dispose = vi.fn();
   return {
-    runtime: { destroy } as unknown as ManagedAgentRuntime,
+    runtime: { dispose } as unknown as ManagedAgentRuntime,
     workspace: `/tmp/${id}`,
-    destroy,
+    dispose,
   };
 }
 
@@ -74,7 +74,7 @@ describe('ManagedRuntimeSupervisor', () => {
 
     if (!started.started) throw new Error('expected runtime to start');
     await first.stop('agent_1');
-    expect(started.mount.destroy).toHaveBeenCalledTimes(1);
+    expect(started.mount.dispose).toHaveBeenCalledTimes(1);
 
     const restarted = await second.start({
       agentId: 'agent_1',
@@ -164,7 +164,7 @@ describe('ManagedRuntimeSupervisor', () => {
 
     time.advance(101);
     await expect(supervisor.renew('agent_1')).resolves.toBeNull();
-    expect(started.mount.destroy).toHaveBeenCalledTimes(1);
+    expect(started.mount.dispose).toHaveBeenCalledTimes(1);
     expect(supervisor.get('agent_1')).toBeUndefined();
     expect(onLeaseLost).toHaveBeenCalledWith('agent_1', 'lease_1');
   });

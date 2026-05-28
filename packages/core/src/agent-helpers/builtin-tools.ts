@@ -1,3 +1,4 @@
+import { errorMessage } from '@berry-agent/small-shared-core';
 import type {
   DelegateConfig,
   DelegateResult,
@@ -88,7 +89,7 @@ function registerDelegateTool(deps: BuiltinAgentToolDeps): void {
         };
       } catch (err) {
         return {
-          content: `Delegate failed: ${err instanceof Error ? err.message : String(err)}`,
+          content: `Delegate failed: ${errorMessage(err)}`,
           isError: true,
         };
       }

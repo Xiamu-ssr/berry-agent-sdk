@@ -133,7 +133,7 @@ export type AgentStatus =
   | 'tool_use'
   | 'sleeping'
   | 'paused'
-  | 'destroyed';
+  | 'disposed';
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
 

@@ -168,6 +168,10 @@ export type { LoadSkillsOptions } from './skills/loader.js';
 
 // Command Executor (sandbox abstraction)
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from './executor.js';
+export { processHandleFromChild, composeExecResult } from './child-process-adapter.js';
+export { writeJsonAtomic } from './atomic-write.js';
+export type { WriteJsonAtomicOptions } from './atomic-write.js';
+export { parseSchema, parseJsonWithSchema } from './parse-json.js';
 export { createCommandEnvironment } from './command-environment.js';
 export type { CommandEnvironment, CommandEnvironmentOptions } from './command-environment.js';
 
@@ -212,7 +216,7 @@ export * from './constants.js';
 export * from './tool-names.js';
 
 // Tool group enum and labels
-export { SystemPromptCacheMode } from '@berry-agent/small-shared-core';
+export { SystemPromptCacheMode, errorMessage, isNoEntryError, joinZodPath, zodIssueMessage } from '@berry-agent/small-shared-core';
 export { ToolGroup, TOOL_GROUP_LABELS } from './tool-types.js';
 export { AGENT_EVENT_TYPES, GUARD_EVENT_KINDS } from './agent-runtime-types.js';
 

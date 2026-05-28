@@ -9,8 +9,8 @@
 // exit codes. "Permission denied" errors from OS-level denials
 // look identical to regular file-permission errors.
 
-import { exec, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createCommandEnvironment } from '@berry-agent/core';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { composeExecResult, createCommandEnvironment, processHandleFromChild } from '@berry-agent/core';
 import type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from '@berry-agent/core';
 import type { SandboxConfig } from './types.js';
 import { buildSeatbeltProfile } from './profile-builder.js';
@@ -65,16 +65,8 @@ class SeatbeltExecutor implements CommandExecutor {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
-
-        let output = '';
-        if (stdout) output += stdout;
-        if (stderr) output += (output ? '\n' : '') + stderr;
-        if (!output && error) output = error.message;
-
-        resolve({
-          output: output || '(no output)',
-          isError: error ? true : (code !== 0 && code !== null),
-        });
+        const isError = error ? true : (code !== 0 && code !== null);
+        resolve(composeExecResult(stdout, stderr, error, isError));
       };
 
       if (timeout) {
@@ -101,25 +93,6 @@ class SeatbeltExecutor implements CommandExecutor {
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
-    return {
-      pid: child.pid,
-      get stdinWritable() {
-        return child.stdin.writable;
-      },
-      write: (data: string) =>
-        new Promise<void>((resolve, reject) => {
-          child.stdin.write(data, (error) => {
-            if (error) reject(error);
-            else resolve();
-          });
-        }),
-      kill: (signal?: string) => {
-        child.kill((signal ?? 'SIGTERM') as NodeJS.Signals);
-      },
-      onStdOut: (handler) => child.stdout.on('data', handler),
-      onStdErr: (handler) => child.stderr.on('data', handler),
-      onError: (handler) => child.on('error', handler),
-      onExit: (handler) => child.on('exit', (code, signal) => handler(code, signal)),
-    };
+    return processHandleFromChild(child);
   }
 }

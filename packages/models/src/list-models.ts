@@ -6,6 +6,7 @@
 // or the call fails (auth, network, schema drift).
 
 import { z } from 'zod';
+import { errorMessage } from '@berry-agent/small-shared-core';
 import type { ProviderPreset, ProviderInstance } from './types.js';
 import { getPreset, RAW_PRESET_ID } from './presets.js';
 
@@ -108,7 +109,7 @@ export async function listModels(
     }
     return { models: sortUnique(ids), source: 'live' };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return {
       models: sortUnique(preset.knownModels),
       source: 'known',

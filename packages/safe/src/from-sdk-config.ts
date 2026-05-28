@@ -10,6 +10,7 @@
 
 import type { ClassifierConfig } from './types.js';
 import { readFileSync } from 'node:fs';
+import { errorMessage } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { safeNamespaceSchema } from './schema.js';
 import { resolveClassifierConfig } from './classifier-config.js';
@@ -60,14 +61,14 @@ function readSdkConfig(path: string): ValidSdkConfig {
   try {
     raw = readFileSync(path, 'utf8');
   } catch (err) {
-    throw new Error(`Failed to read SDK config "${path}": ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Failed to read SDK config "${path}": ${errorMessage(err)}`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Failed to parse SDK config "${path}": ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Failed to parse SDK config "${path}": ${errorMessage(err)}`);
   }
 
   if (!parsed || typeof parsed !== 'object') {

@@ -4,6 +4,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { isNoEntryError } from '@berry-agent/small-shared-core';
 import type { ProjectContext } from './types.js';
 import { projectSharedPaths } from './project-layout.js';
 export { PROJECT_CONTEXT_FILE } from './project-layout.js';
@@ -24,7 +25,7 @@ export class FileProjectContext implements ProjectContext {
     try {
       return await readFile(projectSharedPaths(this.root).contextPath, 'utf-8');
     } catch (err: unknown) {
-      if (isNotFound(err)) return '';
+      if (isNoEntryError(err)) return '';
       throw err;
     }
   }
@@ -34,8 +35,4 @@ export class FileProjectContext implements ProjectContext {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content, 'utf-8');
   }
-}
-
-function isNotFound(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }

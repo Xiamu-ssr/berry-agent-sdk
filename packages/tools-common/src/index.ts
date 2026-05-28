@@ -17,6 +17,7 @@ export type { ShellToolOptions } from './shell.js';
 export { NodeExecutor } from './executor.js';
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from '@berry-agent/core';
 export { createSearchTools } from './search.js';
+export type { SearchToolOptions } from './search.js';
 export { createEditFileTool } from './edit.js';
 export { createWebFetchTool } from './web-fetch.js';
 export { createWebSearchTool } from './web-search.js';

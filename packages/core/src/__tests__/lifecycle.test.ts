@@ -1,5 +1,5 @@
 // ============================================================
-// Agent lifecycle — destroy / send / snapshot
+// Agent lifecycle — dispose / send / snapshot
 // ============================================================
 
 import { describe, it, expect } from 'vitest';
@@ -49,28 +49,28 @@ function makeAgent(): { agent: Agent; provider: FakeProvider } {
 }
 
 describe('Agent lifecycle', () => {
-  describe('destroy', () => {
-    it('destroy() marks agent destroyed; send() rejects', async () => {
+  describe('dispose', () => {
+    it('dispose() marks agent disposed; send() rejects', async () => {
       const { agent } = makeAgent();
-      expect(agent.isDestroyed).toBe(false);
-      await agent.destroy();
+      expect(agent.isDisposed).toBe(false);
+      await agent.dispose();
 
-      expect(agent.status).toBe('destroyed');
-      expect(agent.isDestroyed).toBe(true);
-      await expect(agent.send('hi')).rejects.toThrow(/destroyed/i);
+      expect(agent.status).toBe('disposed');
+      expect(agent.isDisposed).toBe(true);
+      await expect(agent.send('hi')).rejects.toThrow(/disposed/i);
     });
 
-    it('destroy() is idempotent', async () => {
+    it('dispose() is idempotent', async () => {
       const { agent } = makeAgent();
-      await agent.destroy();
-      await agent.destroy();
-      expect(agent.status).toBe('destroyed');
+      await agent.dispose();
+      await agent.dispose();
+      expect(agent.status).toBe('disposed');
     });
 
-    it('delegate() rejects on destroyed agent', async () => {
+    it('delegate() rejects on disposed agent', async () => {
       const { agent } = makeAgent();
-      await agent.destroy();
-      await expect(agent.delegate('hi')).rejects.toThrow(/destroyed/i);
+      await agent.dispose();
+      await expect(agent.delegate('hi')).rejects.toThrow(/disposed/i);
     });
   });
 
@@ -96,9 +96,9 @@ describe('Agent lifecycle', () => {
       const { agent } = makeAgent();
       const snap = agent.snapshot();
       const before = snap.status;
-      await agent.destroy();
+      await agent.dispose();
       expect(snap.status).toBe(before);
-      expect(agent.status).toBe('destroyed');
+      expect(agent.status).toBe('disposed');
     });
   });
 });

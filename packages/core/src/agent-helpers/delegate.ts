@@ -85,8 +85,8 @@ export async function runDelegate(
   message: string,
   config: DelegateConfig | undefined,
 ): Promise<DelegateResult> {
-  if (deps.status === 'destroyed') {
-    throw new Error('Agent has been destroyed; create a new instance to continue');
+  if (deps.status === 'disposed') {
+    throw new Error('Agent has been disposed; create a new instance to continue');
   }
 
   const previousStatus = deps.status;

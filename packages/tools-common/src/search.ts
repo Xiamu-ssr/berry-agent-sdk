@@ -1,13 +1,23 @@
 // ============================================================
 // Berry Agent SDK — Common Tools: Search (grep + find)
 // ============================================================
+//
+// Search tools route through the CommandExecutor interface so
+// SandboxedExecutor (from @berry-agent/safe) applies uniformly.
+// Use `executor` option for parity with createShellTools().
 
-import { exec } from 'node:child_process';
-import type { ToolRegistration, ToolContext } from '@berry-agent/core';
-import { ToolGroup } from '@berry-agent/core';
+import type { ToolRegistration, ToolContext, CommandExecutor } from '@berry-agent/core';
+import { errorMessage, ToolGroup } from '@berry-agent/core';
+import { NodeExecutor } from './executor.js';
 import { resolveClaudeCodeRelativePath, shellEscape } from './path.js';
 
 const MAX_OUTPUT = 10_000;
+const SEARCH_TIMEOUT = 15_000;
+
+export interface SearchToolOptions {
+  /** Command executor. Defaults to NodeExecutor (no sandbox). */
+  executor?: CommandExecutor;
+}
 
 /**
  * Create search tools (grep, find_files) scoped to a project directory (Claude Code style).
@@ -17,17 +27,29 @@ const MAX_OUTPUT = 10_000;
  *   "path"      → relative to cwd (from ToolContext)
  *   "//abs/path" → absolute path (must stay within projectRoot)
  */
-export function createSearchTools(projectRoot: string): ToolRegistration[] {
-  const run = (cmd: string): Promise<{ content: string; isError?: boolean }> =>
-    new Promise((resolve) => {
-      exec(cmd, { cwd: projectRoot, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-        let output = stdout || '';
-        if (stderr) output += (output ? '\n' : '') + stderr;
-        if (!output && error) output = error.message;
-        if (output.length > MAX_OUTPUT) output = output.slice(0, MAX_OUTPUT) + '\n... [truncated]';
-        resolve({ content: output || '(no matches)', isError: error && !stdout ? true : undefined });
-      });
+export function createSearchTools(
+  projectRoot: string,
+  options?: SearchToolOptions,
+): ToolRegistration[] {
+  const executor = options?.executor ?? new NodeExecutor();
+
+  const run = async (cmd: string): Promise<{ content: string; isError?: boolean }> => {
+    const result = await executor.exec(cmd, {
+      cwd: projectRoot,
+      timeout: SEARCH_TIMEOUT,
+      maxBuffer: 1024 * 1024,
     });
+    let output = result.output === '(no output)' ? '' : result.output;
+    if (output.length > MAX_OUTPUT) {
+      output = output.slice(0, MAX_OUTPUT) + '\n... [truncated]';
+    }
+    return {
+      content: output || '(no matches)',
+      // grep exits 1 on no-match; the `|| echo` fallback in the command absorbs that,
+      // so a real error flag here means a tool-level failure (bad path, killed, etc.).
+      isError: result.isError && !output ? true : undefined,
+    };
+  };
 
   return [
     {
@@ -56,7 +78,7 @@ export function createSearchTools(projectRoot: string): ToolRegistration[] {
             : '';
           return run(`grep -rn ${include} -e ${shellEscape(pattern)} ${shellEscape(path)} 2>/dev/null || echo '(no matches)'`);
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },
@@ -87,7 +109,7 @@ export function createSearchTools(projectRoot: string): ToolRegistration[] {
           const depth = maxDepth !== undefined ? `-maxdepth ${maxDepth}` : '';
           return run(`find ${shellEscape(path)} ${depth} -name ${shellEscape(pattern)} -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | head -100`);
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },

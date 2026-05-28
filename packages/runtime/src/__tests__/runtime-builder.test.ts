@@ -48,7 +48,7 @@ describe('createManagedRuntime', () => {
     expect(built.executionEnvironment).toBeUndefined();
     expect(runtime.getStatus().status).toBe('idle');
     expect(runtime.snapshot().tools.some((tool) => tool.name === 'shell')).toBe(false);
-    await runtime.destroy();
+    await runtime.dispose();
   });
 
   it('can seed the SDK-owned agent MCP config through the runtime builder', async () => {
@@ -67,7 +67,7 @@ describe('createManagedRuntime', () => {
 
     expect(existsSync(home.mcpConfigPath)).toBe(true);
     expect(JSON.parse(readFileSync(home.mcpConfigPath, 'utf-8'))).toEqual(DEFAULT_PLAYWRIGHT_MCP_TEMPLATE);
-    await runtime.destroy();
+    await runtime.dispose();
   });
 
   it('mounts hands supplied by the execution environment', async () => {
@@ -101,7 +101,7 @@ describe('createManagedRuntime', () => {
 
     expect(built.executionEnvironment?.id).toBe('remote-worker');
     expect(runtime.snapshot().tools.map((tool) => tool.name)).toContain('browser_navigate');
-    await runtime.destroy();
+    await runtime.dispose();
   });
 
   it('can let the managed runtime own execution environment disposal', async () => {
@@ -123,7 +123,7 @@ describe('createManagedRuntime', () => {
       }),
     });
 
-    await built.runtime.destroy();
+    await built.runtime.dispose();
 
     expect(disposed).toBe(1);
   });
@@ -156,7 +156,7 @@ describe('createManagedRuntime', () => {
     expect(seen).toEqual(['agent-env-provider', normalizedWorkspace, normalizedWorkspace]);
     expect(built.executionEnvironment?.id).toBe('container-a');
 
-    await built.runtime.destroy();
+    await built.runtime.dispose();
     expect(disposed).toBe(1);
   });
 
@@ -179,7 +179,7 @@ describe('createManagedRuntime', () => {
     });
 
     expect(built.executionEnvironment?.id).toBe('remote-a');
-    await built.runtime.destroy();
+    await built.runtime.dispose();
   });
 
   it('keeps the sync builder honest when provisioning is async', () => {

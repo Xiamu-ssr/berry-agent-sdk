@@ -1,3 +1,4 @@
+import { errorMessage } from '@berry-agent/small-shared-core';
 import type { ContentBlock } from '../content-types.js';
 import type { Session } from '../session-types.js';
 import type { AgentEvent, QueryOptions, QueryResult } from '../agent-runtime-types.js';
@@ -31,8 +32,8 @@ export async function runAgentTurn(
   prompt: string | ContentBlock[],
   options?: QueryOptions,
 ): Promise<QueryResult> {
-  if (deps.runState.isDestroyed) {
-    throw new Error('Agent has been destroyed; create a new instance to continue');
+  if (deps.runState.isDisposed) {
+    throw new Error('Agent has been disposed; create a new instance to continue');
   }
   await deps.memoryReady;
 
@@ -93,7 +94,7 @@ export async function runAgentTurn(
     pausedReason = deps.runState.pausedReasonFor(pauseController);
     const errorText = pausedReason
       ? `Paused: ${pausedReason}`
-      : err instanceof Error ? err.message : String(err);
+      : errorMessage(err);
     const errorResult: QueryResult = {
       text: '',
       sessionId: session.id,

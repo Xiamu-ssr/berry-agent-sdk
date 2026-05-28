@@ -22,12 +22,16 @@ import {
 } from 'node:fs';
 import { basename } from 'node:path';
 import { z } from 'zod';
+import { parseJsonWithSchema } from '../parse-json.js';
 import { AgentHome } from '../agent-home.js';
 import type { CompactionConfig } from '../compaction/types.js';
+import { zReasoningEffort, type ReasoningEffort } from '../schema.js';
 
-export const zReasoningEffort = z.enum(['none', 'low', 'medium', 'high', 'max', 'xhigh']);
-/** Reasoning effort levels supported by providers. */
-export type ReasoningEffort = z.infer<typeof zReasoningEffort>;
+// Re-export so existing consumers of `from './workspace/initializer.js'`
+// keep compiling. The single fact source lives in `core/schema.ts` so
+// browser hosts (Claw client) can import it without dragging in node:fs.
+export { zReasoningEffort };
+export type { ReasoningEffort };
 
 /**
  * Agent metadata stored in agent.json. Everything here is runtime-switchable.
@@ -187,21 +191,7 @@ export function saveAgentConfigSync(root: string, patch: Partial<AgentMetadata>)
 }
 
 function parseAgentMetadata(raw: string, path: string): AgentMetadata {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Failed to parse agent metadata "${path}": ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  try {
-    return zAgentMetadata.parse(parsed);
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      throw new Error(`Invalid agent metadata "${path}": ${err.issues.map((issue) => issue.message).join('; ')}`);
-    }
-    throw err;
-  }
+  return parseJsonWithSchema(raw, zAgentMetadata, `agent metadata "${path}"`);
 }
 
 function writeJsonAtomicSync(path: string, value: unknown): void {

@@ -11,6 +11,7 @@
 // a callback the Agent passes to let itself re-create its Provider
 // when the resolver swapped the ProviderConfig.
 
+import { errorMessage } from '@berry-agent/small-shared-core';
 import type { AgentEvent } from '../agent-runtime-types.js';
 import type { Provider, ProviderRequest, ProviderResponse } from '../provider-types.js';
 import { MAX_RETRIES, REQUEST_TIMEOUT_MS } from '../constants.js';
@@ -176,9 +177,3 @@ function retryAfterHeader(error: unknown): string | null | undefined {
   return null;
 }
 
-function errorMessage(error: unknown): string {
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-  return String(error);
-}

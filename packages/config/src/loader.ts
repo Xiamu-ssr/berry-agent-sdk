@@ -19,6 +19,7 @@
 
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { errorMessage } from '@berry-agent/core';
 import {
   BERRY_SDK_CONFIG_FIELDS,
   berrySdkConfigSchema,
@@ -47,7 +48,7 @@ export function loadSdkConfig(path: string): BerrySdkConfig {
     raw = readFileSync(path, 'utf-8');
   } catch (err) {
     throw new SdkConfigError(
-      `loadSdkConfig: failed to read "${path}": ${(err as Error).message}`,
+      `loadSdkConfig: failed to read "${path}": ${errorMessage(err)}`,
       path,
     );
   }
@@ -57,7 +58,7 @@ export function loadSdkConfig(path: string): BerrySdkConfig {
     parsed = JSON.parse(raw);
   } catch (err) {
     throw new SdkConfigError(
-      `loadSdkConfig: "${path}" is not valid JSON — ${(err as Error).message}`,
+      `loadSdkConfig: "${path}" is not valid JSON — ${errorMessage(err)}`,
       path,
     );
   }

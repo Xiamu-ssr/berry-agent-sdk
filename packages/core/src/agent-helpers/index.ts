@@ -56,8 +56,8 @@ export {
   notifyAfterApiCall,
   notifyApiCallError,
 } from './middleware.js';
-export { destroyAgentRuntime } from './lifecycle.js';
-export type { AgentLifecycleDestroyDeps } from './lifecycle.js';
+export { disposeAgentRuntime } from './lifecycle.js';
+export type { AgentLifecycleDisposeDeps } from './lifecycle.js';
 export { AgentWorkspaceData } from './workspace-data.js';
 export type { AgentWorkspaceDataDeps } from './workspace-data.js';
 export { buildAgentSystemPrompt, resolveAgentTools } from './runtime-context.js';

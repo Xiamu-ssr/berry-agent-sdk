@@ -2,7 +2,7 @@
 // Agent Status — runtime state machine (4-state)
 // ============================================================
 // Post-AGENTS.md refactor: status is one of
-//   idle | tool_use | sleeping | destroyed
+//   idle | tool_use | sleeping | disposed
 // Substates (thinking / tool_executing / delegating / compacting / ...)
 // live in `detail`, not as distinct statuses.
 

@@ -30,6 +30,13 @@
 
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import type { AgentHomeSnapshot } from './agent-home-types.js';
+
+// Re-export so existing consumers of `from './agent-home.js'` continue
+// to compile. The single fact source lives in `./agent-home-types.js`
+// so it can be imported by browser-safe entry points (core/schema)
+// without dragging in node:fs / node:path through this file.
+export type { AgentHomeSnapshot };
 
 export class AgentHome {
   readonly root: string;
@@ -115,14 +122,4 @@ export class AgentHome {
       metadataPath: this.metadataPath,
     };
   }
-}
-
-export interface AgentHomeSnapshot {
-  root: string;
-  sessionsDir: string;
-  skillsDir: string;
-  mcpConfigPath: string;
-  memoryPath: string;
-  agentMdPath: string;
-  metadataPath: string;
 }

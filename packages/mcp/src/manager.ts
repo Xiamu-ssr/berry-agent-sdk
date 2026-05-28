@@ -2,31 +2,32 @@
 // Berry Agent SDK - Managed MCP Runtime
 // ============================================================
 
-import { z } from 'zod';
+import { errorMessage } from '@berry-agent/core';
 import type { Hand } from '@berry-agent/core';
 import { MCPClient } from './client.js';
 import type { MCPServerConfig } from './config.js';
 import { createMCPHand, defaultMCPPrefix } from './adapter.js';
+import {
+  MCP_SERVER_STATES,
+  mcpManagerStatusSchema,
+  mcpServerStatusSchema,
+  mcpServerStatusViewSchema,
+  type MCPManagerStatus,
+  type MCPServerStatus,
+  type MCPServerStatusView,
+} from './schema.js';
 
-export const MCP_SERVER_STATES = ['connecting', 'connected', 'failed', 'disabled'] as const;
-export const mcpServerStatusSchema = z.enum(MCP_SERVER_STATES);
-export type MCPServerStatus = z.infer<typeof mcpServerStatusSchema>;
-
-export const mcpServerStatusViewSchema = z.object({
-  name: z.string().min(1),
-  connected: z.boolean(),
-  toolCount: z.number().int().nonnegative(),
-  status: mcpServerStatusSchema,
-  lastError: z.string().optional(),
-  lastStartedAt: z.string().optional(),
-}).strict();
-export type MCPServerStatusView = z.infer<typeof mcpServerStatusViewSchema>;
-
-export const mcpManagerStatusSchema = z.object({
-  shared: z.array(mcpServerStatusViewSchema),
-  perAgent: z.record(z.array(mcpServerStatusViewSchema)),
-}).strict();
-export type MCPManagerStatus = z.infer<typeof mcpManagerStatusSchema>;
+// Re-export so existing consumers of `from '@berry-agent/mcp'` keep
+// compiling. The single fact source lives in `./schema.js` so browser
+// hosts can import via the `@berry-agent/mcp/schema` subpath without
+// pulling in the stdio MCPClient runtime.
+export {
+  MCP_SERVER_STATES,
+  mcpServerStatusSchema,
+  mcpServerStatusViewSchema,
+  mcpManagerStatusSchema,
+};
+export type { MCPServerStatus, MCPServerStatusView, MCPManagerStatus };
 
 export interface MCPManagerOptions {
   onChange?: () => void;
@@ -140,7 +141,7 @@ export class MCPManager {
       } catch (err) {
         console.error(
           `[MCP] Error disconnecting per-agent server "${name}" for agent "${agentId}":`,
-          err instanceof Error ? err.message : err,
+          errorMessage(err),
         );
       }
     }
@@ -175,12 +176,12 @@ export class MCPManager {
     return { shared, perAgent };
   }
 
-  async shutdown(): Promise<void> {
+  async dispose(): Promise<void> {
     for (const [name, managed] of this.sharedServers) {
       try {
         await this.disconnect(managed);
       } catch (err) {
-        console.error(`[MCP] Error disconnecting shared server "${name}":`, err instanceof Error ? err.message : err);
+        console.error(`[MCP] Error disconnecting shared server "${name}":`, errorMessage(err));
       }
     }
     this.sharedServers.clear();
@@ -230,7 +231,7 @@ export class MCPManager {
         lastStartedAt: this.now().toISOString(),
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       const label = scope === 'shared' ? 'shared' : `agent "${agentId}"`;
       console.error(`[MCP] ${label} server "${name}" failed:`, msg);
       this.storeManaged(scope, agentId, name, {

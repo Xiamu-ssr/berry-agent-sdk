@@ -41,11 +41,11 @@ export interface WorkerOptions {
   /** Optional cross-process supervisor. Pass when this worker should
    *  participate in lease/wake/cross-process failover. */
   supervisor?: WorkerSupervisorBinding;
-  /** Optional registry callbacks (onCreate / onDrop / onDestroyError). */
+  /** Optional registry callbacks (onCreate / onDrop / onDisposeError). */
   registryHooks?: {
     onCreate?: (mount: WorkerAgentMount) => void;
     onDrop?: (mount: WorkerAgentMount) => void;
-    onDestroyError?: (id: string, error: unknown) => void;
+    onDisposeError?: (id: string, error: unknown) => void;
   };
 }
 
@@ -70,7 +70,7 @@ export class Worker<TEntry = unknown> {
     this.registry = new ManagedRuntimeRegistry<TEntry, BuiltWorkerRuntime>({
       onCreate: options.registryHooks?.onCreate,
       onDrop: options.registryHooks?.onDrop,
-      onDestroyError: options.registryHooks?.onDestroyError,
+      onDisposeError: options.registryHooks?.onDisposeError,
     });
     this.supervisorBinding = options.supervisor;
   }

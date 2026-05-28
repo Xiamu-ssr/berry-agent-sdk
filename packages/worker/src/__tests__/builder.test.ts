@@ -56,7 +56,7 @@ describe('buildAgentRuntime', () => {
 
     expect(built.runtime).toBeDefined();
     expect(built.workspace).toBe(workspace);
-    expect(typeof built.runtime.destroy).toBe('function');
+    expect(typeof built.runtime.dispose).toBe('function');
   });
 
   it('honors hostTools by mounting them as a system hand', () => {

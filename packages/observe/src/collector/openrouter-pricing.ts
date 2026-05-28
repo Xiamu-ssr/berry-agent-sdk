@@ -10,6 +10,7 @@
 // OpenRouter pricing unit: per token (e.g. 0.00000174 USD / token)
 // SDK pricing unit:        per million tokens (e.g. 1.74 USD / M tokens)
 
+import { errorMessage } from '@berry-agent/core';
 import type { ModelPricing } from './pricing.js';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/models';
@@ -92,7 +93,7 @@ export async function fetchOpenRouterPricing(): Promise<Record<string, ModelPric
     }
     return normalisePricing(json.data);
   } catch (err) {
-    console.warn('[OpenRouter pricing] Fetch failed:', (err as Error).message);
+    console.warn('[OpenRouter pricing] Fetch failed:', errorMessage(err));
     return {};
   }
 }

@@ -14,7 +14,7 @@ import { ManagedRuntimeSupervisor } from '../supervisor.js';
 
 interface FakeMount {
   agentId: string;
-  destroyed: boolean;
+  disposed: boolean;
 }
 
 function buildPair() {
@@ -29,10 +29,10 @@ function buildPair() {
 
 function makeFactory() {
   return vi.fn((agentId: string) => {
-    const mount: FakeMount = { agentId, destroyed: false };
+    const mount: FakeMount = { agentId, disposed: false };
     return {
       build: mount,
-      destroy: async () => { mount.destroyed = true; },
+      dispose: async () => { mount.disposed = true; },
     };
   });
 }

@@ -72,7 +72,7 @@ import {
   registerHandCapabilities,
   registerMemoryProviderCapabilities,
   registerRuntimeToolCapability,
-  destroyAgentRuntime,
+  disposeAgentRuntime,
   runAgentQueryLoop,
   runAgentTurn,
   type AgentSnapshot,
@@ -405,13 +405,13 @@ export class Agent {
    * not bypass the hand/capability boundary.
    */
   addTool(tool: ToolRegistration): void {
-    this.assertNotDestroyed('addTool');
+    this.assertNotDisposed('addTool');
     registerRuntimeToolCapability(this.capabilityRegistry(), tool, this.handAdapterOptions);
   }
 
   /** Register a hand and expose its capabilities as model-visible tools. */
   addHand(hand: Hand, options?: HandToolAdapterOptions): void {
-    this.assertNotDestroyed('addHand');
+    this.assertNotDisposed('addHand');
     registerHandCapabilities(this.capabilityRegistry(), hand, {
       ...this.handAdapterOptions,
       ...options,
@@ -432,7 +432,7 @@ export class Agent {
 
   /** Remove a previously registered hand and all tools derived from it. */
   async removeHand(id: string): Promise<boolean> {
-    this.assertNotDestroyed('removeHand');
+    this.assertNotDisposed('removeHand');
     const hand = unregisterHandCapabilities(this.capabilityRegistry(), id);
     if (!hand) return false;
     try {
@@ -486,7 +486,7 @@ export class Agent {
 
   /** Replace the user-facing system prompt blocks. */
   setSystemPrompt(blocks: SystemPromptInput): void {
-    this.assertNotDestroyed('setSystemPrompt');
+    this.assertNotDisposed('setSystemPrompt');
     this.systemPrompt = normalizeSystemPrompt(blocks);
   }
 
@@ -514,7 +514,7 @@ export class Agent {
    * here, they are denied.
    */
   setToolDenylist(names: string[] = []): void {
-    this.assertNotDestroyed('setToolDenylist');
+    this.assertNotDisposed('setToolDenylist');
     this._toolDenylist = new Set(names);
     saveAgentConfigSync(this._home.root, {
       toolDenylist: [...this._toolDenylist],
@@ -533,24 +533,24 @@ export class Agent {
   //   tool_use  — running a turn (LLM call, tool execution, compaction — all fold here)
   //   sleeping  — suspended by the sleep tool; interject() wakes
   //   paused    — last turn was force-aborted by the host; next send() may continue
-  //   destroyed — terminal; every further call rejects
+  //   disposed  — terminal; every further call rejects
   //
   // pause() aborts the active turn; it does not resume mid-provider-call.
   // `send()` is the single turn entry point.
   // `delegate()` forks a sub-turn; the agent stays in tool_use throughout.
 
   /**
-   * Terminal shutdown. Destroys all child agents, clears pending interjects,
-   * and marks the instance unusable. After destroy():
+   * Terminal shutdown. Disposes all child agents, clears pending interjects,
+   * and marks the instance unusable. After dispose():
    *   - send() / delegate() reject
    *   - addTool / removeTool / setSystemPrompt / setToolDenylist throw
    *   - introspection still works so the product can render a final view
    *
-   * Idempotent — calling destroy() twice is a no-op.
+   * Idempotent — calling dispose() twice is a no-op.
    */
-  destroy(): Promise<void> {
+  dispose(): Promise<void> {
     this._lastSessionId = undefined;
-    return destroyAgentRuntime({
+    return disposeAgentRuntime({
       runState: this.runState,
       hands: this.hands,
       handToolNames: this.handToolNames,
@@ -559,9 +559,9 @@ export class Agent {
     });
   }
 
-  /** True once destroy() has completed. */
-  get isDestroyed(): boolean {
-    return this.runState.isDestroyed;
+  /** True once dispose() has completed. */
+  get isDisposed(): boolean {
+    return this.runState.isDisposed;
   }
 
   // ===== Introspection =====
@@ -627,7 +627,7 @@ export class Agent {
 
   /** Remove a runtime-added tool and dispose its backing hand when needed. */
   async removeTool(name: string): Promise<boolean> {
-    this.assertNotDestroyed('removeTool');
+    this.assertNotDisposed('removeTool');
     try {
       return await unregisterToolCapability(this.capabilityRegistry(), name);
     } catch (err) {
@@ -636,9 +636,9 @@ export class Agent {
     }
   }
 
-  private assertNotDestroyed(action: string): void {
-    if (this.runState.isDestroyed) {
-      throw new Error(`Cannot ${action}: agent has been destroyed`);
+  private assertNotDisposed(action: string): void {
+    if (this.runState.isDisposed) {
+      throw new Error(`Cannot ${action}: agent has been disposed`);
     }
   }
 

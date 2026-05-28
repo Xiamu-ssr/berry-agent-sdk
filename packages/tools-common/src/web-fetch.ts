@@ -9,7 +9,7 @@
 //   5. Non-HTML: pretty-printed JSON or raw body
 
 import { NodeHtmlMarkdown } from 'node-html-markdown';
-import { TOOL_WEB_FETCH, ToolGroup } from '@berry-agent/core';
+import { errorMessage, TOOL_WEB_FETCH, ToolGroup } from '@berry-agent/core';
 import type { ToolRegistration } from '@berry-agent/core';
 import * as net from 'node:net';
 import { promises as dns } from 'node:dns';
@@ -129,7 +129,7 @@ export function createWebFetchTool(options?: WebFetchToolOptions): ToolRegistrat
         return { content: result };
       } catch (err) {
         return {
-          content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          content: `Error: ${errorMessage(err)}`,
           isError: true,
         };
       }

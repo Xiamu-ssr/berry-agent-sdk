@@ -4,6 +4,7 @@
 // A tiny default loop for host processes that want SDK-owned wake handling
 // without inventing a product-side job table.
 
+import { errorMessage } from '@berry-agent/core';
 import {
   RuntimeOrchestrator,
   type RuntimeWake,
@@ -82,6 +83,3 @@ export class ManagedRuntimeWakeScheduler {
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

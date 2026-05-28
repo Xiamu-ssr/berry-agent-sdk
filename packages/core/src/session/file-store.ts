@@ -1,7 +1,10 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isNoEntryError } from '@berry-agent/small-shared-core';
 import { z } from 'zod';
 
+import { writeJsonAtomic } from '../atomic-write.js';
+import { parseJsonWithSchema } from '../parse-json.js';
 import type { Message } from '../content-types.js';
 import type { Session, SessionMetadata, SessionStore } from '../session-types.js';
 import { zContentBlock } from '../schema.js';
@@ -72,13 +75,15 @@ export class FileSessionStore implements SessionStore {
 
   async load(id: string): Promise<Session | null> {
     const dir = this.getDir(id);
+    const messagesPath = join(dir, 'messages.json');
+    const metaPath = join(dir, 'metadata.json');
     try {
       const [messagesRaw, metaRaw] = await Promise.all([
-        readFile(join(dir, 'messages.json'), 'utf-8'),
-        readFile(join(dir, 'metadata.json'), 'utf-8'),
+        readFile(messagesPath, 'utf-8'),
+        readFile(metaPath, 'utf-8'),
       ]);
-      const messages = z.array(zMessage).parse(JSON.parse(messagesRaw));
-      const meta = zSessionMeta.parse(JSON.parse(metaRaw));
+      const messages = parseJsonWithSchema(messagesRaw, z.array(zMessage), `session messages "${messagesPath}"`);
+      const meta = parseJsonWithSchema(metaRaw, zSessionMeta, `session metadata "${metaPath}"`);
       return {
         id: meta.id,
         messages,
@@ -87,7 +92,7 @@ export class FileSessionStore implements SessionStore {
         metadata: meta.metadata,
       };
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (isNoEntryError(error)) {
         return null;
       }
       throw error;
@@ -95,9 +100,10 @@ export class FileSessionStore implements SessionStore {
   }
 
   async loadSummary(id: string): Promise<Pick<Session, 'id' | 'createdAt' | 'lastAccessedAt' | 'metadata'> | null> {
+    const metaPath = join(this.getDir(id), 'metadata.json');
     try {
-      const raw = await readFile(join(this.getDir(id), 'metadata.json'), 'utf-8');
-      const meta = zSessionMeta.parse(JSON.parse(raw));
+      const raw = await readFile(metaPath, 'utf-8');
+      const meta = parseJsonWithSchema(raw, zSessionMeta, `session metadata "${metaPath}"`);
       return {
         id: meta.id,
         createdAt: meta.createdAt,
@@ -105,7 +111,7 @@ export class FileSessionStore implements SessionStore {
         metadata: meta.metadata,
       };
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (isNoEntryError(error)) {
         return null;
       }
       throw error;
@@ -126,7 +132,7 @@ export class FileSessionStore implements SessionStore {
         .map((entry) => decodeURIComponent(entry.name))
         .sort();
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (isNoEntryError(error)) {
         return [];
       }
       throw error;
@@ -142,12 +148,4 @@ export class FileSessionStore implements SessionStore {
   }
 }
 
-async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf-8');
-  await rename(tmp, path);
-}
 
-function isNotFoundError(error: unknown): boolean {
-  return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
-}

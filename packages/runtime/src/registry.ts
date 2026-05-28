@@ -23,7 +23,7 @@ export interface ManagedRuntimeRegistryOptions<
 > {
   onCreate?: (mount: ManagedRuntimeMount<TEntry, TBuild>) => void;
   onDrop?: (mount: ManagedRuntimeMount<TEntry, TBuild>) => void;
-  onDestroyError?: (id: string, error: unknown) => void;
+  onDisposeError?: (id: string, error: unknown) => void;
 }
 
 /**
@@ -100,7 +100,7 @@ export class ManagedRuntimeRegistry<
   async drop(id: string): Promise<ManagedRuntimeMount<TEntry, TBuild> | undefined> {
     const mount = this.mounts.get(id);
     if (!mount) return undefined;
-    await this.destroyMount(mount);
+    await this.disposeMount(mount);
     this.mounts.delete(id);
     this.options.onDrop?.(mount);
     return mount;
@@ -131,11 +131,11 @@ export class ManagedRuntimeRegistry<
     return mount;
   }
 
-  private async destroyMount(mount: ManagedRuntimeMount<TEntry, TBuild>): Promise<void> {
+  private async disposeMount(mount: ManagedRuntimeMount<TEntry, TBuild>): Promise<void> {
     try {
-      await mount.runtime.destroy();
+      await mount.runtime.dispose();
     } catch (error) {
-      this.options.onDestroyError?.(mount.id, error);
+      this.options.onDisposeError?.(mount.id, error);
     }
   }
 }

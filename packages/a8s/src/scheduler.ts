@@ -25,24 +25,29 @@ export interface Scheduler<TEntry = unknown> {
 /**
  * Default scheduler — picks the worker with the most available capacity,
  * skipping workers whose capacity is full. Ties break on insertion order.
+ *
+ * Exposed as a factory (instead of a singleton) so callers can use it under
+ * a typed entry shape without unsafe casts.
  */
-export const leastLoadedScheduler: Scheduler<unknown> = {
-  pick(ctx) {
-    let bestNode: WorkerNode<unknown> | null = null;
-    let bestAvailable = -1;
-    for (const { node, capacity } of ctx.workers) {
-      const available = capacity.total === Number.POSITIVE_INFINITY
-        ? Number.POSITIVE_INFINITY
-        : capacity.total - capacity.used;
-      if (available <= 0) continue;
-      if (available > bestAvailable) {
-        bestAvailable = available;
-        bestNode = node;
+export function createLeastLoadedScheduler<TEntry>(): Scheduler<TEntry> {
+  return {
+    pick(ctx) {
+      let bestNode: WorkerNode<TEntry> | null = null;
+      let bestAvailable = -1;
+      for (const { node, capacity } of ctx.workers) {
+        const available = capacity.total === Number.POSITIVE_INFINITY
+          ? Number.POSITIVE_INFINITY
+          : capacity.total - capacity.used;
+        if (available <= 0) continue;
+        if (available > bestAvailable) {
+          bestAvailable = available;
+          bestNode = node;
+        }
       }
-    }
-    return bestNode;
-  },
-};
+      return bestNode;
+    },
+  };
+}
 
 /**
  * Round-robin scheduler — useful for tests and quick balancing without

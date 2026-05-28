@@ -14,8 +14,10 @@ export { MetricsCalculator } from './analyzer/metrics.js';
 export { createDatabase } from './collector/db.js';
 export type { ObserveDB } from './collector/db.js';
 
-// Schema
-export { sessions, turns, llmCalls, toolCalls, agentEvents, guardDecisions, compactionEvents } from './collector/schema.js';
+// NOTE: Raw drizzle tables (sessions/turns/llmCalls/toolCalls/agentEvents/
+// guardDecisions/compactionEvents) are intentionally NOT exported. Schema
+// internals are private to this package; consumers should query via the
+// Analyzer / Observer APIs and read view-model types from `./analyzer/api-types`.
 
 // Pricing
 export { calculateCost, getPricing, MODEL_PRICING } from './collector/pricing.js';

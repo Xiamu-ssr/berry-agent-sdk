@@ -5,7 +5,7 @@
 // the effective level and provide a HITL bridge, but the actual guard graph
 // lives in the SDK safety package instead of being reimplemented by products.
 
-import type { AgentScope, ToolGuard } from '@berry-agent/core';
+import { errorMessage, type AgentScope, type ToolGuard } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createClassifierGuard } from './classifier/transcript-classifier.js';
 import { askList, type AskBridge } from './guards/ask-list.js';
@@ -125,7 +125,7 @@ function withHitlFallback(primary: ToolGuard, fallback: ToolGuard): ToolGuard {
     } catch (err) {
       console.warn(
         `[safety] classifier unavailable for ${ctx.toolName}; falling back to HITL:`,
-        err instanceof Error ? err.message : err,
+        errorMessage(err),
       );
       return fallback(ctx);
     }

@@ -5,7 +5,7 @@
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ToolRegistration, ToolContext } from '@berry-agent/core';
-import { ToolGroup } from '@berry-agent/core';
+import { errorMessage, ToolGroup } from '@berry-agent/core';
 import { resolveClaudeCodePath } from './path.js';
 
 /**
@@ -48,7 +48,7 @@ export function createFileTools(projectRoot: string): ToolRegistration[] {
           const showing = `[Lines ${offset + 1}-${Math.min(offset + limit, totalLines)} of ${totalLines}]`;
           return { content: limit < totalLines ? `${showing}\n${slice}` : slice };
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },
@@ -75,7 +75,7 @@ export function createFileTools(projectRoot: string): ToolRegistration[] {
           await writeFile(filePath, input.content as string, 'utf-8');
           return { content: `Written ${(input.content as string).length} bytes to ${filePath}` };
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },
@@ -103,7 +103,7 @@ export function createFileTools(projectRoot: string): ToolRegistration[] {
           });
           return { content: lines.join('\n') || '(empty directory)' };
         } catch (err) {
-          return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+          return { content: `Error: ${errorMessage(err)}`, isError: true };
         }
       },
     },

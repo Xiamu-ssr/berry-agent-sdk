@@ -22,9 +22,14 @@
  * action tools (cf. `bash`, `str_replace_editor`). Adding actions later
  * doesn't require new registrations.
  */
-import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { projectSharedPaths, type ProjectSharedPaths } from '@berry-agent/core';
+import {
+  parseJsonWithSchema,
+  projectSharedPaths,
+  writeJsonAtomic,
+  type ProjectSharedPaths,
+} from '@berry-agent/core';
 import type {
   TeammateId,
   WorklistState,
@@ -70,7 +75,7 @@ export class WorklistStore {
       return this._state;
     }
     const raw = await readFile(path, 'utf-8');
-    this._state = zWorklistState.parse(JSON.parse(raw));
+    this._state = parseJsonWithSchema(raw, zWorklistState, `worklist "${path}"`);
     return this._state;
   }
 
@@ -78,12 +83,8 @@ export class WorklistStore {
     if (!this._state) return;
     this._state = zWorklistState.parse(this._state);
     await this.ensureDir();
-    const path = this.paths.worklistPath;
-    const tmp = `${path}.tmp`;
     this._state.updatedAt = Date.now();
-    await writeFile(tmp, JSON.stringify(this._state, null, 2), 'utf-8');
-    const { rename } = await import('node:fs/promises');
-    await rename(tmp, path);
+    await writeJsonAtomic(this.paths.worklistPath, this._state, { mkdir: false });
   }
 
   /** Delete the persisted worklist artifact. */

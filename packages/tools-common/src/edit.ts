@@ -3,7 +3,7 @@
 // ============================================================
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { TOOL_EDIT_FILE, ToolGroup } from '@berry-agent/core';
+import { errorMessage, TOOL_EDIT_FILE, ToolGroup } from '@berry-agent/core';
 import type { ToolRegistration, ToolContext } from '@berry-agent/core';
 import { resolveClaudeCodePath } from './path.js';
 
@@ -83,7 +83,7 @@ export function createEditFileTool(projectRoot: string): ToolRegistration {
         await writeFile(filePath, content, 'utf-8');
         return { content: `Applied ${edits.length} edit(s) to ${filePath}:\n${applied.join('\n')}` };
       } catch (err) {
-        return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+        return { content: `Error: ${errorMessage(err)}`, isError: true };
       }
     },
   };

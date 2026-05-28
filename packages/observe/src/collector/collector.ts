@@ -4,6 +4,7 @@
 
 import { nanoid } from 'nanoid';
 import { eq, sql } from 'drizzle-orm';
+import { errorMessage } from '@berry-agent/core';
 import type {
   Middleware,
   MiddlewareContext,
@@ -34,14 +35,6 @@ function safeJsonStringify(value: unknown, maxLen = MAX_JSON_FIELD): string | nu
   } catch {
     return null;
   }
-}
-
-function errorMessageOf(error: unknown): string {
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string') return message;
-  }
-  return String(error);
 }
 
 function isImageContentBlock(block: unknown): boolean {
@@ -195,7 +188,7 @@ export function createCollector(config: CollectorConfig): {
       const startTime = pending?.startTime ?? Date.now();
       const latencyMs = Date.now() - startTime;
 
-      const errorMessage = errorMessageOf(error);
+      const errorText = errorMessage(error);
 
       // Detect images in messages
       const hasImages = request.messages.some(
@@ -238,7 +231,7 @@ export function createCollector(config: CollectorConfig): {
         responseContent: null,
         providerRequest: null,
         providerResponse: null,
-        errorMessage,
+        errorMessage: errorText,
         timestamp: Date.now(),
       }).run();
 

@@ -34,7 +34,7 @@ interface ManagedAgentRuntimeOptions {
   agent: Agent;
   /** Product-visible id used only when hydrating session views. */
   agentId?: string;
-  destroyHooks?: Array<() => void | Promise<void>>;
+  disposeHooks?: Array<() => void | Promise<void>>;
 }
 
 export interface ManagedAgentRuntimeCreateOptions {
@@ -43,7 +43,7 @@ export interface ManagedAgentRuntimeCreateOptions {
   agentId?: string;
   /** Runtime deny-list seeded after workspace metadata is loaded. */
   toolDenylist?: string[];
-  destroyHooks?: Array<() => void | Promise<void>>;
+  disposeHooks?: Array<() => void | Promise<void>>;
 }
 
 export interface ManagedAgentSendOptions {
@@ -81,12 +81,12 @@ export interface ManagedAgentContextSize {
 export class ManagedAgentRuntime {
   readonly agentId?: string;
   private readonly agent: Agent;
-  private readonly destroyHooks: Array<() => void | Promise<void>>;
+  private readonly disposeHooks: Array<() => void | Promise<void>>;
 
   private constructor(options: ManagedAgentRuntimeOptions) {
     this.agent = options.agent;
     this.agentId = options.agentId;
-    this.destroyHooks = options.destroyHooks ?? [];
+    this.disposeHooks = options.disposeHooks ?? [];
   }
 
   static create(options: ManagedAgentRuntimeCreateOptions): ManagedAgentRuntime {
@@ -97,7 +97,7 @@ export class ManagedAgentRuntime {
     return new ManagedAgentRuntime({
       agent,
       agentId: options.agentId,
-      destroyHooks: options.destroyHooks,
+      disposeHooks: options.disposeHooks,
     });
   }
 
@@ -116,8 +116,8 @@ export class ManagedAgentRuntime {
     };
   }
 
-  get isDestroyed(): boolean {
-    return this.agent.isDestroyed;
+  get isDisposed(): boolean {
+    return this.agent.isDisposed;
   }
 
   get currentProvider(): Readonly<ProviderPublicConfig> {
@@ -140,13 +140,13 @@ export class ManagedAgentRuntime {
     this.agent.interject(text);
   }
 
-  async destroy(): Promise<void> {
-    await this.agent.destroy();
-    await Promise.all(this.destroyHooks.map(async (hook) => {
+  async dispose(): Promise<void> {
+    await this.agent.dispose();
+    await Promise.all(this.disposeHooks.map(async (hook) => {
       try {
         await hook();
       } catch (err) {
-        console.warn('[runtime] destroy hook threw:', err);
+        console.warn('[runtime] dispose hook threw:', err);
       }
     }));
   }

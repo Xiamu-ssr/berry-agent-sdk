@@ -12,8 +12,8 @@ import type {
   ToolResultContent,
   ToolUseContent,
 } from './content-types.js';
-import type { AgentHomeSnapshot } from './agent-home.js';
-import type { ProjectSharedPaths } from './workspace/project-layout.js';
+import type { AgentHomeSnapshot } from './agent-home-types.js';
+import type { ProjectSharedPaths } from './workspace/project-layout-types.js';
 
 export type UserContentBlock = TextContent | ImageContent | AnnotationContent;
 
@@ -111,3 +111,19 @@ export const zAgentHomeSnapshot = z.object({
   agentMdPath: z.string(),
   metadataPath: z.string(),
 }) satisfies z.ZodType<AgentHomeSnapshot>;
+
+// ============================================================
+// Reasoning effort — pure schema, browser-safe
+// ============================================================
+// Lives here (and not inside workspace/initializer.ts) so host UIs and
+// product contracts can import it without dragging in node:fs/path.
+
+export const zReasoningEffort = z.enum(['none', 'low', 'medium', 'high', 'max', 'xhigh']);
+export type ReasoningEffort = z.infer<typeof zReasoningEffort>;
+
+// Re-export the underlying interface types from their dedicated -types
+// files so browser hosts can import schemas and their inferred-equivalent
+// types from one entry point without dragging in node:fs / node:path
+// from the runtime classes.
+export type { AgentHomeSnapshot } from './agent-home-types.js';
+export type { ProjectSharedPaths } from './workspace/project-layout-types.js';

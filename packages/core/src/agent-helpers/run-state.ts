@@ -43,8 +43,8 @@ export class AgentRunState {
     return this._statusDetail;
   }
 
-  get isDestroyed(): boolean {
-    return this._status === 'destroyed';
+  get isDisposed(): boolean {
+    return this._status === 'disposed';
   }
 
   setStatus(status: AgentStatus, detail?: string): void {
@@ -97,7 +97,7 @@ export class AgentRunState {
     if (this.activeAbortController === controller) {
       this.activeAbortController = undefined;
     }
-    if (!this.isDestroyed) {
+    if (!this.isDisposed) {
       if (pausedReason) this.setStatus('paused', pausedReason);
       else this.setStatus('idle');
     }

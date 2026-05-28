@@ -10,6 +10,7 @@ import { createReadStream } from 'node:fs';
 import { appendFile, mkdir, open, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { isNoEntryError } from '@berry-agent/small-shared-core';
 import type { EventLogStore, SessionEvent, GetEventsOptions, SessionEventType } from './types.js';
 import { zSessionEvent } from './schema.js';
 
@@ -75,7 +76,7 @@ export class FileEventLogStore implements EventLogStore {
         }
       }
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isNoEntryError(err)) {
         return 0;
       }
       throw err;
@@ -114,7 +115,7 @@ export class FileEventLogStore implements EventLogStore {
     try {
       await unlink(path);
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isNoEntryError(err)) {
         // File doesn't exist — nothing to clear
         return;
       }
@@ -153,7 +154,7 @@ export class FileEventLogStore implements EventLogStore {
       }
       return events;
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isNoEntryError(err)) {
         return [];
       }
       throw err;
@@ -211,7 +212,7 @@ export class FileEventLogStore implements EventLogStore {
       }
       return lines.filter((line) => line.trim()).slice(-Math.max(options.minMatchingLines * 4, options.minMatchingLines));
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isNoEntryError(err)) {
         return [];
       }
       throw err;

@@ -13,9 +13,14 @@
  *     host app's config, because a team *is* project-scoped — cloning the
  *     project should come with the team.
  */
-import { mkdir, readFile, writeFile, appendFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, appendFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { projectSharedPaths, type ProjectSharedPaths } from '@berry-agent/core';
+import {
+  parseJsonWithSchema,
+  projectSharedPaths,
+  writeJsonAtomic,
+  type ProjectSharedPaths,
+} from '@berry-agent/core';
 import type { TeamMessage, TeamState } from './types.js';
 import { zTeamMessage, zTeamState } from './schema.js';
 
@@ -41,20 +46,13 @@ export class TeamStore {
     const path = this.paths.teamPath;
     if (!existsSync(path)) return null;
     const raw = await readFile(path, 'utf-8');
-    return zTeamState.parse(JSON.parse(raw));
+    return parseJsonWithSchema(raw, zTeamState, `team snapshot "${path}"`);
   }
 
   /** Atomically replace the team snapshot. */
   async save(state: TeamState): Promise<void> {
-    await this.ensureDir();
-    const path = this.paths.teamPath;
     const snapshot = zTeamState.parse(state);
-    // Write to temp then rename = atomic on POSIX; prevents partial writes
-    // corrupting the file if the process dies mid-save.
-    const tmp = `${path}.tmp`;
-    await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf-8');
-    const { rename } = await import('node:fs/promises');
-    await rename(tmp, path);
+    await writeJsonAtomic(this.paths.teamPath, snapshot);
   }
 
   /** Append one message to the log. */
@@ -75,7 +73,7 @@ export class TeamStore {
     return raw
       .split('\n')
       .filter((line) => line.trim().length > 0)
-      .map((line) => zTeamMessage.parse(JSON.parse(line)));
+      .map((line, idx) => parseJsonWithSchema(line, zTeamMessage, `team message log "${path}" line ${idx + 1}`));
   }
 
   /** Delete team-owned snapshot and message-log artifacts. */

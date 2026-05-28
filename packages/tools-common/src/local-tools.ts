@@ -13,6 +13,7 @@ export function createLocalToolRegistrations(
     ...createFileTools(projectDir),
     createEditFileTool(projectDir),
     ...createShellTools(projectDir, shellOptions),
-    ...createSearchTools(projectDir),
+    // Share the executor with shell tools so sandboxing applies uniformly.
+    ...createSearchTools(projectDir, { executor: shellOptions?.executor }),
   ];
 }

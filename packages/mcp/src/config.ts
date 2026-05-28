@@ -16,7 +16,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { z, ZodError, type ZodIssue } from 'zod';
+import { z, ZodError } from 'zod';
+import { errorMessage, joinZodPath, zodIssueMessage } from '@berry-agent/small-shared-core';
 import type { MCPTransportConfig } from './types.js';
 import {
   DEFAULT_PLAYWRIGHT_MCP_BIN,
@@ -305,7 +306,7 @@ function loadRawLayer(
   try {
     raw = JSON.parse(readFileSync(filePath, 'utf-8'));
   } catch (err) {
-    console.error(`[MCP] Failed to parse ${filePath}:`, err instanceof Error ? err.message : err);
+    console.error(`[MCP] Failed to parse ${filePath}:`, errorMessage(err));
     return {};
   }
   const servers = readRawMCPServers(raw, filePath);
@@ -318,7 +319,7 @@ function loadRawLayer(
     } catch (err) {
       console.error(
         `[MCP] Skipping invalid server "${name}" in ${filePath}:`,
-        err instanceof Error ? err.message : err,
+        errorMessage(err),
       );
     }
   }
@@ -347,7 +348,7 @@ function readRawMCPEntry(serverName: string, raw: unknown): RawMCPEntry {
   } catch (error) {
     if (error instanceof ZodError) {
       const issue = error.issues[0];
-      throw new Error(`server "${serverName}" ${formatIssuePath(issue?.path ?? [])}: ${formatIssueMessage(issue)}`);
+      throw new Error(`server "${serverName}" ${formatIssuePath(issue?.path ?? [])}: ${zodIssueMessage(issue)}`);
     }
     throw error;
   }
@@ -546,12 +547,5 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function formatIssuePath(path: Array<string | number>): string {
   if (path.length === 0) return 'entry';
-  return path.reduce<string>((out, part) => (
-    typeof part === 'number' ? `${out}[${part}]` : `${out}.${part}`
-  ), 'field');
-}
-
-function formatIssueMessage(issue: ZodIssue | undefined): string {
-  if (!issue) return 'is invalid';
-  return issue.message;
+  return joinZodPath('field', path);
 }

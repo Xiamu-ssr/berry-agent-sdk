@@ -4,6 +4,7 @@
 // Used by both Anthropic and OpenAI providers.
 // Exponential backoff with retry-after header support.
 
+import { errorMessage } from '@berry-agent/small-shared-core';
 import {
   MAX_RETRIES,
   BASE_DELAY_MS,
@@ -118,11 +119,6 @@ function errorCode(error: unknown): string | undefined {
 function errorName(error: unknown): string | undefined {
   const name = errorRecord(error).name;
   return typeof name === 'string' ? name : undefined;
-}
-
-function errorMessage(error: unknown): string {
-  const message = errorRecord(error).message;
-  return typeof message === 'string' ? message : String(error);
 }
 
 function retryAfterHeader(error: unknown): string | null {

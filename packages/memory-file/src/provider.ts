@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import { PROJECT_CONTEXT_FILE, type ToolRegistration } from '@berry-agent/core';
+import { errorMessage, PROJECT_CONTEXT_FILE, type ToolRegistration } from '@berry-agent/core';
 import { chunkMarkdown } from './chunker.js';
 import { hashText } from './hash.js';
 import { ChunkStore, type SearchHit } from './store.js';
@@ -230,7 +230,7 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
             await saveMemory(content);
             return { content: `Saved ${content.length} chars to MEMORY.md` };
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = errorMessage(err);
             return { content: `Error saving to memory: ${message}`, isError: true };
           }
         },
@@ -309,7 +309,7 @@ export function createFileMemoryProvider(options: FileMemoryProviderOptions): Fi
             const result = await getExcerpt({ path: p, from, lines });
             return { content: JSON.stringify(result, null, 2) };
           } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = errorMessage(err);
             return { content: `Error: ${message}`, isError: true };
           }
         },

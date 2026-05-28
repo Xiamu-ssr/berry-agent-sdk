@@ -4,6 +4,7 @@
 // The cluster-level coordinator. Products (Claw or others) call:
 //   - createAgent(spec, entry) → picks a worker, mounts the agent
 //   - deleteAgent(id) → asks the owning worker to stop, releases lease
+//   - openAgent(id) → returns an AgentSession to drive the agent
 //   - listAgents() / getAgentLocation(id) → cluster-wide view
 //   - scheduleWake() / claimDueWakes() → cross-worker background jobs
 //
@@ -12,6 +13,10 @@
 // is what makes this M3 piece composable with M2 (SQLite/Postgres):
 // swap MemoryRuntimeOrchestrationStore for a real one and the same code
 // participates in cross-process leases.
+//
+// Failure model: assignments() is an in-memory cache rebuilt from the
+// orchestrator. After a process crash, call hydrateAssignments() before
+// serving traffic so getAgentLocation/openAgent see the durable truth.
 
 import type {
   RuntimeOrchestrator,
@@ -19,7 +24,8 @@ import type {
   ScheduleRuntimeWakeInput,
 } from '@berry-agent/runtime';
 import type { WorkerAgentSpec, WorkerRuntimeHooks } from '@berry-agent/worker';
-import { leastLoadedScheduler, type Scheduler, type SchedulerWorkerView } from './scheduler.js';
+import type { AgentSession } from './agent-session.js';
+import { createLeastLoadedScheduler, type Scheduler, type SchedulerWorkerView } from './scheduler.js';
 import type { WorkerNode, WorkerNodeCapacity } from './worker-node.js';
 
 export interface ControlPlaneOptions<TEntry> {
@@ -39,6 +45,14 @@ export interface AgentLocation {
   workerId: string | null;
 }
 
+export interface HydrateAssignmentsResult {
+  /** Agent → worker mappings restored from active leases. */
+  restored: AgentLocation[];
+  /** Agent leases whose workerId is unknown to this ControlPlane (worker
+   *  hasn't reconnected yet). Callers may surface as warnings. */
+  unowned: Array<{ agentId: string; workerId: string }>;
+}
+
 export class ControlPlane<TEntry = unknown> {
   private readonly workers = new Map<string, WorkerNode<TEntry>>();
   private readonly assignments = new Map<string, string>(); // agentId → workerId
@@ -48,7 +62,7 @@ export class ControlPlane<TEntry = unknown> {
 
   constructor(options: ControlPlaneOptions<TEntry>) {
     this.orchestrator = options.orchestrator;
-    this.scheduler = (options.scheduler ?? (leastLoadedScheduler as Scheduler<TEntry>));
+    this.scheduler = options.scheduler ?? createLeastLoadedScheduler<TEntry>();
     this.logger = options.logger ?? console;
   }
 
@@ -135,6 +149,27 @@ export class ControlPlane<TEntry = unknown> {
     return this.createAgent(spec, entry, hooks);
   }
 
+  /**
+   * Open a data-plane handle for an agent. Throws when the agent is not
+   * assigned in this ControlPlane, when the owning worker is unknown, or
+   * when the worker reports no live mount (e.g. crashed mid-runAgent).
+   */
+  async openAgent(agentId: string): Promise<AgentSession> {
+    const workerId = this.assignments.get(agentId);
+    if (!workerId) {
+      throw new Error(`Agent "${agentId}" is not assigned to any worker`);
+    }
+    const node = this.workers.get(workerId);
+    if (!node) {
+      throw new Error(`Worker "${workerId}" owning agent "${agentId}" is not registered`);
+    }
+    const session = await node.openSession(agentId);
+    if (!session) {
+      throw new Error(`Worker "${workerId}" has no live mount for agent "${agentId}"`);
+    }
+    return session;
+  }
+
   getAgentLocation(agentId: string): AgentLocation {
     return { agentId, workerId: this.assignments.get(agentId) ?? null };
   }
@@ -144,6 +179,35 @@ export class ControlPlane<TEntry = unknown> {
       agentId,
       workerId,
     }));
+  }
+
+  /**
+   * Rebuild the in-memory `assignments` map from the orchestrator's active
+   * leases. Run on startup before serving traffic so getAgentLocation /
+   * openAgent / listAgents see the durable truth instead of an empty cache
+   * left behind by a process crash.
+   *
+   * Leases whose `workerId` is missing or not registered with this plane
+   * are returned as `unowned` — typically because the original worker
+   * hasn't reconnected yet. They stay in the orchestrator's store and will
+   * be reconciled the next time their worker re-registers and calls
+   * hydrateAssignments() again.
+   */
+  async hydrateAssignments(): Promise<HydrateAssignmentsResult> {
+    const leases = await this.orchestrator.listLeases();
+    const restored: AgentLocation[] = [];
+    const unowned: Array<{ agentId: string; workerId: string }> = [];
+    for (const lease of leases) {
+      if (lease.state !== 'active') continue;
+      if (!lease.workerId) continue;
+      if (this.workers.has(lease.workerId)) {
+        this.assignments.set(lease.agentId, lease.workerId);
+        restored.push({ agentId: lease.agentId, workerId: lease.workerId });
+      } else {
+        unowned.push({ agentId: lease.agentId, workerId: lease.workerId });
+      }
+    }
+    return { restored, unowned };
   }
 
   /**

@@ -3,6 +3,7 @@
 // ============================================================
 
 import { readFile, writeFile, appendFile, access } from 'node:fs/promises';
+import { isNoEntryError } from '@berry-agent/small-shared-core';
 import { AgentHome } from '../agent-home.js';
 import type { AgentMemory } from './types.js';
 
@@ -26,7 +27,7 @@ export class FileAgentMemory implements AgentMemory {
     try {
       return await readFile(this.memoryPath, 'utf-8');
     } catch (err: unknown) {
-      if (isNotFound(err)) return '';
+      if (isNoEntryError(err)) return '';
       throw err;
     }
   }
@@ -48,8 +49,4 @@ export class FileAgentMemory implements AgentMemory {
       return false;
     }
   }
-}
-
-function isNotFound(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }

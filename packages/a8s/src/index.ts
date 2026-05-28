@@ -15,15 +15,26 @@ export type {
   ControlPlaneOptions,
   CreateAgentResult,
   AgentLocation,
+  HydrateAssignmentsResult,
 } from './control-plane.js';
 
-export {
-  InProcessWorkerNode,
+export { InProcessWorkerNode } from './worker-node.js';
+export type {
+  WorkerNode,
+  WorkerNodeCapacity,
+  InProcessWorkerNodeOptions,
 } from './worker-node.js';
-export type { WorkerNode, WorkerNodeCapacity } from './worker-node.js';
+
+export { InProcessAgentSession } from './agent-session.js';
+export type {
+  AgentSession,
+  AgentSessionStatus,
+  LoadSessionViewOptions,
+  ListSessionViewsOptions,
+} from './agent-session.js';
 
 export {
-  leastLoadedScheduler,
+  createLeastLoadedScheduler,
   createRoundRobinScheduler,
 } from './scheduler.js';
 export type { Scheduler, SchedulerContext, SchedulerWorkerView } from './scheduler.js';

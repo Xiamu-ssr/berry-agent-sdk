@@ -8,6 +8,7 @@
 // in-process, as a subprocess, in a container, or on a remote machine.
 
 import { z } from 'zod';
+import { errorMessage } from '@berry-agent/small-shared-core';
 import { ToolGroup } from './tool-types.js';
 import type { ToolContext, ToolDefinition, ToolRegistration, ToolResult } from './tool-types.js';
 
@@ -169,7 +170,7 @@ export function createToolRegistrationHand(options: CreateToolHandOptions): Hand
         return await tool.execute(call.input, context);
       } catch (err) {
         return {
-          content: err instanceof Error ? err.message : String(err),
+          content: errorMessage(err),
           isError: true,
         };
       } finally {

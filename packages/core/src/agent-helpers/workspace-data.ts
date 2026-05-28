@@ -3,6 +3,7 @@
 // ============================================================
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { isNoEntryError } from '@berry-agent/small-shared-core';
 
 import type { AgentHome } from '../agent-home.js';
 import { PROJECT_CONTEXT_FILE } from '../workspace/file-project.js';
@@ -46,7 +47,7 @@ export class AgentWorkspaceData {
         content: await readFile(this.deps.home.agentMdPath, 'utf-8'),
       };
     } catch (err: unknown) {
-      if (isNotFound(err)) {
+      if (isNoEntryError(err)) {
         return { path: this.deps.home.agentMdPath, content: '' };
       }
       throw err;
@@ -104,8 +105,4 @@ export class AgentWorkspaceData {
     }
     return projectContext;
   }
-}
-
-function isNotFound(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }

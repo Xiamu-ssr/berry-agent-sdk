@@ -4,7 +4,7 @@
 
 import { dirname } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { projectSharedPaths } from '@berry-agent/core';
+import { errorMessage, projectSharedPaths } from '@berry-agent/core';
 import { z } from 'zod';
 import { asSafetyLevel, SAFETY_LEVELS, type SafetyLevel } from './levels.js';
 export { SAFETY_LEVELS, asSafetyLevel } from './levels.js';
@@ -35,7 +35,7 @@ export function readProjectSafety(projectRoot: string): ProjectSafetyConfig | nu
   } catch (err) {
     console.warn(
       `[safety] failed to parse ${path}:`,
-      err instanceof Error ? err.message : err,
+      errorMessage(err),
     );
     return null;
   }

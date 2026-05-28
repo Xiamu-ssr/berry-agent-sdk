@@ -4,6 +4,7 @@
 // Extracted from agent.ts: parallel tool execution with guard
 // checks, middleware, and event logging.
 
+import { errorMessage } from '@berry-agent/small-shared-core';
 import type {
   ToolUseContent,
   ContentBlock,
@@ -190,7 +191,7 @@ export async function executeTools(params: ExecuteToolsParams): Promise<ExecuteT
           isError: result.isError,
         };
       } catch (err) {
-        const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+        const errContent = `Error: ${errorMessage(err)}`;
         // Event log: tool_result (error) + tool_use_end
         await appendEvent({
           ...makeBase(),

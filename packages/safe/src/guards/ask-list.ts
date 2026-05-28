@@ -11,7 +11,7 @@
 // works. Timeouts default to "deny" to keep agents from stalling forever
 // when the UI disappears.
 
-import type { ToolGuard } from '@berry-agent/core';
+import { errorMessage, type ToolGuard } from '@berry-agent/core';
 
 /** Question passed to the application-supplied approval bridge. */
 export interface AskQuestion {
@@ -104,7 +104,7 @@ export function askList(options: AskListOptions): ToolGuard {
     } catch (err) {
       // Timeout or bridge error — treat as deny so the agent reports back
       // to the user rather than silently running an unreviewed call.
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return { action: 'deny', reason: `Approval bridge failed: ${msg}` };
     }
   };

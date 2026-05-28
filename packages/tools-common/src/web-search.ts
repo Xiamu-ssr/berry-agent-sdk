@@ -2,7 +2,7 @@
 // Berry Agent SDK — Common Tools: Web Search (adapter pattern)
 // ============================================================
 
-import { TOOL_WEB_SEARCH, ToolGroup } from '@berry-agent/core';
+import { errorMessage, TOOL_WEB_SEARCH, ToolGroup } from '@berry-agent/core';
 import type { CredentialStore, ToolRegistration } from '@berry-agent/core';
 
 // ----- Public types -----
@@ -221,7 +221,7 @@ export function createWebSearchTool(config: WebSearchConfig): ToolRegistration {
           .join('\n\n');
         return { content: formatted };
       } catch (err) {
-        return { content: `Error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+        return { content: `Error: ${errorMessage(err)}`, isError: true };
       }
     },
   };

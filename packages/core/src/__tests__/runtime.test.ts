@@ -115,50 +115,50 @@ describe('ManagedAgentRuntime', () => {
     }));
   });
 
-  it('destroys the underlying agent and clears active session state', async () => {
+  it('disposes the underlying agent and clears active session state', async () => {
     const runtime = createRuntime();
     const created = await runtime.createSession();
 
     expect(runtime.getActiveSessionId()).toBe(created.id);
-    await runtime.destroy();
+    await runtime.dispose();
 
     expect(runtime.getActiveSessionId()).toBeUndefined();
-    expect(runtime.isDestroyed).toBe(true);
+    expect(runtime.isDisposed).toBe(true);
   });
 
-  it('runs destroy hooks when the managed runtime is destroyed', async () => {
+  it('runs dispose hooks when the managed runtime is disposed', async () => {
     let disposed = 0;
     const runtime = ManagedAgentRuntime.create({
       config: {
         provider: { type: 'anthropic', model: 'fake-model', apiKey: 'test' },
         providerInstance: new StreamingProvider(),
-        home: tmpHome('berry-runtime-destroy-hook-'),
+        home: tmpHome('berry-runtime-dispose-hook-'),
       },
-      destroyHooks: [() => { disposed += 1; }],
+      disposeHooks: [() => { disposed += 1; }],
     });
 
-    await runtime.destroy();
+    await runtime.dispose();
 
     expect(disposed).toBe(1);
   });
 
-  it('awaits async destroy hooks before resolving teardown', async () => {
+  it('awaits async dispose hooks before resolving teardown', async () => {
     const events: string[] = [];
     const runtime = ManagedAgentRuntime.create({
       config: {
         provider: { type: 'anthropic', model: 'fake-model', apiKey: 'test' },
         providerInstance: new StreamingProvider(),
-        home: tmpHome('berry-runtime-async-destroy-hook-'),
+        home: tmpHome('berry-runtime-async-dispose-hook-'),
       },
-      destroyHooks: [async () => {
+      disposeHooks: [async () => {
         await Promise.resolve();
         events.push('hook');
       }],
     });
 
-    const destroy = runtime.destroy().then(() => events.push('resolved'));
+    const dispose = runtime.dispose().then(() => events.push('resolved'));
     expect(events).toEqual([]);
-    await destroy;
+    await dispose;
 
     expect(events).toEqual(['hook', 'resolved']);
   });
@@ -195,7 +195,7 @@ describe('ManagedAgentRuntime', () => {
     await runtime.send('hello');
 
     expect(memory.init).toHaveBeenCalledOnce();
-    await runtime.destroy();
+    await runtime.dispose();
     expect(memory.dispose).toHaveBeenCalledOnce();
   });
 });
