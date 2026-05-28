@@ -17,11 +17,15 @@ import {
   adminAuthHeader,
   listAgentsResponseSchema,
   operatorClusterReportSchema,
+  operatorJoinScriptRequestSchema,
+  operatorJoinScriptResponseSchema,
   operatorLeaseListResponseSchema,
   operatorOkResponseSchema,
   operatorWorkerListResponseSchema,
   type ListAgentsResponse,
   type OperatorClusterReport,
+  type OperatorJoinScriptRequest,
+  type OperatorJoinScriptResponse,
   type OperatorLeaseListResponse,
   type OperatorWorkerListResponse,
 } from '@berry-agent/cluster-protocol';
@@ -78,6 +82,25 @@ export class A8sOperatorClient {
 
   async listAgents(): Promise<ListAgentsResponse> {
     return this.parseGet(A8S_PATHS.agents, listAgentsResponseSchema);
+  }
+
+  // ----- Worker join script -----
+
+  async joinScript(input: OperatorJoinScriptRequest = {}): Promise<OperatorJoinScriptResponse> {
+    const body = JSON.stringify(operatorJoinScriptRequestSchema.parse(input));
+    const resp = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.operatorWorkerJoinScript}`, {
+      method: 'POST',
+      headers: {
+        [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST join-script failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return operatorJoinScriptResponseSchema.parse(await resp.json());
   }
 
   // ----- Internal HTTP helpers -----

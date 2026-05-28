@@ -9,8 +9,7 @@
 // new shapes here, only implement the existing endpoints.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomBytes } from 'node:crypto';
-import {
+import { randomBytes } from 'node:crypto';import {
   A8S_PATHS,
   ADMIN_AUTH_HEADER,
   SSE_LAST_EVENT_ID_HEADER,
@@ -22,6 +21,8 @@ import {
   healthResponseSchema,
   listAgentsResponseSchema,
   operatorClusterReportSchema,
+  operatorJoinScriptRequestSchema,
+  operatorJoinScriptResponseSchema,
   operatorLeaseListResponseSchema,
   operatorLeaseSchema,
   operatorOkResponseSchema,
@@ -45,6 +46,7 @@ import {
   HttpWorkerNode,
   type ControlPlaneOptions,
 } from '@berry-agent/a8s';
+import { ManagedRuntimeWakeScheduler, type RuntimeWake } from '@berry-agent/runtime';
 import type { WorkerAgentSpec } from '@berry-agent/worker';
 
 // We can't import `createServer` from node:http and also have a module
@@ -68,6 +70,20 @@ export interface A8sServerOptions<TEntry = unknown> {
    * bootstrap secret a worker proves it knows when joining).
    */
   adminToken?: string;
+  /**
+   * Externally-reachable base URL the cluster advertises in worker-join
+   * scripts and similar. Defaults to `http://localhost:<port>`, which is
+   * fine for laptop dev and a8s-bootstrapped local workers but wrong
+   * for remote workers crossing the network. Production deployments
+   * should set this to the public address of the a8s host.
+   */
+  advertiseUrl?: string;
+  /**
+   * Wake-scheduler tick interval (ms). When set, a8s polls the
+   * orchestrator every tick for due wakes and delivers each one to its
+   * agent as a system-flagged turn. Set to 0 to disable. Default 1_000.
+   */
+  wakeTickMs?: number;
   /** Optional version string surfaced via /health. */
   version?: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
@@ -89,6 +105,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly tokens = new Map<string, WorkerToken>(); // workerId -> token info
   private readonly startedAt = Date.now();
   private readonly adminToken: string | undefined;
+  private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
 
   constructor(options: A8sServerOptions<TEntry>) {
     this.options = options;
@@ -122,12 +139,34 @@ export class A8sServer<TEntry = unknown> {
       });
     });
 
+    // Start the wake scheduler unless explicitly disabled. We launch it
+    // after the HTTP server is listening so a wake that fires during
+    // startup can already reach a worker for routing.
+    const tick = this.options.wakeTickMs ?? 1_000;
+    if (tick > 0) {
+      this.wakeScheduler = new ManagedRuntimeWakeScheduler({
+        orchestrator: this.options.controlPlane.orchestrator,
+        intervalMs: tick,
+        onWake: (wake) => this.deliverWake(wake),
+        onError: (error, wake) => {
+          this.logger.warn?.(
+            wake
+              ? `[a8s-server] wake ${wake.wakeId} for agent ${wake.agentId} failed: ${errorMessage(error)}`
+              : `[a8s-server] wake tick error: ${errorMessage(error)}`,
+          );
+        },
+      });
+      this.wakeScheduler.start();
+    }
+
     const url = `http://localhost:${this.options.port}`;
     this.logger.log?.(`[a8s-server] listening on ${url}`);
     return { port: this.options.port, url };
   }
 
   async stop(): Promise<void> {
+    this.wakeScheduler?.stop();
+    this.wakeScheduler = null;
     if (!this.server) return;
     await new Promise<void>((resolve, reject) => {
       this.server!.close((err) => (err ? reject(err) : resolve()));
@@ -247,6 +286,9 @@ export class A8sServer<TEntry = unknown> {
     const evictMatch = url.match(/^\/v1\/operator\/workers\/([^/]+)\/evict$/);
     if (evictMatch && req.method === 'POST') {
       return this.handleOperatorEvictWorker(decodeURIComponent(evictMatch[1]), res);
+    }
+    if (req.method === 'POST' && url === A8S_PATHS.operatorWorkerJoinScript) {
+      return this.handleOperatorJoinScript(req, res);
     }
 
     return writeJson(res, 404, errorPayloadSchema.parse({
@@ -566,6 +608,96 @@ export class A8sServer<TEntry = unknown> {
   }
 
   /**
+   * Produce a bash snippet the operator pastes into an SSH session on
+   * a new host. The snippet installs the worker daemon (npm global) and
+   * starts it with a generated config that points back at this a8s.
+   *
+   * Refuses to emit a script when this server is running without an
+   * admin token — without it, anyone reading the snippet would be able
+   * to join arbitrary workers to the cluster.
+   */
+  private async handleOperatorJoinScript(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.adminToken) {
+      return writeJson(res, 409, errorPayloadSchema.parse({
+        error: {
+          code: 'no_admin_token',
+          message: 'cannot generate a join script in dev mode (no --admin-token set); set one and restart a8s',
+        },
+      }));
+    }
+    const body = await readJson(req);
+    const parsed = operatorJoinScriptRequestSchema.parse(body);
+
+    const workerId = parsed.workerId ?? '$(hostname)';
+    const capacity = parsed.capacity ?? 4;
+    const port = parsed.port ?? 7100;
+    const a8sUrl = this.options.advertiseUrl ?? `http://localhost:${this.options.port}`;
+    // dataRoot can't be `/var/berry/workers/$(hostname)` literally inside
+    // the JSON config because we want shell expansion to happen on the
+    // remote host. So we let the bash heredoc handle it.
+    const dataRoot = parsed.dataRoot ?? '/var/berry/workers/$WORKER_ID';
+    const labelsJson = parsed.labels ? JSON.stringify(parsed.labels) : '{}';
+
+    // NOTE: the heredoc uses an unquoted 'EOF' delimiter so $WORKER_ID
+    // expands on the target host. The admin token is interpolated by
+    // a8s (we control the value), so injection isn't possible from the
+    // remote host's environment.
+    const script = `#!/usr/bin/env bash
+# berry-worker join script — paste into an SSH session on the new host.
+# Generated by a8s on ${new Date().toISOString()}.
+set -euo pipefail
+
+WORKER_ID="${workerId === '$(hostname)' ? '$(hostname)' : escapeShell(workerId)}"
+DATA_ROOT="${dataRoot}"
+A8S_URL="${escapeShell(a8sUrl)}"
+PORT="${port}"
+CAPACITY="${capacity}"
+ADMIN_TOKEN="${escapeShell(this.adminToken)}"
+
+echo "[berry-join] installing @berry-agent/worker-daemon globally..."
+npm install -g @berry-agent/worker-daemon
+
+echo "[berry-join] preparing data root at $DATA_ROOT..."
+sudo mkdir -p "$DATA_ROOT/agents"
+sudo chown -R "$(id -un):$(id -gn)" "$DATA_ROOT"
+
+CONFIG_PATH="$DATA_ROOT/worker.json"
+echo "[berry-join] writing config to $CONFIG_PATH..."
+cat > "$CONFIG_PATH" <<JSON
+{
+  "workerId": "$WORKER_ID",
+  "port": $PORT,
+  "a8s": "$A8S_URL",
+  "adminToken": "$ADMIN_TOKEN",
+  "capacity": $CAPACITY,
+  "heartbeatTtlMs": 30000,
+  "dataRoot": "$DATA_ROOT",
+  "labels": ${labelsJson},
+  "registry": null
+}
+JSON
+
+echo "[berry-join] worker config written. NOTE: \\"registry\\" is null; edit"
+echo "  $CONFIG_PATH to add your provider/model registry before starting,"
+echo "  or this worker will fail to mount agents that need an LLM."
+echo
+echo "Start the worker with:"
+echo "  berry-worker start --config $CONFIG_PATH"
+`;
+
+    return writeJson(res, 200, operatorJoinScriptResponseSchema.parse({
+      script,
+      resolved: {
+        workerId: parsed.workerId ?? '(target hostname)',
+        capacity,
+        port,
+        a8sUrl,
+        dataRoot,
+      },
+    }));
+  }
+
+  /**
    * Generic GET proxy used by data-plane reads (session list, paginated
    * events). Resolves agent → worker via the plane, attaches the worker
    * bearer token, forwards the path verbatim, and streams the response
@@ -680,6 +812,48 @@ export class A8sServer<TEntry = unknown> {
     }));
   }
 
+  /**
+   * Wake delivery: turn a claimed RuntimeWake into a send() call on the
+   * agent's owning worker. The prompt is a structured system marker so
+   * the agent can branch on `reason` if it cares (e.g. "polling job
+   * tick" vs "human approval received"). Payload is JSON-stringified
+   * into the same prompt — wake payloads are small by contract.
+   *
+   * Throws on delivery failure so the scheduler marks the wake as
+   * failed; the wake row stays in orch.db with an error message, which
+   * the operator can inspect through list_wakes (TODO) or directly.
+   */
+  private async deliverWake(wake: RuntimeWake): Promise<void> {
+    const loc = this.plane.getAgentLocation(wake.agentId);
+    if (!loc.workerId) {
+      throw new Error(`agent ${wake.agentId} has no assigned worker; cannot deliver wake`);
+    }
+    const entry = this.tokens.get(loc.workerId);
+    if (!entry) {
+      throw new Error(`no token for worker ${loc.workerId}; cannot deliver wake`);
+    }
+    const promptParts = [`[system wake] reason: ${wake.reason}`];
+    if (wake.sessionId) promptParts.push(`session: ${wake.sessionId}`);
+    if (wake.payload) promptParts.push(`payload: ${JSON.stringify(wake.payload)}`);
+    const body = JSON.stringify({
+      prompt: promptParts.join('\n'),
+      sessionId: wake.sessionId,
+      requestId: `wake-${wake.wakeId}`,
+    });
+    const response = await fetch(`${entry.callbackUrl}${WORKER_PATHS.agentSend(wake.agentId)}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+      },
+      body,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`worker ${loc.workerId} send failed: HTTP ${response.status}: ${text.slice(0, 200)}`);
+    }
+  }
+
   private assertWorkerAuth(workerId: string, req: IncomingMessage, res: ServerResponse): boolean {
     const expected = this.tokens.get(workerId);
     if (!expected) {
@@ -733,4 +907,19 @@ function constantTimeEqual(a: string, b: string): boolean {
     diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return diff === 0;
+}
+
+/**
+ * Escape a string for safe embedding inside a bash double-quoted
+ * context. The script we generate uses "..." for every interpolation
+ * site, so we only need to escape characters that have meaning inside
+ * double quotes: $ ` " and backslash. This is *not* a general-purpose
+ * shell quoter — don't use it for arbitrary positions.
+ */
+function escapeShell(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\$/g, '\\$')
+    .replace(/`/g, '\\`')
+    .replace(/"/g, '\\"');
 }

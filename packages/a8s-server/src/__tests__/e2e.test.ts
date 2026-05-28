@@ -820,4 +820,113 @@ describe('a8s-server + worker-daemon E2E', () => {
     await worker.dispose();
     await a8s.stop();
   });
+
+  it('operator join-script generator: refuses in dev mode, otherwise embeds admin token', async () => {
+    // ---- Dev mode: refuse ----
+    const orchA = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const portA = await pickPort();
+    const a8sA = new A8sServer<TestEntry>({ port: portA, controlPlane: { orchestrator: orchA } });
+    const infoA = await a8sA.start();
+    const devResp = await fetch(`${infoA.url}${A8S_PATHS.operatorWorkerJoinScript}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(devResp.status).toBe(409);
+    await a8sA.stop();
+
+    // ---- With admin token: returns a snippet that embeds it + advertiseUrl ----
+    const orchB = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const portB = await pickPort();
+    const a8sB = new A8sServer<TestEntry>({
+      port: portB,
+      controlPlane: { orchestrator: orchB },
+      adminToken: 'join-secret',
+      advertiseUrl: 'https://a8s.example.com',
+    });
+    const infoB = await a8sB.start();
+    const respB = await fetch(`${infoB.url}${A8S_PATHS.operatorWorkerJoinScript}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer join-secret',
+      },
+      body: JSON.stringify({ capacity: 8, port: 7101, labels: { region: 'us-west' } }),
+    });
+    expect(respB.status).toBe(200);
+    const parsed = await respB.json() as { script: string; resolved: Record<string, unknown> };
+    expect(parsed.script).toContain('https://a8s.example.com');
+    expect(parsed.script).toContain('join-secret');
+    // JSON.stringify with no indent — compact form
+    expect(parsed.script).toContain('{"region":"us-west"}');
+    expect(parsed.script).toMatch(/CAPACITY="?8/);
+    expect(parsed.resolved.port).toBe(7101);
+    expect(parsed.resolved.a8sUrl).toBe('https://a8s.example.com');
+
+    // ---- Without admin token: 401 ----
+    const noAuth = await fetch(`${infoB.url}${A8S_PATHS.operatorWorkerJoinScript}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(noAuth.status).toBe(401);
+
+    await a8sB.stop();
+  });
+
+  it('wake scheduler fires due wakes and marks unrecoverable ones as failed', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'wake-secret',
+      // Tight tick so the test doesn't sit idle. Min sane interval.
+      wakeTickMs: 50,
+    });
+    const a8sInfo = await a8s.start();
+
+    // Schedule a wake for an agent that doesn't exist — deliverWake will
+    // throw 'no assigned worker' and the scheduler should mark the wake
+    // as failed (not pending forever).
+    const dueAt = Date.now() + 10;
+    const schedResp = await fetch(`${a8sInfo.url}${A8S_PATHS.wakesSchedule}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer wake-secret' },
+      body: JSON.stringify({
+        agentId: 'ghost',
+        dueAt,
+        reason: 'test-tick',
+        payload: { hello: 'world' },
+      }),
+    });
+    expect(schedResp.status).toBe(200);
+    const { wakeId } = await schedResp.json() as { wakeId: string };
+
+    // Poll the orchestrator until the wake leaves the pending state.
+    const deadline = Date.now() + 2_000;
+    let finalState: string | undefined;
+    while (Date.now() < deadline) {
+      const all = await orchestrator.listPendingWakes(Date.now() + 1_000_000);
+      const stillPending = all.find((w) => w.wakeId === wakeId);
+      if (!stillPending) {
+        // Fell out of pending — fetch via a fresh scheduleWake reuse is
+        // overkill; the snapshot tells us via state from a different path.
+        // Re-query through the store directly by listing all wakes via
+        // a tiny helper: claimDueWakes won't show non-pending either.
+        // Easiest: peek snapshot through the store transact.
+        finalState = await orchestrator['options'].store.transact((snap) => ({
+          snapshot: snap,
+          result: snap.wakes.find((w) => w.wakeId === wakeId)?.state,
+        }));
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(finalState).toBe('failed');
+
+    await a8s.stop();
+  });
 });

@@ -125,6 +125,38 @@ export function createClusterAdminHand(options: ClusterAdminHandOptions): Hand {
         return { content: `worker "${id}" evicted; leases released` };
       },
     },
+    {
+      definition: {
+        name: 'worker_join_script',
+        description: 'Generate a bash snippet the operator pastes into an SSH session on a new host to install + start a worker that joins this cluster. Optional inputs let you preset workerId (defaults to the target hostname), capacity (default 4), port (default 7100), or labels. The returned script embeds the cluster admin token, so treat the output as a secret — show it only to the operator, never log it.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            workerId: { type: 'string', description: 'Override the worker id; defaults to $(hostname) on the target.' },
+            capacity: { type: 'number', description: 'Max concurrent agents this worker accepts. Default 4.' },
+            port: { type: 'number', description: 'HTTP port the worker daemon listens on. Default 7100.' },
+            bindHost: { type: 'string', description: 'Hostname/IP the worker advertises back to a8s. Default $(hostname).' },
+            dataRoot: { type: 'string', description: 'Override the worker data dir; default /var/berry/workers/<workerId>.' },
+          },
+        },
+      },
+      execute: async (input) => {
+        const req: Record<string, unknown> = {};
+        if (typeof input.workerId === 'string' && input.workerId.trim()) req.workerId = input.workerId.trim();
+        if (typeof input.capacity === 'number') req.capacity = input.capacity;
+        if (typeof input.port === 'number') req.port = input.port;
+        if (typeof input.bindHost === 'string' && input.bindHost.trim()) req.bindHost = input.bindHost.trim();
+        if (typeof input.dataRoot === 'string' && input.dataRoot.trim()) req.dataRoot = input.dataRoot.trim();
+        try {
+          const result = await client.joinScript(req as Parameters<typeof client.joinScript>[0]);
+          return {
+            content: `Resolved config:\n${JSON.stringify(result.resolved, null, 2)}\n\n--- Paste the following on the new host (it embeds the cluster admin token; do not log) ---\n\n${result.script}`,
+          };
+        } catch (err) {
+          return { content: err instanceof Error ? err.message : String(err), isError: true };
+        }
+      },
+    },
   ];
 
   return createToolRegistrationHand({

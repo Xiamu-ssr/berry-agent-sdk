@@ -351,6 +351,42 @@ export type OperatorClusterReport = z.infer<typeof operatorClusterReportSchema>;
 export const operatorOkResponseSchema = z.object({ ok: z.literal(true) }).strict();
 export type OperatorOkResponse = z.infer<typeof operatorOkResponseSchema>;
 
+/**
+ * Operator → a8s: "give me a copy-paste-able shell snippet that will
+ * install + start a worker on a fresh host so it joins this cluster."
+ *
+ * Inputs are hints, not requirements. workerId defaults to the target
+ * host's hostname; capacity/port have sensible defaults. The reply is
+ * plain bash text the operator pastes into an SSH session — no binary
+ * download, no scripted curl-pipe-to-sh, no TLS dance.
+ */
+export const operatorJoinScriptRequestSchema = z.object({
+  workerId: z.string().min(1).optional(),
+  capacity: z.number().int().positive().optional(),
+  port: z.number().int().positive().optional(),
+  /** Hostname/IP the worker should advertise back to a8s. Defaults to `$(hostname)`. */
+  bindHost: z.string().min(1).optional(),
+  /** Data root override; defaults to /var/berry/workers/<workerId>. */
+  dataRoot: z.string().min(1).optional(),
+  /** Optional labels stamped on the worker entry. */
+  labels: z.record(z.string()).optional(),
+}).strict();
+export type OperatorJoinScriptRequest = z.infer<typeof operatorJoinScriptRequestSchema>;
+
+export const operatorJoinScriptResponseSchema = z.object({
+  /** Bash snippet the operator pastes into an SSH session on the new host. */
+  script: z.string().min(1),
+  /** Echo of the resolved config so the operator can verify before pasting. */
+  resolved: z.object({
+    workerId: z.string(),
+    capacity: z.number().int(),
+    port: z.number().int(),
+    a8sUrl: z.string(),
+    dataRoot: z.string(),
+  }).strict(),
+}).strict();
+export type OperatorJoinScriptResponse = z.infer<typeof operatorJoinScriptResponseSchema>;
+
 // ============================================================
 // Live event stream (Server-Sent Events)
 // ============================================================
@@ -410,6 +446,7 @@ export const A8S_PATHS = {
   operatorWorkerEvict: (workerId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/${encodeURIComponent(workerId)}/evict`,
   operatorLeases: `/${CLUSTER_PROTOCOL_VERSION}/operator/leases`,
+  operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
 } as const;
 
 export const WORKER_PATHS = {

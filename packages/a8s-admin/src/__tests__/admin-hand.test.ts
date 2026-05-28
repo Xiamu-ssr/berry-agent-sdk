@@ -82,6 +82,7 @@ describe('createClusterAdminHand', () => {
       'list_leases',
       'list_workers',
       'undrain_worker',
+      'worker_join_script',
     ]);
   });
 

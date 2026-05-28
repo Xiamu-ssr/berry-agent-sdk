@@ -45,6 +45,15 @@ Options:
                         If omitted, a8s runs in INSECURE DEV MODE — all
                         product-scope endpoints accept any caller. Never
                         use this for a real deployment.
+  --advertise-url <u>   Externally-reachable base URL of this a8s. Used in
+                        worker-join scripts the operator sends to new
+                        hosts. Default http://localhost:<port>, which is
+                        fine for local-only setups but wrong as soon as
+                        workers run on other machines.
+                        env BERRY_A8S_ADVERTISE_URL
+  --wake-tick-ms <n>    Wake scheduler tick interval. Default 1000.
+                        Set 0 to disable the in-process wake loop (e.g.
+                        when an external scheduler drains the table).
 
   --local-worker        Spin up an in-process worker on the same host (so a
                         fresh a8s has capacity > 0 without deploying a
@@ -89,6 +98,8 @@ async function main(argv: string[]): Promise<number> {
       port: { type: 'string' },
       store: { type: 'string' },
       'admin-token': { type: 'string' },
+      'advertise-url': { type: 'string' },
+      'wake-tick-ms': { type: 'string' },
       'local-worker': { type: 'boolean' },
       'admin-agent': { type: 'boolean' },
       'data-root': { type: 'string' },
@@ -107,6 +118,12 @@ async function main(argv: string[]): Promise<number> {
   const storeSpec = values.store ?? process.env.BERRY_A8S_STORE ?? 'memory';
   const store = await resolveStore(storeSpec);
   const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN;
+  const advertiseUrl = values['advertise-url'] ?? process.env.BERRY_A8S_ADVERTISE_URL;
+  const wakeTickMs = values['wake-tick-ms'] !== undefined ? parseInt(values['wake-tick-ms'], 10) : undefined;
+  if (wakeTickMs !== undefined && (!Number.isFinite(wakeTickMs) || wakeTickMs < 0)) {
+    process.stderr.write(`invalid --wake-tick-ms: ${values['wake-tick-ms']}\n`);
+    return 2;
+  }
   const wantLocalWorker = !!values['local-worker'] || !!values['admin-agent'];
   const wantAdminAgent = !!values['admin-agent'];
   const dataRoot = values['data-root'] ?? '/var/berry/a8s/local-worker';
@@ -143,6 +160,8 @@ async function main(argv: string[]): Promise<number> {
     port,
     controlPlane: { orchestrator },
     adminToken,
+    advertiseUrl,
+    wakeTickMs,
     version: '0.5.0-alpha.1',
   });
 
