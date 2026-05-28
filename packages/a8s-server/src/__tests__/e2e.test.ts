@@ -16,6 +16,8 @@ import {
   createAgentRequestSchema,
   createAgentResponseSchema,
   listAgentsResponseSchema,
+  sessionEventsResponseSchema,
+  sessionListResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
 import {
@@ -220,6 +222,135 @@ describe('a8s-server + worker-daemon E2E', () => {
     const body = await resp.json() as { ok: boolean; version: string };
     expect(body.ok).toBe(true);
     expect(body.version).toBe('0.5.0-test');
+    await a8s.stop();
+  });
+
+  it('sessions list + paginated events round-trip through a8s → worker', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+    });
+    const a8sInfo = await a8s.start();
+
+    const root = mkdtempSync(join(tmpdir(), 'wd-sess-'));
+    const wPort = await pickPort();
+    const env = makeTestWorkerEnv(root);
+    const worker = new Worker<TestEntry>({ env });
+    const daemon = new WorkerDaemon<TestEntry>({
+      worker,
+      workerId: 'wd-sess',
+      port: wPort,
+      bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace,
+        home: new AgentHome(wire.workspace),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const dInfo = await daemon.start();
+    const reg = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      workerId: 'wd-sess',
+      callbackUrl: dInfo.callbackUrl,
+      capacity: 4,
+      heartbeatTtlMs: 30_000,
+    });
+    const regResult = await reg.register();
+    daemon.setAuthToken(regResult.workerToken);
+
+    // Create the agent through a8s.
+    const agentWorkspace = mkdtempSync(join(tmpdir(), 'wd-sess-agent-'));
+    const createResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: {
+          agentId: 'a-sess',
+          workspace: agentWorkspace,
+          model: 'tier:strong',
+          ensureDefaultMcpConfig: false,
+        },
+        entry: { tag: 'sess' },
+      })),
+    });
+    expect(createResp.status).toBe(200);
+
+    // Drive a session into existence + seed deterministic events so we
+    // don't need a real LLM. Direct-grab the local runtime since we're
+    // colocated; the assertions below still exercise the full HTTP path.
+    const mount = worker.get('a-sess');
+    if (!mount) throw new Error('agent not mounted');
+    const session = await mount.runtime.createSession();
+    // createSession() emits a session_start event, so we start with 1
+    // before our seeded metadata events. Total below = 1 + 7 = 8.
+    const seedCount = 7;
+    for (let i = 0; i < seedCount; i++) {
+      await mount.runtime.appendSessionEvent(session.id, {
+        type: 'metadata',
+        key: 'seq',
+        value: i,
+      });
+    }
+
+    // ---- List sessions via a8s ----
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessions('a-sess')}`);
+    expect(listResp.status).toBe(200);
+    const list = sessionListResponseSchema.parse(await listResp.json());
+    expect(list.sessions).toHaveLength(1);
+    expect(list.sessions[0].id).toBe(session.id);
+
+    // ---- Walk pages until we hit the start, asserting no duplicates ----
+    const pageSize = 3;
+    const seenIds = new Set<string>();
+    const collected: Array<Record<string, unknown>> = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    while (true) {
+      pages++;
+      const qs = cursor ? `?limit=${pageSize}&before=${cursor}` : `?limit=${pageSize}`;
+      const resp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessionEvents('a-sess', session.id)}${qs}`);
+      expect(resp.status).toBe(200);
+      const page = sessionEventsResponseSchema.parse(await resp.json());
+      // Pages contain at most pageSize events.
+      expect(page.events.length).toBeLessThanOrEqual(pageSize);
+      // Prepend so the final collected order is oldest → newest.
+      for (let i = page.events.length - 1; i >= 0; i--) {
+        const ev = page.events[i];
+        const id = (ev as { id?: string }).id;
+        expect(id).toBeDefined();
+        expect(seenIds.has(id!)).toBe(false);
+        seenIds.add(id!);
+        collected.unshift(ev);
+      }
+      if (page.reachedStart) {
+        expect(page.nextBefore).toBeNull();
+        break;
+      }
+      expect(page.nextBefore).not.toBeNull();
+      cursor = page.nextBefore;
+      if (pages > 10) throw new Error('pagination did not terminate');
+    }
+
+    // Expect session_start + 7 seeded metadata events.
+    expect(collected).toHaveLength(seedCount + 1);
+    const types = collected.map((e) => (e as { type: string }).type);
+    expect(types[0]).toBe('session_start');
+    // The seeded metadata events appear in append order, oldest first.
+    const seqValues = collected
+      .filter((e) => (e as { type: string }).type === 'metadata')
+      .map((e) => (e as { value: number }).value);
+    expect(seqValues).toEqual([0, 1, 2, 3, 4, 5, 6]);
+
+    await reg.withdraw(true);
+    await daemon.stop();
+    await worker.dispose();
     await a8s.stop();
   });
 });

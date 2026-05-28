@@ -393,6 +393,21 @@ export class Agent {
     return this.sessions.appendSessionEvent(sessionId, draft);
   }
 
+  /**
+   * Read raw events for a session. Returns the full append-only log
+   * (or a filtered slice via GetEventsOptions). Empty array when the
+   * session has no events yet, or when the event log store is not
+   * configured. Products use this for pagination + audit views;
+   * `getSessionView()` is the pre-hydrated UI shape.
+   */
+  async getSessionEvents(
+    sessionId: string,
+    options?: import('./event-log/types.js').GetEventsOptions,
+  ): Promise<SessionEvent[]> {
+    if (!this.eventLogStore) return [];
+    return this.eventLogStore.getEvents(sessionId, options);
+  }
+
   /** List all sessions as hydrated SDK views, newest first. */
   async listSessionViews(options?: { agentId?: string; includeMessages?: boolean; eventLimit?: number }): Promise<AgentSessionView[]> {
     return this.sessions.listSessionViews(options);

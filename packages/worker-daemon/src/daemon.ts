@@ -20,6 +20,10 @@ import {
   errorPayloadSchema,
   parseWorkerAuthHeader,
   sendRequestSchema,
+  sessionEventsRequestSchema,
+  sessionEventsResponseSchema,
+  sessionListResponseSchema,
+  sessionSummarySchema,
   workerCapacityResponseSchema,
   workerHasAgentResponseSchema,
   workerRunAgentRequestSchema,
@@ -28,7 +32,7 @@ import {
   healthResponseSchema,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
-import type { Worker, WorkerAgentSpec, WorkerEnvironment } from '@berry-agent/worker';
+import type { Worker, WorkerAgentSpec } from '@berry-agent/worker';
 
 export interface WorkerDaemonOptions<TEntry = unknown> {
   /** Underlying Worker (constructed by host with the env it needs). */
@@ -145,6 +149,21 @@ export class WorkerDaemon<TEntry = unknown> {
       return writeJson(res, 200, payload);
     }
 
+    // /agents/:id/sessions  &  /agents/:id/sessions/:sid/events
+    const sessionEventsMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)\/events(?:\?.*)?$/);
+    if (sessionEventsMatch && req.method === 'GET') {
+      return this.handleSessionEvents(
+        decodeURIComponent(sessionEventsMatch[1]),
+        decodeURIComponent(sessionEventsMatch[2]),
+        req,
+        res,
+      );
+    }
+    const sessionListMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions(?:\?.*)?$/);
+    if (sessionListMatch && req.method === 'GET') {
+      return this.handleSessionList(decodeURIComponent(sessionListMatch[1]), res);
+    }
+
     // /agents/:id/{run,stop,send,active-session,has}
     const agentMatch = url.match(/^\/v1\/agents\/([^/]+)\/(run|stop|send|active-session|has)$/);
     if (agentMatch) {
@@ -232,6 +251,69 @@ export class WorkerDaemon<TEntry = unknown> {
     }
     writeJson(res, 200, { sessionId: mount.runtime.getActiveSessionId() ?? null });
   }
+
+  private async handleSessionList(agentId: string, res: ServerResponse): Promise<void> {
+    const mount = this.worker.get(agentId);
+    if (!mount) {
+      writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_mounted', message: `agent "${agentId}" is not running on this worker` },
+      }));
+      return;
+    }
+    // includeMessages=false keeps the response cheap — clients render the
+    // sidebar from this, then page events via the per-session endpoint.
+    const views = await mount.runtime.listSessionViews({ includeMessages: false });
+    const sessions = views.map((v) => sessionSummarySchema.parse({
+      id: v.id,
+      title: v.title,
+      createdAt: v.createdAt,
+      lastActiveAt: v.lastActiveAt,
+      status: v.status,
+      messageCount: v.messages.length,
+    }));
+    writeJson(res, 200, sessionListResponseSchema.parse({ sessions }));
+  }
+
+  private async handleSessionEvents(
+    agentId: string,
+    sessionId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const mount = this.worker.get(agentId);
+    if (!mount) {
+      writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_mounted', message: `agent "${agentId}" is not running on this worker` },
+      }));
+      return;
+    }
+    const params = parseQuery(req.url ?? '');
+    const parsed = sessionEventsRequestSchema.parse({
+      before: params.before,
+      limit: params.limit !== undefined ? Number(params.limit) : undefined,
+    });
+    const limit = Math.min(parsed.limit ?? 200, 1000);
+
+    // Read the whole log and paginate in-memory. For long sessions this is
+    // O(N) per request — acceptable for the alpha; revisit when sessions
+    // routinely exceed ~10k events. The file store already streams + parses
+    // each line, so memory pressure is proportional to events only.
+    const all = await mount.runtime.getSessionEvents(sessionId);
+    let upperExclusive = all.length;
+    if (parsed.before) {
+      const idx = all.findIndex((e) => e.id === parsed.before);
+      upperExclusive = idx === -1 ? all.length : idx;
+    }
+    const lowerInclusive = Math.max(0, upperExclusive - limit);
+    const page = all.slice(lowerInclusive, upperExclusive);
+    const reachedStart = lowerInclusive === 0;
+    const nextBefore = reachedStart || page.length === 0 ? null : page[0].id;
+    writeJson(res, 200, sessionEventsResponseSchema.parse({
+      events: page.map((e) => e as unknown as Record<string, unknown>),
+      nextBefore,
+      reachedStart,
+    }));
+  }
 }
 
 // ============================================================
@@ -258,4 +340,18 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function parseQuery(url: string): Record<string, string> {
+  const q = url.indexOf('?');
+  if (q < 0) return {};
+  const out: Record<string, string> = {};
+  for (const pair of url.slice(q + 1).split('&')) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    const key = eq < 0 ? pair : pair.slice(0, eq);
+    const value = eq < 0 ? '' : pair.slice(eq + 1);
+    out[decodeURIComponent(key)] = decodeURIComponent(value);
+  }
+  return out;
 }

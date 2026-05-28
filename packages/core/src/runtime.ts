@@ -203,6 +203,13 @@ export class ManagedAgentRuntime {
     return this.agent.appendSessionEvent(sessionId, draft);
   }
 
+  async getSessionEvents(
+    sessionId: string,
+    options?: import('./event-log/types.js').GetEventsOptions,
+  ): Promise<SessionEvent[]> {
+    return this.agent.getSessionEvents(sessionId, options);
+  }
+
   async getTodos(sessionId: string): Promise<TodoItem[]> {
     return this.agent.getTodos(sessionId);
   }

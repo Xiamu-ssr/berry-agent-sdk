@@ -153,6 +153,22 @@ export class A8sServer<TEntry = unknown> {
       return this.handleAgentSend(decodeURIComponent(agentSendMatch[1]), req, res);
     }
 
+    // /agents/:id/sessions/:sid/events — proxy paginated event read
+    const sessionEventsMatch = url.match(/^(\/v1\/agents\/([^/]+)\/sessions\/[^/]+\/events)(\?.*)?$/);
+    if (sessionEventsMatch && req.method === 'GET') {
+      const agentId = decodeURIComponent(sessionEventsMatch[2]);
+      const subpath = `${sessionEventsMatch[1]}${sessionEventsMatch[3] ?? ''}`;
+      return this.proxyGetToWorker(agentId, subpath, res);
+    }
+
+    // /agents/:id/sessions — proxy session list
+    const sessionListMatch = url.match(/^(\/v1\/agents\/([^/]+)\/sessions)(\?.*)?$/);
+    if (sessionListMatch && req.method === 'GET') {
+      const agentId = decodeURIComponent(sessionListMatch[2]);
+      const subpath = `${sessionListMatch[1]}${sessionListMatch[3] ?? ''}`;
+      return this.proxyGetToWorker(agentId, subpath, res);
+    }
+
     const agentDeleteMatch = url.match(/^\/v1\/agents\/([^/]+)$/);
     if (agentDeleteMatch && req.method === 'DELETE') {
       return this.handleAgentDelete(decodeURIComponent(agentDeleteMatch[1]), res);
@@ -321,6 +337,37 @@ export class A8sServer<TEntry = unknown> {
         [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
       },
       body: JSON.stringify(parsed),
+    });
+    const text = await response.text();
+    res.statusCode = response.status;
+    res.setHeader('content-type', 'application/json');
+    res.end(text);
+  }
+
+  /**
+   * Generic GET proxy used by data-plane reads (session list, paginated
+   * events). Resolves agent → worker via the plane, attaches the worker
+   * bearer token, forwards the path verbatim, and streams the response
+   * back. Worker daemon's path layout matches a8s 1:1 for these endpoints.
+   */
+  private async proxyGetToWorker(agentId: string, subpath: string, res: ServerResponse): Promise<void> {
+    const loc = this.plane.getAgentLocation(agentId);
+    if (!loc.workerId) {
+      return writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_assigned', message: `agent "${agentId}" has no assigned worker` },
+      }));
+    }
+    const entry = this.tokens.get(loc.workerId);
+    if (!entry) {
+      return writeJson(res, 500, errorPayloadSchema.parse({
+        error: { code: 'worker_token_missing', message: `no token for worker ${loc.workerId}` },
+      }));
+    }
+    const response = await fetch(`${entry.callbackUrl}${subpath}`, {
+      method: 'GET',
+      headers: {
+        [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+      },
     });
     const text = await response.text();
     res.statusCode = response.status;

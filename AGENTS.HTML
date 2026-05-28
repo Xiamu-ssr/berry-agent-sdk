@@ -138,30 +138,44 @@
 
   <h2>当前部署形态</h2>
 
-  <h3>形态 A — 全本地(开发 / 单机)</h3>
-  <p>所有东西在一个 Node.js 进程里:产品 + a8s + worker + brain。这是 berry-claw 现在的形态。适合开发、小规模、个人使用。</p>
+  <h3>形态 A — 全本地(开发 / 单机产品)</h3>
+  <p>所有东西在一个 Node.js 进程里:产品 + a8s + worker + brain。这是 berry-claw 现在的形态。适合开发、小规模、个人使用。Worker 类内嵌,无需 HTTP 协议。</p>
   <pre><code>npm install -g @berry-agent/claw-server@alpha
 berry-claw start
 # 单进程跑 N 个 agent,关进程全没</code></pre>
 
-  <h3>形态 B — 单机多 worker(已可用)</h3>
-  <p>1 个 <code>berry-a8s</code> 进程 + N 个 <code>berry-worker</code> 进程 + 共享 SQLite。同一台机器内,multi-process 抢 lease,某个 worker 进程崩了其他接管。</p>
-  <pre><code># Terminal 1
-berry-a8s start --port 8080 --store sqlite:///var/berry/orch.db
+  <h3>形态 B — 单机或多机集群(已可用)</h3>
+  <p>1 个 <code>berry-a8s</code> 进程 + N 个 <code>berry-worker</code> 进程(可以在同机也可以跨机) + 共享 SQLite(单机)或 Postgres(跨机)。Worker 主动出网注册到 a8s,周期 heartbeat,接收 a8s 派来的任务。Worker 进程崩了 → lease 过期 → a8s 重新调度(需要 agent home 在共享存储)。</p>
+  <pre><code># 服务器 A:启动 a8s
+sudo mkdir -p /var/berry/a8s
+berry-a8s start --port 8080 --store sqlite:///var/berry/a8s/orch.db
 
-# Terminal 2
-berry-worker start --config /etc/berry/worker-1.json
+# 服务器 B:写 worker 配置(指定 a8s URL + agent 数据存哪)
+sudo mkdir -p /var/berry/workers/worker-b/agents
+cat &gt; /var/berry/workers/worker-b/worker.json &lt;&lt;EOF
+{
+  "workerId": "worker-b",
+  "port": 7100,
+  "bindHost": "10.0.1.10",
+  "a8s": "http://10.0.1.5:8080",
+  "capacity": 16,
+  "heartbeatTtlMs": 30000,
+  "credentialsPath": "/var/berry/workers/worker-b/creds.json",
+  "observerDbPath": "/var/berry/workers/worker-b/observe.db",
+  "registry": { ...provider/model/tier... }
+}
+EOF
 
-# Terminal 3
-berry-worker start --config /etc/berry/worker-2.json
+# 启动 worker
+berry-worker start --config /var/berry/workers/worker-b/worker.json
 
-# 任何客户端(产品 / curl)
-curl -X POST http://localhost:8080/v1/agents \
+# 任何客户端创建 agent
+curl -X POST http://10.0.1.5:8080/v1/agents \
   -H 'content-type: application/json' \
-  -d '{"spec":{"agentId":"coder","workspace":"/data/coder","model":"tier:strong"}}'</code></pre>
+  -d '{"spec":{"agentId":"coder","workspace":"/var/berry/workers/worker-b/agents/coder","model":"tier:strong"}}'</code></pre>
 
-  <h3>形态 C — 跨机器集群(M4 已就绪,剩远程 SessionStore)</h3>
-  <p>1-3 个 <code>berry-a8s</code> (HA) + N 个 <code>berry-worker</code> 跨机器(用 <code>--a8s</code> 指向远端) + 共享 Postgres + 远程 SessionStore(对象存储或 Postgres)。HTTP 协议已就绪;远程 SessionStore 等真实部署场景驱动。</p>
+  <h3>形态 C — Agent 数据共享(高可用,待做)</h3>
+  <p>在形态 B 基础上,把 agent home 从 worker 本地盘换成共享存储(对象存储 / Postgres / NFS),实现 agent 可在 worker 间自由迁移。当前 SDK 只有 <code>FileSessionStore</code> 等本地实现;远程实现等真实部署场景驱动。</p>
 
   <h2>判断一段代码该放哪</h2>
   <table>
@@ -177,31 +191,45 @@ curl -X POST http://localhost:8080/v1/agents \
   </table>
 
   <h2>目录事实源</h2>
-  <pre><code>&lt;agent-home&gt;/
-├── agent.json
-├── AGENTS.md
-├── MEMORY.md
-├── .mcp.json
-├── skills/
-├── memory/
-└── sessions/&lt;session-id&gt;/
-    ├── messages.json
-    ├── metadata.json
-    └── events.jsonl
+  <p>Berry 把生产部署的所有数据组织在一个 <strong>berry root</strong>(默认 <code>/var/berry/</code>)下,跟其他服务区分。Worker 数据再按 worker id 子目录,同机多 worker 完全隔离。</p>
+  <pre><code>/var/berry/                                  ← berry root (用户可改)
+├── a8s/                                     ← a8s control plane 数据
+│   ├── orch.db                              ← SQLite orchestration store
+│   │                                          (runtime_workers / runtime_leases / runtime_wakes)
+│   └── a8s.log
+│
+└── workers/                                 ← worker 数据,一个 worker 一个目录
+    ├── &lt;workerId&gt;/                     ← e.g. worker-b
+    │   ├── observe.db                       ← worker 自己的 observe SQLite
+    │   ├── creds.json                       ← credential store
+    │   └── agents/                          ← agent home 根
+    │       └── &lt;agentId&gt;/               ← e.g. coder
+    │           ├── agent.json               ← agent 不变身份 + 当前模型选择
+    │           ├── AGENTS.md                ← 系统提示(用户写)
+    │           ├── MEMORY.md                ← 长期记忆(agent 写)
+    │           ├── .mcp.json
+    │           ├── skills/
+    │           ├── memory/
+    │           └── sessions/&lt;sessionId&gt;/
+    │               ├── messages.json        ← LLM 上下文事实源(compact 后稳定)
+    │               ├── metadata.json
+    │               └── events.jsonl         ← append-only timeline(审计 + UI)
+    └── &lt;otherWorkerId&gt;/...               ← 同机第二个 worker,完全隔离
 
-&lt;project-root&gt;/
-├── AGENTS.md
-└── .berry/
+&lt;project-root&gt;/                          ← agent 工作的项目目录(产品/用户提供)
+├── AGENTS.md                                ← project-level 上下文
+└── .berry/                                  ← SDK 在项目里的私有目录
     ├── team.json
     ├── messages.jsonl
     ├── worklist.json
-    └── safety.json
-
-&lt;orchestration-root&gt;/
-└── runtime-orchestration.db  (SQLite,或远程 Postgres)
-    ├── runtime_workers
-    ├── runtime_leases
-    └── runtime_wakes</code></pre>
+    └── safety.json</code></pre>
+  <p><strong>数据归属</strong>:</p>
+  <ul>
+    <li><strong>a8s</strong> 只读写 <code>/var/berry/a8s/</code>(元数据,几 KB ~ 几 MB)。它不碰任何 agent home 数据。</li>
+    <li><strong>Worker</strong> 拥有 <code>/var/berry/workers/&lt;workerId&gt;/</code>。Agent 数据(home 目录)默认放本地 SSD,所以 agent 默认绑当前 worker。</li>
+    <li><strong>多机 failover</strong> 需要把 agent home 放到共享存储(NFS / 对象存储 / Postgres)。SDK 的 <code>SessionStore</code> / <code>AgentHome</code> 是接口,实现可换。</li>
+    <li><strong>同机多 worker</strong> 各自一个 <code>workers/&lt;workerId&gt;</code> 子目录,文件系统权限隔离,互不干扰。</li>
+  </ul>
 
   <h2>开发命令</h2>
   <pre><code>npm install

@@ -167,6 +167,53 @@ export const getActiveSessionResponseSchema = z.object({
 export type GetActiveSessionResponse = z.infer<typeof getActiveSessionResponseSchema>;
 
 // ============================================================
+// Session list & event pagination
+// ============================================================
+// Products call a8s; a8s proxies to the worker holding the agent. The
+// session-summary payload is intentionally minimal — full SessionView
+// hydration (with messages) is opt-in via includeMessages so list calls
+// stay cheap when the UI is rendering a sidebar.
+
+export const sessionSummarySchema = z.object({
+  id: z.string().min(1),
+  title: z.string().optional(),
+  createdAt: z.number().int().nonnegative(),
+  lastActiveAt: z.number().int().nonnegative(),
+  status: z.enum(['idle', 'running', 'interrupted']),
+  /** Number of messages in the rendered timeline (omitted when not hydrated). */
+  messageCount: z.number().int().nonnegative().optional(),
+}).strict();
+export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+
+export const sessionListResponseSchema = z.object({
+  sessions: z.array(sessionSummarySchema),
+}).strict();
+export type SessionListResponse = z.infer<typeof sessionListResponseSchema>;
+
+/**
+ * Event-log pagination request. Cursor is the *exclusive* upper bound
+ * (event id) — the response returns events that come **before** it in
+ * the append order. `null`/omitted cursor = newest page. Limit clamps
+ * server-side (default 200, max 1000) so a misbehaving UI can't tail
+ * the entire history in one round trip.
+ */
+export const sessionEventsRequestSchema = z.object({
+  before: z.string().optional(),
+  limit: z.number().int().positive().max(1000).optional(),
+}).strict();
+export type SessionEventsRequest = z.infer<typeof sessionEventsRequestSchema>;
+
+export const sessionEventsResponseSchema = z.object({
+  /** Raw SessionEvent objects — SDK shape, opaque to the protocol. */
+  events: z.array(z.record(z.unknown())),
+  /** Cursor for the next older page; null when no more history. */
+  nextBefore: z.string().nullable(),
+  /** True when this page reaches the start of the log. */
+  reachedStart: z.boolean(),
+}).strict();
+export type SessionEventsResponse = z.infer<typeof sessionEventsResponseSchema>;
+
+// ============================================================
 // Worker-side endpoints (a8s → worker)
 // ============================================================
 // These are the methods a8s calls on a worker daemon. Roughly mirror
@@ -254,6 +301,10 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/send`,
   agentActiveSession: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/active-session`,
+  agentSessions: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
+  agentSessionEvents: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
   wakesSchedule: `/${CLUSTER_PROTOCOL_VERSION}/wakes/schedule`,
 } as const;
 
@@ -268,6 +319,10 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/send`,
   agentActiveSession: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/active-session`,
+  agentSessions: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
+  agentSessionEvents: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
   hasAgent: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/has`,
 } as const;

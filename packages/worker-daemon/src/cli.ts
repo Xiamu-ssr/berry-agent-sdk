@@ -15,8 +15,9 @@
 // in this package's docs/ for the schema.
 
 import { parseArgs } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
@@ -35,8 +36,23 @@ Options:
   --port <n>          HTTP port to listen on (overrides config.port, default: 7100)
   --a8s <url>         a8s control plane URL (overrides config.a8s)
   --worker-id <id>    Stable worker id (overrides config.workerId, default: hostname)
+  --data-root <path>  Root dir for worker data (overrides config.dataRoot,
+                      default: /var/berry/workers/<workerId>)
   --version           Print version
   --help              Show this help
+
+DIRECTORY CONVENTION:
+  Worker stores all its data under dataRoot:
+    <dataRoot>/
+      ├── observe.db    ← worker's observe SQLite
+      ├── creds.json    ← credential store
+      └── agents/       ← agent home root (each agent gets its own subdir)
+          └── <agentId>/{agent.json, AGENTS.md, MEMORY.md, sessions/, ...}
+
+  Default dataRoot is /var/berry/workers/<workerId>.
+  Specify credentialsPath / observerDbPath in config only if you want to
+  override individual paths (they default to <dataRoot>/creds.json and
+  <dataRoot>/observe.db).
 `;
 
 const configSchema = z.object({
@@ -54,10 +70,16 @@ const configSchema = z.object({
   heartbeatTtlMs: z.number().int().positive().default(30_000),
   /** Optional labels for affinity scheduling. */
   labels: z.record(z.string()).optional(),
-  /** Where the worker stores its credential file. */
-  credentialsPath: z.string().min(1),
-  /** Observer SQLite path. Use ':memory:' for stateless workers. */
-  observerDbPath: z.string().min(1),
+  /**
+   * Root directory for all worker data. Defaults to
+   * /var/berry/workers/<workerId>. The worker auto-creates this and the
+   * subdirs (agents/, observe.db, creds.json) on first launch.
+   */
+  dataRoot: z.string().min(1).optional(),
+  /** Override credentials path (default: <dataRoot>/creds.json). */
+  credentialsPath: z.string().min(1).optional(),
+  /** Override observer db path (default: <dataRoot>/observe.db). */
+  observerDbPath: z.string().min(1).optional(),
   /** Provider/model registry. Same shape as @berry-agent/models. */
   registry: z.object({
     providers: z.record(z.object({
@@ -98,6 +120,7 @@ async function main(argv: string[]): Promise<number> {
       port: { type: 'string' },
       a8s: { type: 'string' },
       'worker-id': { type: 'string' },
+      'data-root': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -128,11 +151,20 @@ async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
+  // ---- Resolve dataRoot + derived paths ----
+  const dataRoot = values['data-root'] ?? config.dataRoot ?? `/var/berry/workers/${workerId}`;
+  const agentsDir = join(dataRoot, 'agents');
+  const credentialsPath = config.credentialsPath ?? join(dataRoot, 'creds.json');
+  const observerDbPath = config.observerDbPath ?? join(dataRoot, 'observe.db');
+
+  // Auto-create directory tree so a fresh deploy just works.
+  mkdirSync(agentsDir, { recursive: true });
+
   // ---- Build the WorkerEnvironment ----
   const env: WorkerEnvironment = {
     registry: config.registry as unknown as ModelsRegistry,
-    credentials: new DefaultCredentialStore({ filePath: config.credentialsPath }),
-    observer: createObserver({ dbPath: config.observerDbPath }),
+    credentials: new DefaultCredentialStore({ filePath: credentialsPath }),
+    observer: createObserver({ dbPath: observerDbPath }),
   };
 
   // ---- Build the Worker ----
@@ -146,23 +178,30 @@ async function main(argv: string[]): Promise<number> {
     bindHost: config.bindHost,
     version: '0.5.0-alpha.1',
     /**
-     * Resolve a wire spec into a full WorkerAgentSpec. AgentHome is
-     * constructed from the workspace path. Hosts that need fancier spec
-     * resolution (host tools, project-specific config) should write a
-     * custom daemon main instead of using this CLI.
+     * Resolve a wire spec into a full WorkerAgentSpec. The agent's
+     * workspace is reinterpreted as relative to this worker's agentsDir
+     * if it's a bare agent id (no path separator) — letting clients say
+     * `workspace: "coder"` without knowing absolute paths on the worker.
+     * Absolute paths are passed through verbatim for advanced setups.
      */
-    resolveSpec: (wire): WorkerAgentSpec => ({
-      agentId: wire.agentId,
-      workspace: wire.workspace,
-      home: new AgentHome(wire.workspace),
-      projectRoot: wire.projectRoot,
-      model: wire.model,
-      ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
-    }),
+    resolveSpec: (wire): WorkerAgentSpec => {
+      const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
+        ? wire.workspace
+        : join(agentsDir, wire.workspace);
+      return {
+        agentId: wire.agentId,
+        workspace,
+        home: new AgentHome(workspace),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
+      };
+    },
   });
 
   const info = await daemon.start();
   process.stdout.write(`🍓 berry-worker "${workerId}" listening on ${info.callbackUrl}\n`);
+  process.stdout.write(`   data root: ${dataRoot}\n`);
 
   // ---- Register with a8s ----
   const reg = new WorkerRegistrationClient({
