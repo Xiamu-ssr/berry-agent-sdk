@@ -25,7 +25,7 @@ import { currentContextTokens } from './compaction/runner.js';
 import type { AgentSnapshot } from './agent-helpers/introspection.js';
 import type { ProviderPublicConfig } from './provider-types.js';
 import type { Hand, HandToolAdapterOptions } from './hands.js';
-import type { SessionEvent, SessionEventDraft } from './event-log/types.js';
+import type { EventLogListener, GetEventsOptions, SessionEvent, SessionEventDraft } from './event-log/types.js';
 import type { ReasoningEffort } from './workspace/initializer.js';
 import type { SystemPromptInput } from '@berry-agent/small-shared-core';
 import type { TodoItem } from './session-types.js';
@@ -205,9 +205,14 @@ export class ManagedAgentRuntime {
 
   async getSessionEvents(
     sessionId: string,
-    options?: import('./event-log/types.js').GetEventsOptions,
+    options?: GetEventsOptions,
   ): Promise<SessionEvent[]> {
     return this.agent.getSessionEvents(sessionId, options);
+  }
+
+  /** Live tail of every session event for this agent. See Agent.subscribeSessionEvents. */
+  subscribeSessionEvents(listener: EventLogListener): () => void {
+    return this.agent.subscribeSessionEvents(listener);
   }
 
   async getTodos(sessionId: string): Promise<TodoItem[]> {

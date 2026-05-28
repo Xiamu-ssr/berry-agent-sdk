@@ -124,6 +124,7 @@ export type {
   SessionEventDraft,
   GetEventsOptions,
   EventLogStore,
+  EventLogListener,
   ContextStrategy,
 } from './event-log/index.js';
 

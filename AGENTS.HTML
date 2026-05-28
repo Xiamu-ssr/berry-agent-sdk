@@ -119,7 +119,7 @@
     <thead><tr><th>包</th><th>状态</th><th>一句话职责</th></tr></thead>
     <tbody>
       <tr><td><code>@berry-agent/worker</code></td><td><span class="ok">已完整</span></td><td>单机 worker 类:<code>buildAgentRuntime()</code> 工厂、<code>Worker</code> 类(N 个 agent mount + 可选 supervisor)、<code>/test-utils</code> subpath 供下游测试复用。</td></tr>
-      <tr><td><code>@berry-agent/worker-daemon</code></td><td><span class="ok">已完整</span></td><td>Worker HTTP 服务进程:<code>WorkerDaemon</code> 类 + <code>WorkerRegistrationClient</code> + <code>berry-worker</code> CLI(<code>start --config worker.json</code>)。Bearer-token 鉴权,自动注册到 a8s 并周期 heartbeat。</td></tr>
+      <tr><td><code>@berry-agent/worker-daemon</code></td><td><span class="ok">已完整</span></td><td>Worker HTTP 服务进程:<code>WorkerDaemon</code> 类 + <code>WorkerRegistrationClient</code> + <code>berry-worker</code> CLI(<code>start --config worker.json</code>)。Bearer-token 鉴权,自动注册到 a8s 并周期 heartbeat。数据面提供 session 列表、分页 events 读、SSE 实时 events 流(支持 Last-Event-ID 断线续传)。</td></tr>
     </tbody>
   </table>
 
@@ -129,7 +129,7 @@
     <tbody>
       <tr><td><code>@berry-agent/a8s</code></td><td><span class="ok">已完整</span></td><td>集群调度类:<code>ControlPlane</code> (createAgent/deleteAgent/migrateAgent/openAgent/hydrateAssignments/capacityReport)、<code>WorkerNode</code> 契约 (<code>InProcessWorkerNode</code> + <code>HttpWorkerNode</code> 都已实现)、<code>AgentSession</code> 数据面句柄、可插拔 <code>Scheduler</code>(least-loaded / round-robin)。</td></tr>
       <tr><td><code>@berry-agent/cluster-protocol</code></td><td><span class="ok">已完整</span></td><td>HTTP wire 协议唯一事实源:所有 a8s ↔ worker ↔ product 的 request/response zod schema、path 常量(<code>A8S_PATHS</code>、<code>WORKER_PATHS</code>)、Bearer-token 鉴权 helpers。</td></tr>
-      <tr><td><code>@berry-agent/a8s-server</code></td><td><span class="ok">已完整</span></td><td>Control plane HTTP 服务进程:<code>A8sServer</code> 类 + <code>berry-a8s</code> CLI(<code>start --port 8080 --store sqlite:///path/to.db</code>)。接收 worker 注册、签发 token、proxy data-plane 调用、写 lease 到 orchestration store。</td></tr>
+      <tr><td><code>@berry-agent/a8s-server</code></td><td><span class="ok">已完整</span></td><td>Control plane HTTP 服务进程:<code>A8sServer</code> 类 + <code>berry-a8s</code> CLI(<code>start --port 8080 --store sqlite:///path/to.db</code>)。接收 worker 注册、签发 token、proxy data-plane 调用(含 SSE 流式透传)、写 lease 到 orchestration store。</td></tr>
     </tbody>
   </table>
 

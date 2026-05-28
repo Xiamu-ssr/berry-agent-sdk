@@ -12,6 +12,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from 'node:crypto';
 import {
   A8S_PATHS,
+  SSE_LAST_EVENT_ID_HEADER,
   WORKER_AUTH_HEADER,
   agentLocationSchema,
   createAgentRequestSchema,
@@ -151,6 +152,14 @@ export class A8sServer<TEntry = unknown> {
     const agentSendMatch = url.match(/^\/v1\/agents\/([^/]+)\/send$/);
     if (agentSendMatch && req.method === 'POST') {
       return this.handleAgentSend(decodeURIComponent(agentSendMatch[1]), req, res);
+    }
+
+    // /agents/:id/events/stream — long-lived SSE
+    const streamMatch = url.match(/^(\/v1\/agents\/([^/]+)\/events\/stream)(\?.*)?$/);
+    if (streamMatch && req.method === 'GET') {
+      const agentId = decodeURIComponent(streamMatch[2]);
+      const subpath = `${streamMatch[1]}${streamMatch[3] ?? ''}`;
+      return this.proxyStreamToWorker(agentId, subpath, req, res);
     }
 
     // /agents/:id/sessions/:sid/events — proxy paginated event read
@@ -373,6 +382,80 @@ export class A8sServer<TEntry = unknown> {
     res.statusCode = response.status;
     res.setHeader('content-type', 'application/json');
     res.end(text);
+  }
+
+  /**
+   * Long-lived SSE proxy. We can't use fetch(...).text() because the
+   * stream is unbounded — we pipe the worker's response body straight
+   * through to the client and let either side close it. Forwards
+   * Last-Event-ID so resume across reconnects works end-to-end.
+   */
+  private async proxyStreamToWorker(
+    agentId: string,
+    subpath: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const loc = this.plane.getAgentLocation(agentId);
+    if (!loc.workerId) {
+      return writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_assigned', message: `agent "${agentId}" has no assigned worker` },
+      }));
+    }
+    const entry = this.tokens.get(loc.workerId);
+    if (!entry) {
+      return writeJson(res, 500, errorPayloadSchema.parse({
+        error: { code: 'worker_token_missing', message: `no token for worker ${loc.workerId}` },
+      }));
+    }
+
+    const lastEventId = req.headers[SSE_LAST_EVENT_ID_HEADER.toLowerCase()] as string | undefined;
+    const upstreamHeaders: Record<string, string> = {
+      [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+      accept: 'text/event-stream',
+    };
+    if (lastEventId) upstreamHeaders[SSE_LAST_EVENT_ID_HEADER] = lastEventId;
+
+    const upstream = await fetch(`${entry.callbackUrl}${subpath}`, {
+      method: 'GET',
+      headers: upstreamHeaders,
+    });
+
+    res.statusCode = upstream.status;
+    if (upstream.status !== 200 || !upstream.body) {
+      const text = await upstream.text();
+      res.setHeader('content-type', upstream.headers.get('content-type') ?? 'application/json');
+      res.end(text);
+      return;
+    }
+    res.setHeader('content-type', 'text/event-stream');
+    res.setHeader('cache-control', 'no-cache, no-transform');
+    res.setHeader('connection', 'keep-alive');
+    res.setHeader('x-accel-buffering', 'no');
+    res.flushHeaders?.();
+
+    const reader = upstream.body.getReader();
+    const cancel = (): void => {
+      try { void reader.cancel(); } catch { /* swallow */ }
+    };
+    req.on('close', cancel);
+    req.on('aborted', cancel);
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && !res.writableEnded) res.write(value);
+        if (res.writableEnded) {
+          cancel();
+          break;
+        }
+      }
+    } catch (error) {
+      this.logger.warn?.('[a8s-server] SSE upstream read failed:', error);
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
   }
 
   private async handleScheduleWake(req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -15,6 +15,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { hostname } from 'node:os';
 import {
+  SSE_LAST_EVENT_ID_HEADER,
+  SSE_SESSION_QUERY_PARAM,
   WORKER_AUTH_HEADER,
   WORKER_PATHS,
   errorPayloadSchema,
@@ -147,6 +149,12 @@ export class WorkerDaemon<TEntry = unknown> {
         total: w?.capacity,
       });
       return writeJson(res, 200, payload);
+    }
+
+    // /agents/:id/events/stream — long-lived SSE
+    const streamMatch = url.match(/^\/v1\/agents\/([^/]+)\/events\/stream(?:\?.*)?$/);
+    if (streamMatch && req.method === 'GET') {
+      return this.handleEventStream(decodeURIComponent(streamMatch[1]), req, res);
     }
 
     // /agents/:id/sessions  &  /agents/:id/sessions/:sid/events
@@ -314,6 +322,124 @@ export class WorkerDaemon<TEntry = unknown> {
       reachedStart,
     }));
   }
+
+  /**
+   * Long-lived Server-Sent Events stream. Subscribes to the agent's
+   * event log; every appended SessionEvent is forwarded as one SSE
+   * message. Closing the socket unsubscribes.
+   *
+   * Resume semantics: when `Last-Event-ID` is provided (or
+   * `?last_event_id=` query string), the handler first replays any
+   * persisted events appended *after* that id, then transitions into
+   * live mode. This makes drops invisible to a well-behaved EventSource
+   * client that retries with its last seen id.
+   *
+   * Session filter: `?session=<sid>` narrows the stream to one session;
+   * omit to receive every session event for the agent.
+   */
+  private async handleEventStream(
+    agentId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const mount = this.worker.get(agentId);
+    if (!mount) {
+      writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_mounted', message: `agent "${agentId}" is not running on this worker` },
+      }));
+      return;
+    }
+    const params = parseQuery(req.url ?? '');
+    const sessionFilter = params[SSE_SESSION_QUERY_PARAM] ?? undefined;
+    const lastEventId = (req.headers[SSE_LAST_EVENT_ID_HEADER.toLowerCase()] as string | undefined)
+      ?? params.last_event_id
+      ?? undefined;
+
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/event-stream');
+    res.setHeader('cache-control', 'no-cache, no-transform');
+    res.setHeader('connection', 'keep-alive');
+    // Disable proxy buffering (nginx, etc.) — events must flush promptly.
+    res.setHeader('x-accel-buffering', 'no');
+    // Flush headers immediately so the client knows the stream is alive.
+    res.flushHeaders?.();
+
+    // Subscribe before replay so we don't miss anything appended between
+    // the historical read and the live transition. Buffer live events
+    // during the replay window and dedupe by id.
+    const replayedIds = new Set<string>();
+    const liveBuffer: Array<{ sessionId: string; event: SessionEventLike }> = [];
+    let mode: 'replay' | 'live' = 'replay';
+    const unsubscribe = mount.runtime.subscribeSessionEvents((sid, event) => {
+      if (sessionFilter && sid !== sessionFilter) return;
+      if (mode === 'replay') {
+        liveBuffer.push({ sessionId: sid, event });
+        return;
+      }
+      if (replayedIds.has(event.id)) return;
+      writeSse(res, event);
+    });
+
+    const close = (): void => {
+      try { unsubscribe(); } finally {
+        if (!res.writableEnded) res.end();
+      }
+    };
+    req.on('close', close);
+    req.on('aborted', close);
+
+    try {
+      // Replay step: load historical events for the relevant sessions and
+      // stream those that come after lastEventId. With a session filter
+      // this is one log; without, we union across every session the agent
+      // has on disk.
+      const targetSessions = sessionFilter
+        ? [sessionFilter]
+        : await mount.runtime.listSessionViews({ includeMessages: false }).then((v) => v.map((s) => s.id));
+
+      for (const sid of targetSessions) {
+        const events = await mount.runtime.getSessionEvents(sid);
+        let startIdx = 0;
+        if (lastEventId) {
+          const idx = events.findIndex((e) => e.id === lastEventId);
+          startIdx = idx === -1 ? 0 : idx + 1;
+        }
+        for (let i = startIdx; i < events.length; i++) {
+          const event = events[i];
+          replayedIds.add(event.id);
+          writeSse(res, event);
+          if (res.writableEnded) {
+            unsubscribe();
+            return;
+          }
+        }
+      }
+
+      // Drain anything that arrived during replay, then go live.
+      mode = 'live';
+      for (const { event } of liveBuffer) {
+        if (replayedIds.has(event.id)) continue;
+        writeSse(res, event);
+      }
+      // Free the dedupe set once it's no longer needed.
+      replayedIds.clear();
+    } catch (error) {
+      this.logger.warn?.('[worker-daemon] event stream replay failed:', error);
+      close();
+      return;
+    }
+
+    // Periodic keepalive comment so intermediaries don't reap the
+    // connection during quiet periods.
+    const keepAlive = setInterval(() => {
+      if (res.writableEnded) {
+        clearInterval(keepAlive);
+        return;
+      }
+      res.write(': keepalive\n\n');
+    }, 25_000);
+    res.on('close', () => clearInterval(keepAlive));
+  }
 }
 
 // ============================================================
@@ -354,4 +480,20 @@ function parseQuery(url: string): Record<string, string> {
     out[decodeURIComponent(key)] = decodeURIComponent(value);
   }
   return out;
+}
+
+/**
+ * Subset of SessionEvent the SSE writer needs. We avoid pulling the full
+ * core type alias here because daemon.ts already treats events as opaque
+ * records once they cross the wire.
+ */
+interface SessionEventLike { id: string; type: string }
+
+function writeSse(res: ServerResponse, event: SessionEventLike): void {
+  // Newlines inside `data` must be escaped per the SSE spec, but
+  // JSON.stringify never produces literal newlines, so a single data line
+  // is always safe.
+  res.write(`id: ${event.id}\n`);
+  res.write(`event: ${event.type}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
 }

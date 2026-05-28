@@ -282,6 +282,28 @@ export const healthResponseSchema = z.object({
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 // ============================================================
+// Live event stream (Server-Sent Events)
+// ============================================================
+// Wire shape:
+//   GET /v1/agents/:id/events/stream?session=<sid>
+//     Accept: text/event-stream
+//     [optional] Last-Event-ID: <eventId>   ← resume cursor
+//
+//   Server emits one SSE message per SessionEvent:
+//     id: <event.id>
+//     event: <event.type>
+//     data: <JSON of the SessionEvent>
+//
+// `session` query param is optional — when present, the stream is
+// filtered to that session id. When omitted, all session events for
+// the agent flow through. Last-Event-ID lets clients reconnect after
+// drops without losing events; the server replays from after that id.
+// Streams stay open indefinitely; clients close to unsubscribe.
+
+export const SSE_LAST_EVENT_ID_HEADER = 'Last-Event-ID' as const;
+export const SSE_SESSION_QUERY_PARAM = 'session' as const;
+
+// ============================================================
 // Path constants
 // ============================================================
 
@@ -305,6 +327,8 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
   agentSessionEvents: (agentId: string, sessionId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+  agentEventsStream: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   wakesSchedule: `/${CLUSTER_PROTOCOL_VERSION}/wakes/schedule`,
 } as const;
 
@@ -323,6 +347,8 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
   agentSessionEvents: (agentId: string, sessionId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+  agentEventsStream: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   hasAgent: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/has`,
 } as const;

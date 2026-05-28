@@ -18,6 +18,7 @@ import {
   listAgentsResponseSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
+  SSE_LAST_EVENT_ID_HEADER,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
 import {
@@ -36,9 +37,12 @@ interface TestEntry { tag: string }
 
 async function pickPort(): Promise<number> {
   // Cheap port picker: open a server on 0, read the assigned port, close.
+  // We bind to all interfaces (matching how A8sServer / WorkerDaemon bind)
+  // so the port we probe matches the one they'll subsequently grab.
   const net = await import('node:net');
   return await new Promise<number>((resolve) => {
     const s = net.createServer();
+    s.unref();
     s.listen(0, () => {
       const port = (s.address() as AddressInfo).port;
       s.close(() => resolve(port));
@@ -348,6 +352,197 @@ describe('a8s-server + worker-daemon E2E', () => {
       .map((e) => (e as { value: number }).value);
     expect(seqValues).toEqual([0, 1, 2, 3, 4, 5, 6]);
 
+    await reg.withdraw(true);
+    await daemon.stop();
+    await worker.dispose();
+    await a8s.stop();
+  });
+
+  it('SSE event stream replays history then forwards live events', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+    });
+    const a8sInfo = await a8s.start();
+
+    const root = mkdtempSync(join(tmpdir(), 'wd-sse-'));
+    const wPort = await pickPort();
+    const env = makeTestWorkerEnv(root);
+    const worker = new Worker<TestEntry>({ env });
+    const daemon = new WorkerDaemon<TestEntry>({
+      worker,
+      workerId: 'wd-sse',
+      port: wPort,
+      bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace,
+        home: new AgentHome(wire.workspace),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const dInfo = await daemon.start();
+    const reg = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      workerId: 'wd-sse',
+      callbackUrl: dInfo.callbackUrl,
+      capacity: 4,
+      heartbeatTtlMs: 30_000,
+    });
+    const regResult = await reg.register();
+    daemon.setAuthToken(regResult.workerToken);
+
+    const agentWorkspace = mkdtempSync(join(tmpdir(), 'wd-sse-agent-'));
+    const createResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: {
+          agentId: 'a-sse',
+          workspace: agentWorkspace,
+          model: 'tier:strong',
+          ensureDefaultMcpConfig: false,
+        },
+        entry: { tag: 'sse' },
+      })),
+    });
+    expect(createResp.status).toBe(200);
+
+    const mount = worker.get('a-sse');
+    if (!mount) throw new Error('agent not mounted');
+    const session = await mount.runtime.createSession();
+    // Seed 3 historical events before opening the stream.
+    for (let i = 0; i < 3; i++) {
+      await mount.runtime.appendSessionEvent(session.id, {
+        type: 'metadata', key: 'pre', value: i,
+      });
+    }
+
+    // Open the stream against a8s (proxied to the worker).
+    const ctrl = new AbortController();
+    const streamResp = await fetch(
+      `${a8sInfo.url}${A8S_PATHS.agentEventsStream('a-sse')}?session=${encodeURIComponent(session.id)}`,
+      { headers: { accept: 'text/event-stream' }, signal: ctrl.signal },
+    );
+    expect(streamResp.status).toBe(200);
+    expect(streamResp.headers.get('content-type')).toMatch(/text\/event-stream/);
+    if (!streamResp.body) throw new Error('no body');
+
+    const reader = streamResp.body.getReader();
+    const decoder = new TextDecoder();
+    const received: Array<{ id: string; type: string; data: Record<string, unknown> }> = [];
+    let buffer = '';
+
+    const readUntil = async (predicate: () => boolean, timeoutMs: number): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate() && Date.now() < deadline) {
+        const race = await Promise.race([
+          reader.read(),
+          new Promise<{ value: undefined; done: true }>((resolve) =>
+            setTimeout(() => resolve({ value: undefined, done: true }), Math.max(50, deadline - Date.now())),
+          ),
+        ]);
+        if (race.done) break;
+        buffer += decoder.decode(race.value, { stream: true });
+        // Parse complete SSE messages (separated by blank line).
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          const lines = block.split('\n').filter((l) => !l.startsWith(':'));
+          const id = lines.find((l) => l.startsWith('id:'))?.slice(3).trim() ?? '';
+          const type = lines.find((l) => l.startsWith('event:'))?.slice(6).trim() ?? '';
+          const dataLine = lines.find((l) => l.startsWith('data:'))?.slice(5).trim() ?? '';
+          if (!id) continue;
+          received.push({ id, type, data: JSON.parse(dataLine) as Record<string, unknown> });
+        }
+      }
+    };
+
+    // Wait for the historical replay (session_start + 3 metadata).
+    await readUntil(() => received.length >= 4, 3_000);
+    expect(received.length).toBeGreaterThanOrEqual(4);
+    const seenTypes = received.map((r) => r.type);
+    expect(seenTypes[0]).toBe('session_start');
+    expect(seenTypes.filter((t) => t === 'metadata').length).toBeGreaterThanOrEqual(3);
+
+    // Append two more events and ensure they arrive live.
+    const liveBaseline = received.length;
+    await mount.runtime.appendSessionEvent(session.id, { type: 'metadata', key: 'live', value: 100 });
+    await mount.runtime.appendSessionEvent(session.id, { type: 'metadata', key: 'live', value: 101 });
+    await readUntil(() => received.length >= liveBaseline + 2, 3_000);
+    const liveSlice = received.slice(liveBaseline);
+    expect(liveSlice).toHaveLength(2);
+    expect(liveSlice.map((r) => (r.data as { value: number }).value)).toEqual([100, 101]);
+
+    // ---- Cancel + reconnect with Last-Event-ID; expect to *not* see the
+    // already-delivered events, but to receive any subsequent ones. ----
+    ctrl.abort();
+    try { await reader.cancel(); } catch { /* aborted */ }
+    const lastSeenId = received[received.length - 1].id;
+
+    // Append a post-disconnect event before reconnecting so the resume
+    // stream has something to deliver.
+    await mount.runtime.appendSessionEvent(session.id, { type: 'metadata', key: 'resume', value: 200 });
+
+    const ctrl2 = new AbortController();
+    const resumeResp = await fetch(
+      `${a8sInfo.url}${A8S_PATHS.agentEventsStream('a-sse')}?session=${encodeURIComponent(session.id)}`,
+      {
+        headers: {
+          accept: 'text/event-stream',
+          [SSE_LAST_EVENT_ID_HEADER]: lastSeenId,
+        },
+        signal: ctrl2.signal,
+      },
+    );
+    expect(resumeResp.status).toBe(200);
+    if (!resumeResp.body) throw new Error('no body');
+    const reader2 = resumeResp.body.getReader();
+    const resumeReceived: Array<{ id: string; data: Record<string, unknown> }> = [];
+    let buf2 = '';
+    const dec2 = new TextDecoder();
+    const readUntil2 = async (predicate: () => boolean, timeoutMs: number): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate() && Date.now() < deadline) {
+        const race = await Promise.race([
+          reader2.read(),
+          new Promise<{ value: undefined; done: true }>((resolve) =>
+            setTimeout(() => resolve({ value: undefined, done: true }), Math.max(50, deadline - Date.now())),
+          ),
+        ]);
+        if (race.done) break;
+        buf2 += dec2.decode(race.value, { stream: true });
+        let sep: number;
+        while ((sep = buf2.indexOf('\n\n')) !== -1) {
+          const block = buf2.slice(0, sep);
+          buf2 = buf2.slice(sep + 2);
+          const lines = block.split('\n').filter((l) => !l.startsWith(':'));
+          const id = lines.find((l) => l.startsWith('id:'))?.slice(3).trim() ?? '';
+          const dataLine = lines.find((l) => l.startsWith('data:'))?.slice(5).trim() ?? '';
+          if (!id) continue;
+          resumeReceived.push({ id, data: JSON.parse(dataLine) as Record<string, unknown> });
+        }
+      }
+    };
+    await readUntil2(() => resumeReceived.length >= 1, 3_000);
+    // First event after resume must be the post-disconnect one.
+    expect(resumeReceived.length).toBeGreaterThanOrEqual(1);
+    expect((resumeReceived[0].data as { value: number }).value).toBe(200);
+    // And we must not have re-delivered any id from before the cursor.
+    const beforeCursorIds = new Set(received.map((r) => r.id));
+    for (const r of resumeReceived) {
+      expect(beforeCursorIds.has(r.id)).toBe(false);
+    }
+
+    ctrl2.abort();
+    try { await reader2.cancel(); } catch { /* aborted */ }
     await reg.withdraw(true);
     await daemon.stop();
     await worker.dispose();

@@ -47,5 +47,6 @@ export type {
   SessionEventDraft,
   GetEventsOptions,
   EventLogStore,
+  EventLogListener,
   ContextStrategy,
 } from './types.js';

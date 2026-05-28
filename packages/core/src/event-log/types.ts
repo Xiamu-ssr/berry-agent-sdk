@@ -313,6 +313,9 @@ export interface GetEventsOptions {
   types?: SessionEventType[];
 }
 
+/** Function signature for a live event listener; called after a successful append. */
+export type EventLogListener = (sessionId: string, event: SessionEvent) => void;
+
 /**
  * Append-only event log storage. Events are never modified or deleted
  * (except by explicit `clear` for session reset).
@@ -340,6 +343,16 @@ export interface EventLogStore {
    * resolveSession won't rebuild old messages from it.
    */
   clear(sessionId: string): Promise<void>;
+
+  /**
+   * Subscribe to events as they are appended. Returns an unsubscribe
+   * function. Listeners fire after the on-disk append succeeds, so what
+   * the listener sees and what `getEvents()` will return on a later read
+   * are guaranteed consistent. Stream consumers (SSE, WebSocket) build
+   * on this — implementations that don't need live updates (purely
+   * historical readers) MAY return a no-op unsubscribe.
+   */
+  subscribe(listener: EventLogListener): () => void;
 }
 
 // ----- Context Strategy Interface -----

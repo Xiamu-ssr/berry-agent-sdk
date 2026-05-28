@@ -11,7 +11,13 @@ import { appendFile, mkdir, open, readdir, stat, unlink } from 'node:fs/promises
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isNoEntryError } from '@berry-agent/small-shared-core';
-import type { EventLogStore, SessionEvent, GetEventsOptions, SessionEventType } from './types.js';
+import type {
+  EventLogListener,
+  EventLogStore,
+  GetEventsOptions,
+  SessionEvent,
+  SessionEventType,
+} from './types.js';
 import { zSessionEvent } from './schema.js';
 
 const DEFAULT_TAIL_SCAN_BYTES = 16 * 1024 * 1024;
@@ -28,6 +34,7 @@ const TAIL_CHUNK_BYTES = 256 * 1024;
  */
 export class FileEventLogStore implements EventLogStore {
   private readonly sessionsDir: string;
+  private readonly listeners = new Set<EventLogListener>();
 
   /**
    * @param sessionsDir The sessions root directory (e.g. `{root}/sessions/`).
@@ -40,16 +47,19 @@ export class FileEventLogStore implements EventLogStore {
   /** Append a single event. */
   async append(sessionId: string, event: SessionEvent): Promise<void> {
     await this.ensureDir(sessionId);
-    const line = JSON.stringify(zSessionEvent.parse(event)) + '\n';
-    await appendFile(this.filePath(sessionId), line, 'utf-8');
+    const parsed = zSessionEvent.parse(event);
+    await appendFile(this.filePath(sessionId), JSON.stringify(parsed) + '\n', 'utf-8');
+    this.fanOut(sessionId, parsed);
   }
 
   /** Append multiple events in one write. */
   async appendBatch(sessionId: string, events: SessionEvent[]): Promise<void> {
     if (events.length === 0) return;
     await this.ensureDir(sessionId);
-    const lines = events.map(e => JSON.stringify(zSessionEvent.parse(e))).join('\n') + '\n';
+    const parsed = events.map(e => zSessionEvent.parse(e));
+    const lines = parsed.map(e => JSON.stringify(e)).join('\n') + '\n';
     await appendFile(this.filePath(sessionId), lines, 'utf-8');
+    for (const event of parsed) this.fanOut(sessionId, event);
   }
 
   /** Read events with optional filtering. Handles crash recovery (truncates incomplete last line). */
@@ -120,6 +130,22 @@ export class FileEventLogStore implements EventLogStore {
         return;
       }
       throw err;
+    }
+  }
+
+  /** Live tail. Listener invoked after every successful append, in-process. */
+  subscribe(listener: EventLogListener): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private fanOut(sessionId: string, event: SessionEvent): void {
+    if (this.listeners.size === 0) return;
+    for (const listener of this.listeners) {
+      try { listener(sessionId, event); } catch {
+        // Listener errors must never break the append path — the disk
+        // write already succeeded. Just drop the notification.
+      }
     }
   }
 

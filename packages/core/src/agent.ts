@@ -43,7 +43,7 @@ import type {
 } from '@berry-agent/small-shared-core';
 import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import type { Hand, HandRegistry, HandToolAdapterOptions } from './hands.js';
-import type { EventLogStore, SessionEvent, SessionEventDraft } from './event-log/types.js';
+import type { EventLogListener, EventLogStore, GetEventsOptions, SessionEvent, SessionEventDraft } from './event-log/types.js';
 import type { AgentMemory, ProjectContext } from './workspace/types.js';
 import type { MemoryProvider } from './memory/provider.js';
 import { saveAgentConfigSync, type ReasoningEffort } from './workspace/initializer.js';
@@ -402,10 +402,22 @@ export class Agent {
    */
   async getSessionEvents(
     sessionId: string,
-    options?: import('./event-log/types.js').GetEventsOptions,
+    options?: GetEventsOptions,
   ): Promise<SessionEvent[]> {
     if (!this.eventLogStore) return [];
     return this.eventLogStore.getEvents(sessionId, options);
+  }
+
+  /**
+   * Subscribe to all session events appended to the SDK-owned event log.
+   * Returns an unsubscribe function; no-op when no event log is wired.
+   * Listeners must filter by sessionId themselves if they only care about
+   * one session — this keeps the contract simple and matches the disk
+   * layout (one file per session).
+   */
+  subscribeSessionEvents(listener: EventLogListener): () => void {
+    if (!this.eventLogStore) return () => {};
+    return this.eventLogStore.subscribe(listener);
   }
 
   /** List all sessions as hydrated SDK views, newest first. */
