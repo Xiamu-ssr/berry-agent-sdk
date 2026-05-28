@@ -15,6 +15,8 @@ import {
   A8S_PATHS,
   ADMIN_AUTH_HEADER,
   adminAuthHeader,
+  createAgentRequestSchema,
+  createAgentResponseSchema,
   listAgentsResponseSchema,
   operatorClusterReportSchema,
   operatorJoinScriptRequestSchema,
@@ -22,12 +24,18 @@ import {
   operatorLeaseListResponseSchema,
   operatorOkResponseSchema,
   operatorWorkerListResponseSchema,
+  sendRequestSchema,
+  sendResponseSchema,
+  type CreateAgentRequest,
+  type CreateAgentResponse,
   type ListAgentsResponse,
   type OperatorClusterReport,
   type OperatorJoinScriptRequest,
   type OperatorJoinScriptResponse,
   type OperatorLeaseListResponse,
   type OperatorWorkerListResponse,
+  type SendRequest,
+  type SendResponse,
 } from '@berry-agent/cluster-protocol';
 
 export interface A8sOperatorClientOptions {
@@ -101,6 +109,44 @@ export class A8sOperatorClient {
       throw new Error(`a8s POST join-script failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
     }
     return operatorJoinScriptResponseSchema.parse(await resp.json());
+  }
+
+  // ----- Agent lifecycle / data plane (admin-scope) -----
+
+  /** Create a cluster agent. a8s scheduler picks the worker. */
+  async createAgent(input: CreateAgentRequest): Promise<CreateAgentResponse> {
+    const body = JSON.stringify(createAgentRequestSchema.parse(input));
+    const resp = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: {
+        [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST createAgent failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return createAgentResponseSchema.parse(await resp.json());
+  }
+
+  /** Send a turn to a cluster agent and await its full turn result. */
+  async sendToAgent(agentId: string, input: SendRequest): Promise<SendResponse> {
+    const body = JSON.stringify(sendRequestSchema.parse(input));
+    const resp = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.agentSend(agentId)}`, {
+      method: 'POST',
+      headers: {
+        [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST send failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return sendResponseSchema.parse(await resp.json());
   }
 
   // ----- Internal HTTP helpers -----
