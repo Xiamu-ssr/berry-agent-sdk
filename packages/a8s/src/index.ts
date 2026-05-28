@@ -25,6 +25,9 @@ export type {
   InProcessWorkerNodeOptions,
 } from './worker-node.js';
 
+export { HttpWorkerNode } from './http-worker-node.js';
+export type { HttpWorkerNodeOptions } from './http-worker-node.js';
+
 export { InProcessAgentSession } from './agent-session.js';
 export type {
   AgentSession,
