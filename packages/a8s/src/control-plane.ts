@@ -57,7 +57,13 @@ export class ControlPlane<TEntry = unknown> {
   private readonly workers = new Map<string, WorkerNode<TEntry>>();
   private readonly assignments = new Map<string, string>(); // agentId → workerId
   private readonly scheduler: Scheduler<TEntry>;
-  private readonly orchestrator: RuntimeOrchestrator;
+  /**
+   * Durable orchestration store. Exposed (read-only via TS) so a8s-server
+   * bootstrap helpers and tests can drive the same orchestrator that the
+   * plane uses for lease acquisition, without going through an HTTP round
+   * trip back into ourselves.
+   */
+  readonly orchestrator: RuntimeOrchestrator;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
 
   constructor(options: ControlPlaneOptions<TEntry>) {

@@ -19,8 +19,13 @@
   },
   "dependencies": {
     "@berry-agent/a8s": "*",
+    "@berry-agent/a8s-admin": "*",
     "@berry-agent/cluster-protocol": "*",
-    "@berry-agent/runtime": "*"
+    "@berry-agent/core": "*",
+    "@berry-agent/models": "*",
+    "@berry-agent/observe": "*",
+    "@berry-agent/runtime": "*",
+    "@berry-agent/worker": "*"
   },
   "optionalDependencies": {
     "@berry-agent/runtime-sqlite": "*"

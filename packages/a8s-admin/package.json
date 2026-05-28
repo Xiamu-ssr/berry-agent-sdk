@@ -1,0 +1,28 @@
+{
+  "name": "@berry-agent/a8s-admin",
+  "version": "0.5.0-alpha.1",
+  "description": "Operator client + Hand for agent-driven a8s cluster administration.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "test": "vitest run --maxWorkers=2"
+  },
+  "dependencies": {
+    "@berry-agent/cluster-protocol": "*",
+    "@berry-agent/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "license": "MIT"
+}

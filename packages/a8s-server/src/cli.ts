@@ -13,13 +13,18 @@
 //   2. Environment variables (BERRY_A8S_PORT, BERRY_A8S_STORE)
 //   3. Defaults (port=8080, store=memory)
 
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
+import { DefaultCredentialStore } from '@berry-agent/core';
+import type { ModelsRegistry } from '@berry-agent/models';
+import { createObserver } from '@berry-agent/observe';
 import {
   MemoryRuntimeOrchestrationStore,
   RuntimeOrchestrator,
   type RuntimeOrchestrationStore,
 } from '@berry-agent/runtime';
 import { A8sServer } from './server.js';
+import { ensureAdminAgent, ensureLocalWorker } from './bootstrap.js';
 
 const USAGE = `berry-a8s — Berry Agent control-plane service
 
@@ -28,20 +33,36 @@ Usage:
   berry-a8s --help
 
 Options:
-  --port <n>          HTTP port to listen on (default: 8080, env BERRY_A8S_PORT)
-  --store <spec>      Orchestration store. One of:
-                        memory                   (default, in-process only)
-                        sqlite:///path/to.db     (requires @berry-agent/runtime-sqlite)
-                      env BERRY_A8S_STORE
-  --admin-token <s>   Shared secret required on /v1/agents, /v1/wakes, and
-                      operator endpoints. Workers present it once at
-                      registration as their bootstrap token.
-                      env BERRY_A8S_ADMIN_TOKEN
-                      If omitted, a8s runs in INSECURE DEV MODE — all
-                      product-scope endpoints accept any caller. Never
-                      use this for a real deployment.
-  --version           Print version
-  --help              Show this help
+  --port <n>            HTTP port to listen on (default: 8080, env BERRY_A8S_PORT)
+  --store <spec>        Orchestration store. One of:
+                          memory                   (default, in-process only)
+                          sqlite:///path/to.db     (requires @berry-agent/runtime-sqlite)
+                        env BERRY_A8S_STORE
+  --admin-token <s>     Shared secret required on /v1/agents, /v1/wakes, and
+                        operator endpoints. Workers present it once at
+                        registration as their bootstrap token.
+                        env BERRY_A8S_ADMIN_TOKEN
+                        If omitted, a8s runs in INSECURE DEV MODE — all
+                        product-scope endpoints accept any caller. Never
+                        use this for a real deployment.
+
+  --local-worker        Spin up an in-process worker on the same host (so a
+                        fresh a8s has capacity > 0 without deploying a
+                        separate worker first). Default: off.
+  --data-root <path>    Local worker's data dir.
+                        Default: /var/berry/a8s/local-worker
+  --capacity <n>        Local worker capacity (default 4).
+
+  --admin-agent         Ensure a 'berry-admin' agent is mounted on the local
+                        worker, with cluster-admin tools installed. Implies
+                        --local-worker. Requires --models-config so the
+                        agent's LLM provider can resolve. Default: off.
+  --models-config <p>   JSON file with { providers, models, tiers } in
+                        @berry-agent/models shape. Required when
+                        --local-worker or --admin-agent is set.
+
+  --version             Print version
+  --help                Show this help
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -68,6 +89,11 @@ async function main(argv: string[]): Promise<number> {
       port: { type: 'string' },
       store: { type: 'string' },
       'admin-token': { type: 'string' },
+      'local-worker': { type: 'boolean' },
+      'admin-agent': { type: 'boolean' },
+      'data-root': { type: 'string' },
+      capacity: { type: 'string' },
+      'models-config': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -81,6 +107,36 @@ async function main(argv: string[]): Promise<number> {
   const storeSpec = values.store ?? process.env.BERRY_A8S_STORE ?? 'memory';
   const store = await resolveStore(storeSpec);
   const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN;
+  const wantLocalWorker = !!values['local-worker'] || !!values['admin-agent'];
+  const wantAdminAgent = !!values['admin-agent'];
+  const dataRoot = values['data-root'] ?? '/var/berry/a8s/local-worker';
+  const capacity = values.capacity ? parseInt(values.capacity, 10) : 4;
+  if (capacity < 0 || !Number.isFinite(capacity)) {
+    process.stderr.write(`invalid --capacity: ${values.capacity}\n`);
+    return 2;
+  }
+
+  let registry: ModelsRegistry | undefined;
+  if (wantLocalWorker) {
+    if (!values['models-config']) {
+      process.stderr.write('--local-worker / --admin-agent requires --models-config <path>\n');
+      return 2;
+    }
+    try {
+      registry = JSON.parse(readFileSync(values['models-config'], 'utf-8')) as ModelsRegistry;
+    } catch (err) {
+      process.stderr.write(
+        `failed to load --models-config ${values['models-config']}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return 1;
+    }
+  }
+  if (wantAdminAgent && !adminToken) {
+    process.stderr.write(
+      '--admin-agent requires --admin-token: the admin agent calls the operator API and needs to authenticate against itself.\n',
+    );
+    return 2;
+  }
 
   const orchestrator = new RuntimeOrchestrator({ store });
   const server = new A8sServer({
@@ -92,6 +148,27 @@ async function main(argv: string[]): Promise<number> {
 
   const info = await server.start();
   process.stdout.write(`🍓 berry-a8s ready at ${info.url}\n`);
+
+  if (wantLocalWorker && registry) {
+    const env = {
+      registry,
+      credentials: new DefaultCredentialStore({ filePath: `${dataRoot}/creds.json` }),
+      observer: createObserver({ dbPath: `${dataRoot}/observe.db` }),
+    };
+    const worker = await ensureLocalWorker(server, {
+      env,
+      dataRoot,
+      capacity,
+    });
+    process.stdout.write(`   local worker mounted (capacity ${capacity}, data ${dataRoot})\n`);
+
+    if (wantAdminAgent && adminToken) {
+      const agentId = await ensureAdminAgent(server, worker, dataRoot, adminToken, {
+        a8sPort: port,
+      });
+      process.stdout.write(`   berry-admin agent ready (id ${agentId})\n`);
+    }
+  }
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

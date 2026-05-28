@@ -35,6 +35,7 @@ import {
   WorkerRegistrationClient,
 } from '@berry-agent/worker-daemon';
 import { A8sServer } from '../server.js';
+import { ensureAdminAgent, ensureLocalWorker } from '../bootstrap.js';
 
 interface TestEntry { tag: string }
 
@@ -764,6 +765,59 @@ describe('a8s-server + worker-daemon E2E', () => {
     await w1.worker.dispose();
     await w2.daemon.stop();
     await w2.worker.dispose();
+    await a8s.stop();
+  });
+
+  it('bootstrap: local worker + admin agent appear in operator view', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'boot-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer boot-secret' };
+
+    const root = mkdtempSync(join(tmpdir(), 'a8s-boot-'));
+    const env = makeTestWorkerEnv(root);
+    const worker = await ensureLocalWorker(a8s, {
+      env,
+      dataRoot: root,
+      capacity: 4,
+      workerId: 'a8s-local',
+    });
+    const agentId = await ensureAdminAgent(a8s, worker, root, 'boot-secret', {
+      a8sPort,
+    });
+    expect(agentId).toBe('berry-admin');
+
+    // ---- Local worker appears in operator list ----
+    const wlResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders });
+    const wl = operatorWorkerListResponseSchema.parse(await wlResp.json());
+    expect(wl.workers.find((w) => w.workerId === 'a8s-local')).toBeDefined();
+
+    // ---- Admin agent shows up as an active assignment ----
+    const agentsResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
+    const agents = listAgentsResponseSchema.parse(await agentsResp.json());
+    const admin = agents.agents.find((a) => a.agentId === 'berry-admin');
+    expect(admin).toBeDefined();
+    expect(admin!.workerId).toBe('a8s-local');
+
+    // ---- Admin agent has the cluster-admin hand mounted ----
+    const mount = worker.get('berry-admin');
+    expect(mount).toBeDefined();
+    expect(mount!.runtime.hasHand?.('cluster-admin')).toBe(true);
+
+    // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
+    await ensureAdminAgent(a8s, worker, root, 'boot-secret', { a8sPort });
+    const agentsResp2 = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
+    const agents2 = listAgentsResponseSchema.parse(await agentsResp2.json());
+    expect(agents2.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
+
+    await worker.dispose();
     await a8s.stop();
   });
 });
