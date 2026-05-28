@@ -3,67 +3,21 @@
 // ============================================================
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
-import { createObserver } from '@berry-agent/observe';
-import type { ModelsRegistry } from '@berry-agent/models';
 import {
   MemoryRuntimeOrchestrationStore,
   RuntimeOrchestrator,
 } from '@berry-agent/runtime';
 import { Worker, WorkerLeaseConflictError } from '../worker.js';
-import type { WorkerAgentSpec, WorkerEnvironment } from '../types.js';
-
-function buildRegistry(): ModelsRegistry {
-  return {
-    providers: {
-      'test-provider': {
-        id: 'test-provider',
-        presetId: 'anthropic',
-        apiKey: 'sk-test',
-      },
-    },
-    models: {
-      'claude-sonnet-4-5': {
-        id: 'claude-sonnet-4-5',
-        contextWindow: 200_000,
-        providers: [{ providerId: 'test-provider' }],
-      },
-    },
-    tiers: { strong: 'claude-sonnet-4-5' },
-  } as ModelsRegistry;
-}
-
-function makeEnv(root: string): WorkerEnvironment {
-  const observer = createObserver({ dbPath: ':memory:' });
-  return {
-    registry: buildRegistry(),
-    credentials: new DefaultCredentialStore(join(root, 'creds.json')),
-    observer,
-  };
-}
-
-function makeSpec(agentId: string, root: string): WorkerAgentSpec {
-  const workspace = join(root, agentId);
-  return {
-    agentId,
-    workspace,
-    home: new AgentHome(workspace),
-    model: 'tier:strong',
-    ensureDefaultMcpConfig: false,
-  };
-}
+import { makeTestWorkerSetup } from '../test-utils.js';
 
 interface TestEntry { tag: string }
 
 describe('Worker', () => {
   it('runs an agent and stops it (single-process mode)', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
+    const { env, spec } = makeTestWorkerSetup('worker-class-test-');
+    const worker = new Worker<TestEntry>({ env });
 
-    const mount = await worker.runAgent('alice', { tag: 'a' }, makeSpec('alice', root));
+    const mount = await worker.runAgent('alice', { tag: 'a' }, spec('alice'));
     expect(mount.id).toBe('alice');
     expect(mount.entry.tag).toBe('a');
     expect(worker.has('alice')).toBe(true);
@@ -75,9 +29,9 @@ describe('Worker', () => {
   });
 
   it('updates entry without rebuilding runtime', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
-    await worker.runAgent('bob', { tag: 'v1' }, makeSpec('bob', root));
+    const { env, spec } = makeTestWorkerSetup('worker-class-test-');
+    const worker = new Worker<TestEntry>({ env });
+    await worker.runAgent('bob', { tag: 'v1' }, spec('bob'));
     const firstRuntime = worker.runtime('bob');
 
     worker.updateEntry('bob', { tag: 'v2' });
@@ -88,12 +42,12 @@ describe('Worker', () => {
   });
 
   it('replaces runtime via replaceAgent', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
-    await worker.runAgent('carol', { tag: '1' }, makeSpec('carol', root));
+    const { env, spec } = makeTestWorkerSetup('worker-class-test-');
+    const worker = new Worker<TestEntry>({ env });
+    await worker.runAgent('carol', { tag: '1' }, spec('carol'));
     const before = worker.runtime('carol');
 
-    await worker.replaceAgent('carol', { tag: '2' }, makeSpec('carol', root));
+    await worker.replaceAgent('carol', { tag: '2' }, spec('carol'));
     const after = worker.runtime('carol');
     expect(after).not.toBe(before);
     expect(worker.get('carol')?.entry.tag).toBe('2');
@@ -102,13 +56,13 @@ describe('Worker', () => {
   });
 
   it('starts and stops a durable worker entry via supervisor', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
+    const { env } = makeTestWorkerSetup('worker-class-test-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
 
     const worker = new Worker<TestEntry>({
-      env: makeEnv(root),
+      env,
       supervisor: {
         orchestrator,
         holderId: 'process-A',
@@ -130,13 +84,14 @@ describe('Worker', () => {
   });
 
   it('two workers fail over: A holds, B refused, A evicts, B takes over', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
+    const { env: envA, spec } = makeTestWorkerSetup('worker-class-test-');
+    const { env: envB } = makeTestWorkerSetup('worker-class-test-');
     const store = new MemoryRuntimeOrchestrationStore();
     let now = 1000;
     const orchestrator = new RuntimeOrchestrator({ store, now: () => now });
 
     const workerA = new Worker<TestEntry>({
-      env: makeEnv(root),
+      env: envA,
       supervisor: {
         orchestrator,
         holderId: 'process-A',
@@ -144,11 +99,11 @@ describe('Worker', () => {
         worker: { capacity: 4, heartbeatTtlMs: 5_000 },
       },
     });
-    await workerA.runAgent('shared', { tag: 'a' }, makeSpec('shared', root));
+    await workerA.runAgent('shared', { tag: 'a' }, spec('shared'));
     expect(workerA.has('shared')).toBe(true);
 
     const workerB = new Worker<TestEntry>({
-      env: makeEnv(root),
+      env: envB,
       supervisor: {
         orchestrator,
         holderId: 'process-B',
@@ -159,7 +114,7 @@ describe('Worker', () => {
     await workerB.startWorker();
 
     // B refused while A is alive.
-    await expect(workerB.runAgent('shared', { tag: 'b' }, makeSpec('shared', root)))
+    await expect(workerB.runAgent('shared', { tag: 'b' }, spec('shared')))
       .rejects.toBeInstanceOf(WorkerLeaseConflictError);
 
     // Time passes past A's heartbeat TTL. B refreshes its own heartbeat
@@ -168,7 +123,7 @@ describe('Worker', () => {
     await orchestrator.heartbeatWorker(workerB.worker()!.workerId, 5_000);
     await workerB.evictStaleWorkers();
 
-    const taken = await workerB.runAgent('shared', { tag: 'b' }, makeSpec('shared', root));
+    const taken = await workerB.runAgent('shared', { tag: 'b' }, spec('shared'));
     expect(taken.entry.tag).toBe('b');
 
     await workerA.dispose();
@@ -176,13 +131,13 @@ describe('Worker', () => {
   });
 
   it('exposes orchestrator getter for hosts that need wake/capacity queries', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
+    const { env } = makeTestWorkerSetup('worker-class-test-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
 
     const worker = new Worker<TestEntry>({
-      env: makeEnv(root),
+      env,
       supervisor: {
         orchestrator,
         holderId: 'process-X',
@@ -195,12 +150,12 @@ describe('Worker', () => {
   });
 
   it('worker() returns RuntimeWorker entry once supervisor mode is active', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'worker-class-test-'));
+    const { env } = makeTestWorkerSetup('worker-class-test-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
     const worker = new Worker<TestEntry>({
-      env: makeEnv(root),
+      env,
       supervisor: {
         orchestrator,
         holderId: 'process-Y',

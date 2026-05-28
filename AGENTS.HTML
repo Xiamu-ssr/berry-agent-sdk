@@ -92,13 +92,16 @@
     <thead><tr><th>包</th><th>一句话职责</th></tr></thead>
     <tbody>
       <tr><td><code>@berry-agent/core</code></td><td>Agent loop、session/event、provider adapter、content/chat schema、hands、execution env、credential、workspace data。</td></tr>
-      <tr><td><code>@berry-agent/runtime</code></td><td>把 host 输入组装成 managed runtime；管理 live mount、lease、wake、worker、environment hand。</td></tr>
+      <tr><td><code>@berry-agent/runtime</code></td><td>SDK harness 装配 + 持久化 orchestration store contract:<code>ManagedAgentRuntime</code>、<code>RuntimeOrchestrator</code> (lease/wake/worker 状态机,走 transact())、<code>ManagedRuntimeSupervisor</code> (单进程 lease 续约 + 跨进程 worker 心跳/驱逐)。</td></tr>
+      <tr><td><code>@berry-agent/runtime-sqlite</code></td><td><code>RuntimeOrchestrationStore</code> 的 SQLite 实现:WAL + <code>BEGIN IMMEDIATE</code>,多 worker 进程在同一文件上抢 lease/capacity 安全。</td></tr>
+      <tr><td><code>@berry-agent/worker</code></td><td>单机 worker daemon:<code>buildAgentRuntime()</code> 工厂、<code>Worker</code> 类(N 个 agent mount + 可选 supervisor 接入)、<code>/test-utils</code> subpath 供下游测试复用。</td></tr>
+      <tr><td><code>@berry-agent/a8s</code></td><td>cluster control plane:<code>ControlPlane</code> (createAgent/deleteAgent/migrateAgent/openAgent/hydrateAssignments/capacityReport)、<code>WorkerNode</code> 契约 (in-process 已实现,HTTP/gRPC 远程版留 M4)、<code>AgentSession</code> 数据面句柄、可插拔 <code>Scheduler</code>(least-loaded / round-robin)。</td></tr>
       <tr><td><code>@berry-agent/models</code></td><td>provider preset、model binding、tier、context window、model list。</td></tr>
       <tr><td><code>@berry-agent/tools-common</code></td><td>本地 workspace hand、file/search/shell/web 工具、sandbox/container/remote execution environment。</td></tr>
-      <tr><td><code>@berry-agent/mcp</code></td><td>MCP config cascade、默认 Playwright 模板、server lifecycle、Hand projection。</td></tr>
+      <tr><td><code>@berry-agent/mcp</code></td><td>MCP config cascade、默认 Playwright 模板、server lifecycle、Hand projection、<code>/schema</code> subpath 浏览器安全。</td></tr>
       <tr><td><code>@berry-agent/safe</code></td><td>guard、approval、classifier、project safety、audit。</td></tr>
       <tr><td><code>@berry-agent/observe</code></td><td>runtime telemetry 和 observe API/UI 数据契约。</td></tr>
-      <tr><td><code>@berry-agent/team</code></td><td>leader/teammate hand、team state、worklist、shared project artifacts。</td></tr>
+      <tr><td><code>@berry-agent/team</code></td><td>leader/teammate hand、team state、worklist、shared project artifacts;<code>/schema</code> + <code>/types</code> subpaths 浏览器安全。</td></tr>
       <tr><td><code>@berry-agent/memory-file</code></td><td>文件型长期记忆 provider。</td></tr>
       <tr><td><code>@berry-agent/prompt-pack</code></td><td>基础行为、compaction、memory flush、handoff/resume prompts。</td></tr>
       <tr><td><code>@berry-agent/config</code></td><td>SDK 级配置 schema 和 loader。</td></tr>
@@ -138,16 +141,18 @@
   </table>
 
   <h2>Platform 演进路线</h2>
-  <p>SDK 是底层 — Anthropic 4+1 单 agent 的完整实现。Berry 完整产品蓝图是 4 层:</p>
+  <p>Berry 完整产品蓝图是 4 层。<strong>SDK 层 + Worker 层 + Control Plane 层都已实现</strong>;Products 层(berry-claw 等)在 SDK monorepo 之外。</p>
   <pre><code>[Products]   berry-claw / 其他 agent 产品 (面向用户)
                   ↓ API
-[Control]    @berry-agent/a8s          (跨机器调度，类 Nomad)
+[Control]    @berry-agent/a8s          ✅ 已实现 (in-process; HTTP 远程版留 M4)
                   ↓
-[Worker]     @berry-agent/worker × N    (单机 daemon，含 SDK runtime)
+[Worker]     @berry-agent/worker × N    ✅ 已实现 (Worker + buildAgentRuntime)
                   ↓ import
-[Runtime]    @berry-agent/runtime + core + ... (本 SDK)</code></pre>
-  <p>SDK 的角色到 Runtime 层为止 — Worker 和 a8s 是后续工作。已经把 lease/wake/worker registry/cross-process failover 原语备齐，a8s 不需要重新发明，只需暴露成 control plane API。</p>
-  <p>规模目标:<strong>1 本地 + 几台到几十台云</strong>,不是 k8s 规模。anchor capability 是 <strong>long-running task</strong>:agent 跑几小时几天不丢。详细见 <code>docs/anthropic-managed-agents-notes.md</code> 的 Product Strategy 段。</p>
+[Runtime]    @berry-agent/runtime + core + ... ✅ 已实现 (Anthropic 4+1 单 agent 完整)
+                  ↓
+[Store]      @berry-agent/runtime-sqlite ✅ 已实现 (Memory/File 也都在 runtime 内)</code></pre>
+  <p><strong>当前实现状态</strong>:产品代码可以 <code>createManagedRuntime()</code> 单 agent 直接用,或者 <code>new Worker({...})</code> 单机管 N 个 agent,或者 <code>new ControlPlane({...})</code> + 多个 <code>InProcessWorkerNode</code> 做单机 cluster。多机器形态等 M4 的 HTTP <code>WorkerNode</code> 实现。</p>
+  <p>规模目标:<strong>1 本地 + 几台到几十台云</strong>,不是 k8s 规模。anchor capability 是 <strong>long-running task</strong>:agent 跑几小时几天不丢。详细路线 + 已完成项见 <code>docs/anthropic-managed-agents-notes.md</code>。</p>
 
   <h2>开发命令</h2>
   <pre><code>npm install

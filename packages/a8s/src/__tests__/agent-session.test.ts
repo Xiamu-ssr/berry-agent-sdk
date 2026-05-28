@@ -10,71 +10,31 @@
 // up here instead of in product code.
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
-import { createObserver } from '@berry-agent/observe';
-import type { ModelsRegistry } from '@berry-agent/models';
 import {
   MemoryRuntimeOrchestrationStore,
   RuntimeOrchestrator,
 } from '@berry-agent/runtime';
-import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
+import { Worker } from '@berry-agent/worker';
+import { makeTestWorkerSetup } from '@berry-agent/worker/test-utils';
 import {
   ControlPlane,
   InProcessAgentSession,
   InProcessWorkerNode,
 } from '../index.js';
 
-function buildRegistry(): ModelsRegistry {
-  return {
-    providers: {
-      'test-provider': { id: 'test-provider', presetId: 'anthropic', apiKey: 'sk-test' },
-    },
-    models: {
-      'claude-sonnet-4-5': {
-        id: 'claude-sonnet-4-5',
-        contextWindow: 200_000,
-        providers: [{ providerId: 'test-provider' }],
-      },
-    },
-    tiers: { strong: 'claude-sonnet-4-5' },
-  } as ModelsRegistry;
-}
-
-function makeEnv(root: string): WorkerEnvironment {
-  return {
-    registry: buildRegistry(),
-    credentials: new DefaultCredentialStore(join(root, 'creds.json')),
-    observer: createObserver({ dbPath: ':memory:' }),
-  };
-}
-
-function makeSpec(agentId: string, root: string): WorkerAgentSpec {
-  const workspace = join(root, agentId);
-  return {
-    agentId,
-    workspace,
-    home: new AgentHome(workspace),
-    model: 'tier:strong',
-    ensureDefaultMcpConfig: false,
-  };
-}
-
 interface TestEntry { tag: string }
 
 describe('ControlPlane.openAgent', () => {
   it('returns an AgentSession that delegates data-plane reads to the runtime', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'a8s-session-'));
+    const { env, spec } = makeTestWorkerSetup('a8s-session-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
+    const worker = new Worker<TestEntry>({ env });
     const plane = new ControlPlane<TestEntry>({ orchestrator });
     plane.addWorker(new InProcessWorkerNode('w1', worker));
 
-    await plane.createAgent(makeSpec('a1', root), { tag: 'one' });
+    await plane.createAgent(spec('a1'), { tag: 'one' });
     const session = await plane.openAgent('a1');
 
     expect(session).toBeInstanceOf(InProcessAgentSession);
@@ -110,14 +70,14 @@ describe('ControlPlane.openAgent', () => {
   });
 
   it('throws when the owning worker has been removed', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'a8s-session-'));
+    const { env, spec } = makeTestWorkerSetup('a8s-session-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
+    const worker = new Worker<TestEntry>({ env });
     const plane = new ControlPlane<TestEntry>({ orchestrator });
     plane.addWorker(new InProcessWorkerNode('w1', worker));
-    await plane.createAgent(makeSpec('a1', root), { tag: '' });
+    await plane.createAgent(spec('a1'), { tag: '' });
 
     // Simulate a stale assignment: the worker is gone but plane.assignments
     // still points at it. removeWorker() also clears assignments, so we
@@ -130,14 +90,14 @@ describe('ControlPlane.openAgent', () => {
   });
 
   it('throws when the worker has no live mount for the agent', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'a8s-session-'));
+    const { env, spec } = makeTestWorkerSetup('a8s-session-');
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
+    const worker = new Worker<TestEntry>({ env });
     const plane = new ControlPlane<TestEntry>({ orchestrator });
     plane.addWorker(new InProcessWorkerNode('w1', worker));
-    await plane.createAgent(makeSpec('a1', root), { tag: '' });
+    await plane.createAgent(spec('a1'), { tag: '' });
 
     // Drop the live mount under the plane's feet (e.g. crash/forced unmount).
     await worker.stopAgent('a1');
@@ -180,8 +140,8 @@ describe('ControlPlane.hydrateAssignments', () => {
       ttlMs: 60_000,
     });
 
-    const root = mkdtempSync(join(tmpdir(), 'a8s-session-'));
-    const worker = new Worker<TestEntry>({ env: makeEnv(root) });
+    const { env } = makeTestWorkerSetup('a8s-session-');
+    const worker = new Worker<TestEntry>({ env });
     const plane = new ControlPlane<TestEntry>({ orchestrator });
     plane.addWorker(new InProcessWorkerNode('w1', worker));
 
