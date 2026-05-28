@@ -38,6 +38,8 @@ Options:
   --worker-id <id>    Stable worker id (overrides config.workerId, default: hostname)
   --data-root <path>  Root dir for worker data (overrides config.dataRoot,
                       default: /var/berry/workers/<workerId>)
+  --admin-token <s>   Bootstrap secret presented to a8s on join. Overrides
+                      config.adminToken; env BERRY_A8S_ADMIN_TOKEN.
   --version           Print version
   --help              Show this help
 
@@ -64,6 +66,13 @@ const configSchema = z.object({
   bindHost: z.string().min(1).optional(),
   /** a8s control plane base URL. */
   a8s: z.string().url(),
+  /**
+   * Bootstrap secret for the join handshake — same value the a8s
+   * operator set with --admin-token. Overridable via --admin-token or
+   * BERRY_A8S_ADMIN_TOKEN. Optional only because a8s may run in dev
+   * mode without auth; required for any production deployment.
+   */
+  adminToken: z.string().min(1).optional(),
   /** Worker capacity. */
   capacity: z.number().int().nonnegative(),
   /** Heartbeat TTL in milliseconds. */
@@ -121,6 +130,7 @@ async function main(argv: string[]): Promise<number> {
       a8s: { type: 'string' },
       'worker-id': { type: 'string' },
       'data-root': { type: 'string' },
+      'admin-token': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -211,6 +221,7 @@ async function main(argv: string[]): Promise<number> {
     capacity: config.capacity,
     heartbeatTtlMs: config.heartbeatTtlMs,
     labels: config.labels,
+    adminToken: values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken,
   });
 
   const regResult = await reg.register();

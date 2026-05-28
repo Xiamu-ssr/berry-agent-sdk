@@ -16,6 +16,9 @@ import {
   createAgentRequestSchema,
   createAgentResponseSchema,
   listAgentsResponseSchema,
+  operatorClusterReportSchema,
+  operatorLeaseListResponseSchema,
+  operatorWorkerListResponseSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
   SSE_LAST_EVENT_ID_HEADER,
@@ -226,6 +229,91 @@ describe('a8s-server + worker-daemon E2E', () => {
     const body = await resp.json() as { ok: boolean; version: string };
     expect(body.ok).toBe(true);
     expect(body.version).toBe('0.5.0-test');
+    await a8s.stop();
+  });
+
+  it('admin token gates product endpoints; workers can still join with it as bootstrap', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'admin-secret',
+    });
+    const a8sInfo = await a8s.start();
+
+    // ---- Product calls without token: 401 ----
+    const noAuth = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`);
+    expect(noAuth.status).toBe(401);
+
+    // ---- Wrong token: 401 ----
+    const wrongAuth = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      headers: { authorization: 'Bearer not-the-secret' },
+    });
+    expect(wrongAuth.status).toBe(401);
+
+    // ---- Correct token: 200 ----
+    const ok = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      headers: { authorization: 'Bearer admin-secret' },
+    });
+    expect(ok.status).toBe(200);
+
+    // ---- Worker register without admin token: 401 ----
+    const badRegister = await fetch(`${a8sInfo.url}${A8S_PATHS.workersRegister}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workerId: 'rejected',
+        callbackUrl: 'http://localhost:9999',
+        capacity: 1,
+        heartbeatTtlMs: 30_000,
+      }),
+    });
+    expect(badRegister.status).toBe(401);
+
+    // ---- Worker with bootstrap admin token can join ----
+    const root = mkdtempSync(join(tmpdir(), 'wd-auth-'));
+    const wPort = await pickPort();
+    const env = makeTestWorkerEnv(root);
+    const worker = new Worker<TestEntry>({ env });
+    const daemon = new WorkerDaemon<TestEntry>({
+      worker,
+      workerId: 'wd-auth',
+      port: wPort,
+      bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace,
+        home: new AgentHome(wire.workspace),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const dInfo = await daemon.start();
+    const reg = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      workerId: 'wd-auth',
+      callbackUrl: dInfo.callbackUrl,
+      capacity: 4,
+      heartbeatTtlMs: 30_000,
+      adminToken: 'admin-secret',
+    });
+    const regResult = await reg.register();
+    daemon.setAuthToken(regResult.workerToken);
+    // Heartbeat (which now uses the per-worker token) still works.
+    // We don't directly hit /heartbeat here — register() starts the loop
+    // and listAgents below proves the registration took.
+    const listAgents = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      headers: { authorization: 'Bearer admin-secret' },
+    });
+    expect(listAgents.status).toBe(200);
+
+    await reg.withdraw(true);
+    await daemon.stop();
+    await worker.dispose();
     await a8s.stop();
   });
 
@@ -546,6 +634,136 @@ describe('a8s-server + worker-daemon E2E', () => {
     await reg.withdraw(true);
     await daemon.stop();
     await worker.dispose();
+    await a8s.stop();
+  });
+
+  it('operator API: list workers/leases, cluster report, drain + evict', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'op-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer op-secret' };
+
+    // Two workers join.
+    const setupWorker = async (id: string) => {
+      const root = mkdtempSync(join(tmpdir(), `wd-op-${id}-`));
+      const port = await pickPort();
+      const env = makeTestWorkerEnv(root);
+      const worker = new Worker<TestEntry>({ env });
+      const daemon = new WorkerDaemon<TestEntry>({
+        worker, workerId: id, port, bindHost: '127.0.0.1',
+        resolveSpec: (wire) => ({
+          agentId: wire.agentId, workspace: wire.workspace,
+          home: new AgentHome(wire.workspace), projectRoot: wire.projectRoot,
+          model: wire.model, ensureDefaultMcpConfig: false,
+        }),
+      });
+      const info = await daemon.start();
+      const reg = new WorkerRegistrationClient({
+        a8sUrl: a8sInfo.url, workerId: id, callbackUrl: info.callbackUrl,
+        capacity: 4, heartbeatTtlMs: 30_000, adminToken: 'op-secret',
+      });
+      const result = await reg.register();
+      daemon.setAuthToken(result.workerToken);
+      return { id, worker, daemon, reg };
+    };
+    const w1 = await setupWorker('op-1');
+    const w2 = await setupWorker('op-2');
+
+    // Spawn an agent so we have a lease + non-zero `used`.
+    const agentWs = mkdtempSync(join(tmpdir(), 'op-agent-'));
+    const createResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...adminHeaders },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: { agentId: 'op-a', workspace: agentWs, model: 'tier:strong', ensureDefaultMcpConfig: false },
+        entry: { tag: 'op' },
+      })),
+    });
+    expect(createResp.status).toBe(200);
+
+    // ---- list workers ----
+    const wlResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders });
+    expect(wlResp.status).toBe(200);
+    const wl = operatorWorkerListResponseSchema.parse(await wlResp.json());
+    expect(wl.workers).toHaveLength(2);
+    const w1Entry = wl.workers.find((w) => w.workerId === 'op-1')!;
+    expect(w1Entry.state).toBe('active');
+    expect(w1Entry.capacity).toBe(4);
+    const totalUsed = wl.workers.reduce((sum, w) => sum + w.used, 0);
+    expect(totalUsed).toBe(1);
+
+    // ---- list leases ----
+    const llResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorLeases}`, { headers: adminHeaders });
+    expect(llResp.status).toBe(200);
+    const ll = operatorLeaseListResponseSchema.parse(await llResp.json());
+    expect(ll.leases).toHaveLength(1);
+    expect(ll.leases[0].agentId).toBe('op-a');
+    expect(ll.leases[0].state).toBe('active');
+
+    // ---- cluster report ----
+    const crResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorCluster}`, { headers: adminHeaders });
+    expect(crResp.status).toBe(200);
+    const cr = operatorClusterReportSchema.parse(await crResp.json());
+    expect(cr.workerCount.total).toBe(2);
+    expect(cr.workerCount.active).toBe(2);
+    expect(cr.capacity.total).toBe(8);
+    expect(cr.capacity.used).toBe(1);
+    expect(cr.agentCount).toBe(1);
+
+    // ---- drain ----
+    const drainResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkerDrain('op-1')}`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(drainResp.status).toBe(200);
+    const wl2 = operatorWorkerListResponseSchema.parse(
+      await (await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders })).json(),
+    );
+    expect(wl2.workers.find((w) => w.workerId === 'op-1')!.state).toBe('draining');
+
+    // ---- undrain ----
+    const undrainResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkerUndrain('op-1')}`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(undrainResp.status).toBe(200);
+    const wl3 = operatorWorkerListResponseSchema.parse(
+      await (await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders })).json(),
+    );
+    expect(wl3.workers.find((w) => w.workerId === 'op-1')!.state).toBe('active');
+
+    // ---- evict op-2 ----
+    const evictResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkerEvict('op-2')}`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(evictResp.status).toBe(200);
+    const wl4 = operatorWorkerListResponseSchema.parse(
+      await (await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders })).json(),
+    );
+    const w2After = wl4.workers.find((w) => w.workerId === 'op-2');
+    // withdrawWorker keeps the row but marks it withdrawn (state machine).
+    expect(['evicted', 'withdrawn']).toContain(w2After?.state);
+
+    // ---- 404 on unknown worker ----
+    const ghostDrain = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkerDrain('ghost')}`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(ghostDrain.status).toBe(404);
+
+    // ---- 401 without admin token ----
+    const noAuth = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`);
+    expect(noAuth.status).toBe(401);
+
+    await w1.reg.withdraw(true);
+    await w1.daemon.stop();
+    await w1.worker.dispose();
+    await w2.daemon.stop();
+    await w2.worker.dispose();
     await a8s.stop();
   });
 });

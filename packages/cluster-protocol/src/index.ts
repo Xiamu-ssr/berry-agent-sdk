@@ -282,6 +282,76 @@ export const healthResponseSchema = z.object({
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 // ============================================================
+// Operator API — cluster admin surface
+// ============================================================
+// Read + control endpoints for cluster operators (humans and the
+// berry-admin agent). Path-scoped under /v1/operator; admin-token gated.
+// Wire types are intentionally serialisable mirrors of the SDK's
+// RuntimeWorker / RuntimeLease so the operator never needs the SDK type
+// just to render a table.
+
+export const operatorWorkerSchema = z.object({
+  workerId: z.string().min(1),
+  state: z.enum(['active', 'draining', 'evicted', 'withdrawn']),
+  capacity: z.number().int().nonnegative(),
+  /** How many agents are currently mounted there (a8s in-memory). */
+  used: z.number().int().nonnegative(),
+  callbackUrl: z.string().url(),
+  labels: z.record(z.string()).optional(),
+  registeredAt: z.number().int(),
+  heartbeatAt: z.number().int(),
+  heartbeatExpiresAt: z.number().int(),
+  drainedAt: z.number().int().optional(),
+  evictedAt: z.number().int().optional(),
+  withdrawnAt: z.number().int().optional(),
+}).strict();
+export type OperatorWorker = z.infer<typeof operatorWorkerSchema>;
+
+export const operatorWorkerListResponseSchema = z.object({
+  workers: z.array(operatorWorkerSchema),
+}).strict();
+export type OperatorWorkerListResponse = z.infer<typeof operatorWorkerListResponseSchema>;
+
+export const operatorLeaseSchema = z.object({
+  leaseId: z.string().min(1),
+  agentId: z.string().min(1),
+  holderId: z.string().min(1),
+  workerId: z.string().optional(),
+  state: z.enum(['active', 'released', 'expired']),
+  acquiredAt: z.number().int(),
+  renewedAt: z.number().int().optional(),
+  expiresAt: z.number().int(),
+  releasedAt: z.number().int().optional(),
+  sessionId: z.string().optional(),
+}).strict();
+export type OperatorLease = z.infer<typeof operatorLeaseSchema>;
+
+export const operatorLeaseListResponseSchema = z.object({
+  leases: z.array(operatorLeaseSchema),
+}).strict();
+export type OperatorLeaseListResponse = z.infer<typeof operatorLeaseListResponseSchema>;
+
+export const operatorClusterReportSchema = z.object({
+  workerCount: z.object({
+    total: z.number().int().nonnegative(),
+    active: z.number().int().nonnegative(),
+    draining: z.number().int().nonnegative(),
+    evicted: z.number().int().nonnegative(),
+  }).strict(),
+  capacity: z.object({
+    total: z.number().int().nonnegative(),
+    used: z.number().int().nonnegative(),
+    available: z.number().int().nonnegative(),
+  }).strict(),
+  agentCount: z.number().int().nonnegative(),
+  uptimeSeconds: z.number().int().nonnegative(),
+}).strict();
+export type OperatorClusterReport = z.infer<typeof operatorClusterReportSchema>;
+
+export const operatorOkResponseSchema = z.object({ ok: z.literal(true) }).strict();
+export type OperatorOkResponse = z.infer<typeof operatorOkResponseSchema>;
+
+// ============================================================
 // Live event stream (Server-Sent Events)
 // ============================================================
 // Wire shape:
@@ -330,6 +400,16 @@ export const A8S_PATHS = {
   agentEventsStream: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   wakesSchedule: `/${CLUSTER_PROTOCOL_VERSION}/wakes/schedule`,
+
+  operatorCluster: `/${CLUSTER_PROTOCOL_VERSION}/operator/cluster`,
+  operatorWorkers: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers`,
+  operatorWorkerDrain: (workerId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/${encodeURIComponent(workerId)}/drain`,
+  operatorWorkerUndrain: (workerId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/${encodeURIComponent(workerId)}/undrain`,
+  operatorWorkerEvict: (workerId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/${encodeURIComponent(workerId)}/evict`,
+  operatorLeases: `/${CLUSTER_PROTOCOL_VERSION}/operator/leases`,
 } as const;
 
 export const WORKER_PATHS = {
@@ -356,9 +436,27 @@ export const WORKER_PATHS = {
 // ============================================================
 // Auth helpers — minimal Bearer-token scheme
 // ============================================================
+//
+// Two token classes share the same Bearer scheme but live in different
+// scopes (path-based, never mixed):
+//
+//   - **Admin token**   — product / operator / berry-claw → a8s.
+//     One shared secret per a8s deployment, set at startup (--admin-token).
+//     Required on /v1/agents/*, /v1/wakes/*, /v1/operator/* (everything
+//     not in /v1/workers/* and not /v1/health).
+//   - **Worker token**  — minted per worker at registration, used both
+//     directions (worker → a8s heartbeat/withdraw, a8s → worker for
+//     run/stop/send/etc.).
+//
+// /v1/health is always unauthenticated. /v1/workers/register accepts the
+// admin token (workers prove "I'm allowed to join this cluster" using the
+// install-time bootstrap token); the response carries the worker token
+// they'll use from then on.
 
 export const WORKER_AUTH_HEADER = 'Authorization' as const;
 export const WORKER_AUTH_SCHEME = 'Bearer' as const;
+export const ADMIN_AUTH_HEADER = WORKER_AUTH_HEADER;
+export const ADMIN_AUTH_SCHEME = WORKER_AUTH_SCHEME;
 
 export function workerAuthHeader(token: string): string {
   return `${WORKER_AUTH_SCHEME} ${token}`;
@@ -371,3 +469,7 @@ export function parseWorkerAuthHeader(value: string | undefined): string | null 
   const token = value.slice(prefix.length).trim();
   return token.length > 0 ? token : null;
 }
+
+/** Aliases — same Bearer wire format, named for the admin-token scope. */
+export const adminAuthHeader = workerAuthHeader;
+export const parseAdminAuthHeader = parseWorkerAuthHeader;

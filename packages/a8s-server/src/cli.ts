@@ -33,6 +33,13 @@ Options:
                         memory                   (default, in-process only)
                         sqlite:///path/to.db     (requires @berry-agent/runtime-sqlite)
                       env BERRY_A8S_STORE
+  --admin-token <s>   Shared secret required on /v1/agents, /v1/wakes, and
+                      operator endpoints. Workers present it once at
+                      registration as their bootstrap token.
+                      env BERRY_A8S_ADMIN_TOKEN
+                      If omitted, a8s runs in INSECURE DEV MODE — all
+                      product-scope endpoints accept any caller. Never
+                      use this for a real deployment.
   --version           Print version
   --help              Show this help
 `;
@@ -60,6 +67,7 @@ async function main(argv: string[]): Promise<number> {
     options: {
       port: { type: 'string' },
       store: { type: 'string' },
+      'admin-token': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -72,11 +80,13 @@ async function main(argv: string[]): Promise<number> {
 
   const storeSpec = values.store ?? process.env.BERRY_A8S_STORE ?? 'memory';
   const store = await resolveStore(storeSpec);
+  const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN;
 
   const orchestrator = new RuntimeOrchestrator({ store });
   const server = new A8sServer({
     port,
     controlPlane: { orchestrator },
+    adminToken,
     version: '0.5.0-alpha.1',
   });
 

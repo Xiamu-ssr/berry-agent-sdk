@@ -8,6 +8,7 @@
 import {
   A8S_PATHS,
   WORKER_AUTH_HEADER,
+  adminAuthHeader,
   workerAuthHeader,
   workerHeartbeatRequestSchema,
   workerHeartbeatResponseSchema,
@@ -33,6 +34,13 @@ export interface RegistrationClientOptions {
   labels?: Readonly<Record<string, string>>;
   /** How often to send heartbeat. Defaults to TTL/3. */
   heartbeatIntervalMs?: number;
+  /**
+   * Bootstrap secret presented to a8s on /workers/register. Same value
+   * the a8s operator passed to --admin-token. After registration the
+   * worker switches to the per-worker token returned in the response.
+   * When unset and a8s is in dev mode, registration still succeeds.
+   */
+  adminToken?: string;
   /** Test injection. */
   fetch?: typeof fetch;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
@@ -65,9 +73,13 @@ export class WorkerRegistrationClient {
       heartbeatTtlMs: this.options.heartbeatTtlMs,
       labels: this.options.labels,
     });
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (this.options.adminToken) {
+      headers[WORKER_AUTH_HEADER] = adminAuthHeader(this.options.adminToken);
+    }
     const response = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.workersRegister}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     });
     if (!response.ok) {
