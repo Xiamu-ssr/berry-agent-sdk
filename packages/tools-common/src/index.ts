@@ -64,6 +64,26 @@ export type {
   CreateRemoteExecutionEnvironmentOptions,
 } from './remote-environment.js';
 
+// Polling / pull-based execution — for executor hosts behind firewalls.
+// The worker enqueues; the executor host polls outbound. No inbound
+// connectivity required from the executor host side.
+export {
+  createPollingExecutionEnvironment,
+  createPollingExecutionEnvironmentProvider,
+  InMemoryPullingTaskQueue,
+  PollingExecutorAgent,
+  pullingTaskRequestSchema,
+  pullingTaskResultSchema,
+} from './polling-environment.js';
+export type {
+  CreatePollingExecutionEnvironmentOptions,
+  PollingExecutorAgentOptions,
+  PullingTaskQueue,
+  PullingTaskRequest,
+  PullingTaskResult,
+  PullingTaskSource,
+} from './polling-environment.js';
+
 // Zod schema for SDK config namespace
 export { toolsCommonNamespaceSchema } from './schema.js';
 export type { ToolsCommonNamespaceConfig } from './schema.js';

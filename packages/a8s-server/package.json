@@ -22,6 +22,9 @@
     "@berry-agent/cluster-protocol": "*",
     "@berry-agent/runtime": "*"
   },
+  "optionalDependencies": {
+    "@berry-agent/runtime-sqlite": "*"
+  },
   "devDependencies": {
     "@berry-agent/runtime-sqlite": "*",
     "@types/node": "^22.10.0",

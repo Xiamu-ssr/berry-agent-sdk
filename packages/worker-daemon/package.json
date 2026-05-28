@@ -20,15 +20,15 @@
   "dependencies": {
     "@berry-agent/cluster-protocol": "*",
     "@berry-agent/core": "*",
-    "@berry-agent/worker": "*"
+    "@berry-agent/observe": "*",
+    "@berry-agent/worker": "*",
+    "zod": "^3.24.0"
   },
   "peerDependencies": {
-    "@berry-agent/models": "^0.5.0-alpha.1",
-    "@berry-agent/observe": "^0.5.0-alpha.1"
+    "@berry-agent/models": "^0.5.0-alpha.1"
   },
   "devDependencies": {
     "@berry-agent/models": "*",
-    "@berry-agent/observe": "*",
     "@types/node": "^22.10.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
