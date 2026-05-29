@@ -24,8 +24,8 @@ import { mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { AgentHome } from '@berry-agent/core';
-import { InProcessWorkerNode } from '@berry-agent/a8s';
-import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
+import { InProcessWorkerNode, type WireWorkerAgentSpec } from '@berry-agent/a8s';
+import { Worker, type WorkerEnvironment } from '@berry-agent/worker';
 import { A8sOperatorClient, createClusterAdminHand } from '@berry-agent/a8s-admin';
 import type { A8sServer } from './server.js';
 
@@ -161,10 +161,9 @@ export async function ensureAdminAgent(
   // start, and createAgent is not idempotent on its own.
   const existingLocation = server.plane.getAgentLocation(agentId);
   if (existingLocation.workerId == null) {
-    const spec: WorkerAgentSpec = {
+    const spec: WireWorkerAgentSpec = {
       agentId,
       workspace,
-      home,
       model: config.model ?? 'tier:strong',
       ensureDefaultMcpConfig: false,
     };

@@ -20,7 +20,7 @@ import {
   sendRequestSchema,
   workerAuthHeader,
 } from '@berry-agent/cluster-protocol';
-import type { WorkerAgentSpec } from '@berry-agent/worker';
+import type { WireWorkerAgentSpec } from '@berry-agent/a8s';
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
@@ -134,13 +134,18 @@ async function handleCreateAgent<TEntry>(
   const body = await readJsonBody(req);
   const parsed = createAgentRequestSchema.parse(body);
 
-  const wireSpec: WorkerAgentSpec = {
+  // Forward the wire spec straight to the plane — no fake AgentHome
+  // construction here. Each WorkerNode (InProcess or Http) rehydrates
+  // runtime-only fields locally.
+  const wireSpec: WireWorkerAgentSpec = {
     agentId: parsed.spec.agentId,
     workspace: parsed.spec.workspace,
     projectRoot: parsed.spec.projectRoot,
-    home: undefined as unknown as WorkerAgentSpec['home'],
     model: parsed.spec.model,
+    reasoningEffort: parsed.spec.reasoningEffort,
+    toolDenylist: parsed.spec.toolDenylist,
     ensureDefaultMcpConfig: parsed.spec.ensureDefaultMcpConfig,
+    labels: parsed.spec.labels,
   };
 
   const result = await deps.plane.createAgent(

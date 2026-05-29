@@ -4,13 +4,14 @@
 // The ControlPlane talks to workers through a `WorkerNode` interface
 // instead of grabbing a concrete Worker class. This lets:
 //   - Tests mount in-process Worker instances directly
-//   - M4 plug an HTTP/gRPC transport without touching ControlPlane code
+//   - HTTP/gRPC transports plug in without touching ControlPlane code
 //   - Future heterogeneous workers (container-only, GPU-only) advertise
 //     different capabilities through the same shape
 //
 // In-process workers wrap a single @berry-agent/worker Worker and expose
 // AgentSession handles for products to drive mounted agents.
 
+import { AgentHome } from '@berry-agent/core';
 import type { Worker, WorkerAgentSpec, WorkerRuntimeHooks } from '@berry-agent/worker';
 import { InProcessAgentSession, type AgentSession } from './agent-session.js';
 
@@ -20,9 +21,31 @@ export interface WorkerNodeCapacity {
 }
 
 /**
+ * JSON-safe subset of WorkerAgentSpec — the only thing that survives
+ * the network. WorkerNode implementations rehydrate richer types
+ * (AgentHome, hostTools, executionEnvironmentProvider) locally based on
+ * their environment (e.g. worker daemon's resolveSpec callback, or
+ * InProcessWorkerNode's `new AgentHome(workspace)` shortcut).
+ *
+ * Keeping this distinct from WorkerAgentSpec is what removes the
+ * `home: undefined as unknown as AgentHome` papering-over that used to
+ * live in a8s-server.
+ */
+export interface WireWorkerAgentSpec {
+  agentId: string;
+  workspace: string;
+  projectRoot?: string;
+  model: string;
+  reasoningEffort?: string;
+  toolDenylist?: string[];
+  ensureDefaultMcpConfig?: boolean;
+  labels?: Readonly<Record<string, string>>;
+}
+
+/**
  * Anything the ControlPlane needs to drive one worker. Implementations
  * may live in the same process (InProcessWorkerNode) or wrap a remote
- * transport (future).
+ * transport (HttpWorkerNode).
  */
 export interface WorkerNode<TEntry = unknown> {
   readonly workerId: string;
@@ -32,7 +55,7 @@ export interface WorkerNode<TEntry = unknown> {
   runAgent(
     agentId: string,
     entry: TEntry,
-    spec: WorkerAgentSpec,
+    spec: WireWorkerAgentSpec,
     hooks?: WorkerRuntimeHooks,
   ): Promise<void>;
   stopAgent(agentId: string): Promise<void>;
@@ -40,7 +63,7 @@ export interface WorkerNode<TEntry = unknown> {
    * Return an AgentSession handle for an agent currently mounted on this
    * worker, or `undefined` if the agent is not mounted here. The handle
    * is the only sanctioned data-plane surface — it isolates products from
-   * `ManagedAgentRuntime` internals so M4 transport variants can swap in
+   * `ManagedAgentRuntime` internals so transport variants can swap in
    * without product-side changes.
    */
   openSession(agentId: string): Promise<AgentSession | undefined>;
@@ -97,13 +120,27 @@ export class InProcessWorkerNode<TEntry = unknown> implements WorkerNode<TEntry>
   async runAgent(
     agentId: string,
     entry: TEntry,
-    spec: WorkerAgentSpec,
+    spec: WireWorkerAgentSpec,
     hooks: WorkerRuntimeHooks = {},
   ): Promise<void> {
+    // InProcessWorkerNode can reconstruct the runtime-only fields
+    // (AgentHome, default hostTools) locally because we're in the same
+    // process as the SDK. Remote workers do this via their
+    // resolveSpec callback in worker-daemon.
+    const fullSpec: WorkerAgentSpec = {
+      agentId: spec.agentId,
+      workspace: spec.workspace,
+      home: new AgentHome(spec.workspace),
+      projectRoot: spec.projectRoot,
+      model: spec.model,
+      reasoningEffort: spec.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
+      toolDenylist: spec.toolDenylist,
+      ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
+    };
     if (this.worker.supervisor()) {
-      await this.worker.runAgent(agentId, entry, spec, hooks);
+      await this.worker.runAgent(agentId, entry, fullSpec, hooks);
     } else {
-      this.worker.runAgentSync(agentId, entry, spec, hooks);
+      this.worker.runAgentSync(agentId, entry, fullSpec, hooks);
     }
   }
 

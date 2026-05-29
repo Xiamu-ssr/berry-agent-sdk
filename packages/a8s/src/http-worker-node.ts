@@ -24,9 +24,9 @@ import {
   workerStopAgentResponseSchema,
   type WireAgentSpec,
 } from '@berry-agent/cluster-protocol';
-import type { WorkerAgentSpec, WorkerRuntimeHooks } from '@berry-agent/worker';
+import type { WorkerRuntimeHooks } from '@berry-agent/worker';
 import type { AgentSession } from './agent-session.js';
-import type { WorkerNode, WorkerNodeCapacity } from './worker-node.js';
+import type { WireWorkerAgentSpec, WorkerNode, WorkerNodeCapacity } from './worker-node.js';
 
 export interface HttpWorkerNodeOptions {
   /** Stable worker id matching the one the daemon registered with. */
@@ -81,15 +81,24 @@ export class HttpWorkerNode<TEntry = unknown> implements WorkerNode<TEntry> {
   async runAgent(
     agentId: string,
     entry: TEntry,
-    spec: WorkerAgentSpec,
+    spec: WireWorkerAgentSpec,
     _hooks?: WorkerRuntimeHooks,
   ): Promise<void> {
-    // The wire spec is a deliberately narrower subset of WorkerAgentSpec
-    // — hostTools / hooks / executionEnvironmentProvider stay on the worker
-    // side because they are not JSON-transportable.
-    const wireSpec = toWireSpec(agentId, spec);
+    // Wire spec is already JSON-safe; just normalise the id slot and
+    // forward. Worker daemon's resolveSpec re-hydrates AgentHome and
+    // any host-specific extras on its side.
+    const wireBody: WireAgentSpec = {
+      agentId,
+      workspace: spec.workspace,
+      projectRoot: spec.projectRoot,
+      model: spec.model,
+      reasoningEffort: spec.reasoningEffort,
+      toolDenylist: spec.toolDenylist,
+      ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
+      labels: spec.labels,
+    };
     const body = workerRunAgentRequestSchema.parse({
-      spec: wireSpec,
+      spec: wireBody,
       entry: entry as Record<string, unknown> | undefined,
     });
     await this.json(WORKER_PATHS.runAgent(agentId), 'POST', body, workerStopAgentResponseSchema);
@@ -140,18 +149,3 @@ export class HttpWorkerNode<TEntry = unknown> implements WorkerNode<TEntry> {
 }
 
 const WORKER_AUTH_HEADER_KEY = 'authorization' as const;
-
-function toWireSpec(agentId: string, spec: WorkerAgentSpec): WireAgentSpec {
-  // Narrow to JSON-safe fields. Fields like `hostTools`, `home`, and
-  // `executionEnvironmentProvider` carry runtime objects that the worker
-  // daemon resolves locally from agent config; we don't transport them.
-  return {
-    agentId,
-    workspace: spec.workspace,
-    projectRoot: spec.projectRoot,
-    model: spec.model,
-    reasoningEffort: spec.reasoningEffort,
-    toolDenylist: spec.toolDenylist,
-    ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
-  };
-}

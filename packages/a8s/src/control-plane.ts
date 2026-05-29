@@ -23,10 +23,10 @@ import type {
   RuntimeWake,
   ScheduleRuntimeWakeInput,
 } from '@berry-agent/runtime';
-import type { WorkerAgentSpec, WorkerRuntimeHooks } from '@berry-agent/worker';
+import type { WorkerRuntimeHooks } from '@berry-agent/worker';
 import type { AgentSession } from './agent-session.js';
 import { createLeastLoadedScheduler, type Scheduler, type SchedulerWorkerView } from './scheduler.js';
-import type { WorkerNode, WorkerNodeCapacity } from './worker-node.js';
+import type { WireWorkerAgentSpec, WorkerNode, WorkerNodeCapacity } from './worker-node.js';
 
 export interface ControlPlaneOptions<TEntry> {
   orchestrator: RuntimeOrchestrator;
@@ -103,7 +103,7 @@ export class ControlPlane<TEntry = unknown> {
    * its on-disk home already lives).
    */
   async createAgent(
-    spec: WorkerAgentSpec,
+    spec: WireWorkerAgentSpec,
     entry: TEntry,
     options: { hooks?: WorkerRuntimeHooks; preferredMachine?: string } = {},
   ): Promise<CreateAgentResult> {
@@ -160,7 +160,7 @@ export class ControlPlane<TEntry = unknown> {
    */
   async migrateAgent(
     agentId: string,
-    spec: WorkerAgentSpec,
+    spec: WireWorkerAgentSpec,
     entry: TEntry,
     options: { hooks?: WorkerRuntimeHooks; preferredMachine?: string | null } = {},
   ): Promise<CreateAgentResult> {

@@ -20,6 +20,7 @@ export type {
 
 export { InProcessWorkerNode } from './worker-node.js';
 export type {
+  WireWorkerAgentSpec,
   WorkerNode,
   WorkerNodeCapacity,
   InProcessWorkerNodeOptions,
