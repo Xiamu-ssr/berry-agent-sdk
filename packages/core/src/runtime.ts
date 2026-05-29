@@ -175,6 +175,16 @@ export class ManagedAgentRuntime {
     return this.agent.removeHand(id);
   }
 
+  /**
+   * Snapshot every tool the agent currently exposes to the model —
+   * builtin runtime tools, MCP-discovered tools, host-injected tools,
+   * skill tools, and whatever hands have added. Cheap; useful for
+   * tests + introspection. Mutations are not observed live.
+   */
+  getTools() {
+    return this.agent.getTools();
+  }
+
   async readMemory(): Promise<{ path: string; content: string }> {
     return this.agent.readMemory();
   }

@@ -18,6 +18,7 @@
     "dev": "tsc -w"
   },
   "dependencies": {
+    "@berry-agent/a8s-admin": "*",
     "@berry-agent/cluster-protocol": "*",
     "@berry-agent/core": "*",
     "@berry-agent/observe": "*",

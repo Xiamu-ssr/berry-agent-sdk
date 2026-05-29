@@ -790,6 +790,8 @@ describe('a8s-server + worker-daemon E2E', () => {
       agentsRoot,
       capacity: 4,
       workerId: 'a8s-local',
+      adminToken: 'boot-secret',
+      a8sPort,
     });
     const agentId = await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', {
       a8sPort,
@@ -812,10 +814,21 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(admin).toBeDefined();
     expect(admin!.workerId).toBe('a8s-local');
 
-    // ---- Admin agent has the cluster-admin hand mounted ----
+    // ---- Admin agent has the cluster-admin tools mounted via hostHand ----
+    // F3 design: a8s-server no longer addHand()s a cluster-admin Hand
+    // directly. Instead the local-worker resolveSpec sees `labels.role ===
+    // 'a8s-admin'` and injects the cluster-admin ToolRegistrations into
+    // hostTools. The worker builder then mounts them as the
+    // `worker-host` system hand. Same surface to the model, no coupling
+    // between a8s-server and a8s-admin.
     const mount = worker.get('berry-admin');
     expect(mount).toBeDefined();
-    expect(mount!.runtime.hasHand?.('cluster-admin')).toBe(true);
+    expect(mount!.runtime.hasHand?.('worker-host')).toBe(true);
+    const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));
+    expect(toolNames.has('cluster_report')).toBe(true);
+    expect(toolNames.has('list_workers')).toBe(true);
+    expect(toolNames.has('drain_worker')).toBe(true);
+    expect(toolNames.has('worker_join_script')).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
     await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', { a8sPort });

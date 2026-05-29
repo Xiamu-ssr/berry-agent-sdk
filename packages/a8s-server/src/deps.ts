@@ -10,6 +10,7 @@
 import type { ControlPlane } from '@berry-agent/a8s';
 import type { AuditLog } from './audit.js';
 import type { A8sMetrics } from './metrics.js';
+import type { ModelsTemplateStore } from './models-template-store.js';
 
 export interface WorkerTokenEntry {
   workerId: string;
@@ -25,6 +26,7 @@ export interface ServerDeps<TEntry = unknown> {
   readonly tokens: Map<string, WorkerTokenEntry>;
   readonly audit: AuditLog;
   readonly metrics: A8sMetrics;
+  readonly modelsTemplate: ModelsTemplateStore;
   readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   readonly adminToken: string | undefined;
   readonly advertiseUrl: string | undefined;

@@ -20,10 +20,18 @@ export interface ClusterAdminHandOptions {
   id?: string;
 }
 
-export function createClusterAdminHand(options: ClusterAdminHandOptions): Hand {
-  const client = options.client;
-
-  const tools: ToolRegistration[] = [
+/**
+ * Build the raw ToolRegistration[] that backs the cluster-admin Hand.
+ * Exposed separately so other consumers (e.g. worker-daemon's
+ * resolveSpec hook that injects these tools as hostTools when a
+ * teammate-style agent carries `labels.role === 'a8s-admin'`) can
+ * reuse the same tool surface without going through the Hand wrapper.
+ *
+ * Single source of truth: any change to the tool definitions only
+ * needs to happen here.
+ */
+export function buildClusterAdminTools(client: A8sOperatorClient): ToolRegistration[] {
+  return [
     {
       definition: {
         name: 'cluster_report',
@@ -158,11 +166,13 @@ export function createClusterAdminHand(options: ClusterAdminHandOptions): Hand {
       },
     },
   ];
+}
 
+export function createClusterAdminHand(options: ClusterAdminHandOptions): Hand {
   return createToolRegistrationHand({
     id: options.id ?? 'cluster-admin',
     kind: 'local',
     displayName: 'a8s cluster administration',
-    tools,
+    tools: buildClusterAdminTools(options.client),
   });
 }

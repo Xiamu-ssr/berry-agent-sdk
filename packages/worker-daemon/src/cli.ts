@@ -19,11 +19,17 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import {
+  A8S_PATHS,
+  ADMIN_AUTH_HEADER,
+  adminAuthHeader,
+  modelsTemplateGetResponseSchema,
+} from '@berry-agent/cluster-protocol';
 import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools } from './index.js';
+import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withClusterAdminHostTools } from './index.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -51,6 +57,13 @@ Options:
                        config.adminToken; env BERRY_A8S_ADMIN_TOKEN.
   --version            Print version
   --help               Show this help
+
+MODELS REGISTRY:
+  worker.json may set "registry": null (or omit it) — the worker will
+  then fetch the cluster-wide template from a8s at start (requires
+  admin token). The recommended path: configure providers/tiers once
+  in the a8s UI, leave every worker.json as "registry": null. Inline
+  registries are still supported for air-gapped or pinned setups.
 
 DIRECTORY CONVENTION (machine-scoped agent data):
 
@@ -125,7 +138,13 @@ const configSchema = z.object({
   credentialsPath: z.string().min(1).optional(),
   /** Override observer db path (default: <dataRoot>/observe.db). */
   observerDbPath: z.string().min(1).optional(),
-  /** Provider/model registry. Same shape as @berry-agent/models. */
+  /**
+   * Provider/model registry. Same shape as @berry-agent/models. Set
+   * `null` (or omit) to have the worker fetch the cluster-wide models
+   * template from a8s at register time — the recommended path so
+   * operators configure LLMs once in the UI and every worker
+   * auto-inherits. Set inline for air-gapped / pinned setups.
+   */
   registry: z.object({
     providers: z.record(z.object({
       id: z.string(),
@@ -139,8 +158,34 @@ const configSchema = z.object({
       providers: z.array(z.object({ providerId: z.string() }).passthrough()),
     }).passthrough()),
     tiers: z.record(z.string()),
-  }).passthrough(),
+  }).passthrough().nullable().optional(),
 }).strict();
+
+/**
+ * Fetch the cluster-wide models template from a8s. Returns a fully
+ * inflated ModelsRegistry. Throws when a8s is unreachable, returns a
+ * non-2xx, or returns a null template (operator hasn't configured one
+ * yet — startup must fail loudly rather than silently spawn a worker
+ * with no model).
+ */
+async function fetchModelsTemplate(a8sUrl: string, adminToken: string): Promise<ModelsRegistry> {
+  const url = a8sUrl.replace(/\/$/, '') + A8S_PATHS.operatorModelsTemplate;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { [ADMIN_AUTH_HEADER]: adminAuthHeader(adminToken) },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`models template GET failed: HTTP ${response.status}: ${text.slice(0, 200)}`);
+  }
+  const parsed = modelsTemplateGetResponseSchema.parse(await response.json());
+  if (!parsed.template) {
+    throw new Error(
+      'a8s has no models template configured yet. Open the a8s UI → Settings → Models, configure providers/tiers, then restart this worker.',
+    );
+  }
+  return parsed.template as unknown as ModelsRegistry;
+}
 
 async function main(argv: string[]): Promise<number> {
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
@@ -227,9 +272,32 @@ async function main(argv: string[]): Promise<number> {
   // admin-scoped).
   const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken;
 
+  // ---- Resolve models registry ----
+  // Prefer inline `config.registry`; if null/missing, fetch the
+  // cluster-wide template from a8s. This lets operators configure LLMs
+  // once in the UI and have every new worker auto-inherit.
+  let registry: ModelsRegistry;
+  if (config.registry) {
+    registry = config.registry as unknown as ModelsRegistry;
+  } else {
+    if (!adminToken) {
+      process.stderr.write(
+        'config.registry is null and no admin token available; cannot fetch models template from a8s\n',
+      );
+      return 2;
+    }
+    try {
+      registry = await fetchModelsTemplate(a8sUrl, adminToken);
+      process.stdout.write(`📦 pulled models template from a8s (${Object.keys(registry.providers ?? {}).length} providers, ${Object.keys(registry.models ?? {}).length} models)\n`);
+    } catch (err) {
+      process.stderr.write(`failed to fetch models template from a8s: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
   // ---- Build the WorkerEnvironment ----
   const env: WorkerEnvironment = {
-    registry: config.registry as unknown as ModelsRegistry,
+    registry,
     credentials: new DefaultCredentialStore({ filePath: credentialsPath }),
     observer: createObserver({ dbPath: observerDbPath }),
   };
@@ -255,9 +323,16 @@ async function main(argv: string[]): Promise<number> {
       ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
     };
   };
-  const resolveSpec = adminToken
-    ? withTeamModeHostTools(baseResolveSpec, { a8sUrl, adminToken })
-    : baseResolveSpec;
+  // Chain the resolveSpec wrappers. When admin token is configured we
+  // layer team-mode (label-gated message_leader injection) and
+  // cluster-admin-mode (label-gated 8-tool admin Hand) on top of the
+  // base resolver. Each wrapper inspects labels on its own and is a
+  // no-op for agents that don't match.
+  let resolveSpec = baseResolveSpec;
+  if (adminToken) {
+    resolveSpec = withTeamModeHostTools(resolveSpec, { a8sUrl, adminToken });
+    resolveSpec = withClusterAdminHostTools(resolveSpec, { a8sUrl, adminToken });
+  }
 
   const daemon = new WorkerDaemon({
     worker,

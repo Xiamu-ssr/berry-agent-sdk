@@ -19,7 +19,7 @@
 
 export { A8sOperatorClient } from './operator-client.js';
 export type { A8sOperatorClientOptions } from './operator-client.js';
-export { createClusterAdminHand } from './cluster-admin-hand.js';
+export { createClusterAdminHand, buildClusterAdminTools } from './cluster-admin-hand.js';
 export type { ClusterAdminHandOptions } from './cluster-admin-hand.js';
 export { createRemoteTeammateRuntimeFactory } from './remote-teammate.js';
 export type { RemoteTeammateRuntimeFactoryOptions } from './remote-teammate.js';

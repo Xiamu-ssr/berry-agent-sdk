@@ -29,11 +29,13 @@ import { AuditLog, NullAuditLog } from './audit.js';
 import type { ServerDeps, WorkerTokenEntry } from './deps.js';
 import { A8sMetrics } from './metrics.js';
 import { withMetrics, withRateLimit } from './middleware.js';
+import { ModelsTemplateStore } from './models-template-store.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
 
 import { agentRoutes } from './routes/agents.js';
 import { healthRoutes, uiRoutes } from './routes/health.js';
+import { modelsRoutes } from './routes/models.js';
 import { operatorRoutes } from './routes/operator.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { wakeRoutes } from './routes/wakes.js';
@@ -74,6 +76,14 @@ export interface A8sServerOptions<TEntry = unknown> {
    */
   rateLimit?: [number, number] | null;
   /**
+   * Path of the JSON file storing the cluster-wide models template
+   * (provider/model/tier config). Workers fetch it at register time so
+   * operators configure LLMs once in the UI and every new worker
+   * inherits. Default: <auditRoot>/../models-template.json, or
+   * `/var/berry/a8s/models-template.json` when auditRoot is unset.
+   */
+  modelsTemplateFile?: string;
+  /**
    * How long `stop()` waits for in-flight requests to finish before
    * closing the listener. Default 10_000 ms.
    */
@@ -92,6 +102,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly adminToken: string | undefined;
   private readonly audit: AuditLog;
   private readonly metrics = new A8sMetrics();
+  private readonly modelsTemplate: ModelsTemplateStore;
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
   private router: Router | null = null;
@@ -105,6 +116,14 @@ export class A8sServer<TEntry = unknown> {
     this.audit = options.auditRoot
       ? new AuditLog({ auditRoot: options.auditRoot, logger: this.logger })
       : new NullAuditLog();
+    const modelsTemplateFile = options.modelsTemplateFile
+      ?? (options.auditRoot
+        ? `${options.auditRoot.replace(/\/audit\/?$/, '')}/models-template.json`
+        : '/var/berry/a8s/models-template.json');
+    this.modelsTemplate = new ModelsTemplateStore({
+      filePath: modelsTemplateFile,
+      logger: this.logger,
+    });
     if (!this.adminToken) {
       this.logger.warn?.(
         '[a8s-server] WARNING: starting without --admin-token; all product-scope endpoints are open. Use only for dev/tests.',
@@ -120,12 +139,18 @@ export class A8sServer<TEntry = unknown> {
     return this.tokens.get(workerId)?.token;
   }
 
+  /** HTTP port this server listens on (read-only accessor for bootstrap helpers). */
+  get port(): number {
+    return this.options.port;
+  }
+
   async start(): Promise<{ port: number; url: string }> {
     this.deps = {
       plane: this.plane,
       tokens: this.tokens,
       audit: this.audit,
       metrics: this.metrics,
+      modelsTemplate: this.modelsTemplate,
       logger: this.logger,
       adminToken: this.adminToken,
       advertiseUrl: this.options.advertiseUrl,
@@ -145,6 +170,7 @@ export class A8sServer<TEntry = unknown> {
       ...sessionRoutes(this.deps),
       ...wakeRoutes(this.deps),
       ...operatorRoutes(this.deps),
+      ...modelsRoutes(this.deps),
     ];
     // Wrap each route. Metrics first (so 429s still get counted), then
     // rate limit (except for streaming and the unbounded send call).

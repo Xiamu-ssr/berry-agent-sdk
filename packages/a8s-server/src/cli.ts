@@ -196,6 +196,8 @@ async function main(argv: string[]): Promise<number> {
       dataRoot,
       agentsRoot,
       capacity,
+      adminToken,
+      a8sPort: port,
     });
     process.stdout.write(`   local worker mounted (capacity ${capacity}, data ${dataRoot}, agents ${agentsRoot})\n`);
 

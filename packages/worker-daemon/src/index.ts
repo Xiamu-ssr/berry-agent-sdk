@@ -10,3 +10,6 @@ export type { RegistrationClientOptions } from './registration.js';
 
 export { withTeamModeHostTools } from './team-mode.js';
 export type { TeamModeResolverOptions, WireResolveInput } from './team-mode.js';
+
+export { withClusterAdminHostTools } from './cluster-admin-mode.js';
+export type { ClusterAdminModeResolverOptions } from './cluster-admin-mode.js';

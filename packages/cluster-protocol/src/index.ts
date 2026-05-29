@@ -379,6 +379,66 @@ export const operatorOkResponseSchema = z.object({ ok: z.literal(true) }).strict
 export type OperatorOkResponse = z.infer<typeof operatorOkResponseSchema>;
 
 // ============================================================
+// Operator: models template (LLM provider/model/tier config)
+// ============================================================
+//
+// a8s stores a single template describing the providers, models, and
+// tier mappings the cluster knows about. Workers fetch this template
+// when they register (if their local worker.json.registry is null) so
+// operators only have to configure LLMs in one place — the UI — and
+// every new worker auto-inherits.
+//
+// IMPORTANT: this is a *template*. Each worker holds its own copy
+// after registration; rotating an API key requires either pushing the
+// new template + restarting workers, or letting workers pull on next
+// register. The template is intentionally NOT a runtime authority —
+// brain calls still leave from the worker, using the worker's local
+// copy of the credentials.
+//
+// Schema is purposefully wide (passthrough) so the UI doesn't need to
+// be redeployed every time @berry-agent/models gains a new field.
+
+export const modelsProviderSchema = z.object({
+  id: z.string().min(1).optional(),
+  presetId: z.string().min(1),
+  apiKey: z.string(),
+  baseUrl: z.string().optional(),
+  type: z.enum(['anthropic', 'openai']).optional(),
+  label: z.string().optional(),
+  knownModels: z.array(z.string()).optional(),
+}).passthrough();
+
+export const modelsModelSchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().optional(),
+  contextWindow: z.number().int().positive().optional(),
+  providers: z.array(z.object({
+    providerId: z.string().min(1),
+    remoteModelId: z.string().optional(),
+  }).passthrough()).min(1),
+}).passthrough();
+
+export const modelsTemplateSchema = z.object({
+  providers: z.record(z.string(), modelsProviderSchema),
+  models: z.record(z.string(), modelsModelSchema),
+  tiers: z.record(z.string(), z.string()),
+}).strict();
+export type ModelsTemplate = z.infer<typeof modelsTemplateSchema>;
+
+export const modelsTemplateGetResponseSchema = z.object({
+  /** `null` means no template has been configured yet. */
+  template: modelsTemplateSchema.nullable(),
+  /** Unix ms when the template was last updated; null when unset. */
+  updatedAt: z.number().int().nullable(),
+}).strict();
+export type ModelsTemplateGetResponse = z.infer<typeof modelsTemplateGetResponseSchema>;
+
+export const modelsTemplatePutRequestSchema = z.object({
+  template: modelsTemplateSchema,
+}).strict();
+export type ModelsTemplatePutRequest = z.infer<typeof modelsTemplatePutRequestSchema>;
+
+// ============================================================
 // Operator: wake queue view
 // ============================================================
 //
@@ -506,6 +566,7 @@ export const A8S_PATHS = {
   operatorWakeCancel: (wakeId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes/${encodeURIComponent(wakeId)}`,
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
+  operatorModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/operator/models-template`,
 } as const;
 
 export const WORKER_PATHS = {

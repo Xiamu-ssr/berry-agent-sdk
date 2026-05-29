@@ -25,8 +25,8 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { AgentHome } from '@berry-agent/core';
 import { InProcessWorkerNode, type WireWorkerAgentSpec } from '@berry-agent/a8s';
-import { Worker, type WorkerEnvironment } from '@berry-agent/worker';
-import { A8sOperatorClient, createClusterAdminHand } from '@berry-agent/a8s-admin';
+import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
+import { A8sOperatorClient, buildClusterAdminTools } from '@berry-agent/a8s-admin';
 import type { A8sServer } from './server.js';
 
 export interface LocalWorkerConfig {
@@ -84,10 +84,16 @@ export interface BootstrapResult {
  * Spin up an in-process worker and register it with this a8s server.
  * Returns the Worker so the caller can later mount agents on it directly
  * (e.g. ensureAdminAgent) without going through HTTP.
+ *
+ * `adminToken` enables the same cluster-admin label-injection that
+ * external worker daemons get — agents created with
+ * `labels.role === 'a8s-admin'` get the cluster-admin Hand tools
+ * auto-mounted via the worker node's resolveSpec hook. Passing it is
+ * required if you intend to call ensureAdminAgent.
  */
 export async function ensureLocalWorker(
   server: A8sServer,
-  config: LocalWorkerConfig,
+  config: LocalWorkerConfig & { adminToken?: string; a8sUrl?: string; a8sPort?: number },
 ): Promise<Worker> {
   const workerId = config.workerId ?? 'a8s-local';
   const capacity = config.capacity ?? 4;
@@ -113,10 +119,59 @@ export async function ensureLocalWorker(
   });
 
   // 2. In-memory side: add a WorkerNode so the plane's data-plane
-  //    routing can reach it without HTTP.
-  server.plane.addWorker(new InProcessWorkerNode(workerId, worker));
+  //    routing can reach it without HTTP. The resolveSpec hook applies
+  //    label conventions identical to the worker daemon — agents
+  //    arriving with `labels.role === 'a8s-admin'` get the cluster-
+  //    admin Hand auto-mounted (no a8s-server → a8s-admin coupling).
+  const a8sUrl = config.a8sUrl ?? `http://localhost:${config.a8sPort ?? server.port}`;
+  const resolveSpec = config.adminToken
+    ? makeAdminAwareResolveSpec({
+        a8sUrl,
+        adminToken: config.adminToken,
+        agentsRoot,
+      })
+    : undefined;
+  server.plane.addWorker(new InProcessWorkerNode(workerId, worker, { resolveSpec }));
 
   return worker;
+}
+
+/**
+ * Build a resolveSpec that injects the cluster-admin Hand for any
+ * spec carrying `labels.role === 'a8s-admin'`. Defined here (not in
+ * worker-daemon) because the local worker doesn't go through the
+ * daemon CLI — it builds its own resolveSpec chain inline.
+ */
+function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; agentsRoot: string }) {
+  const baseResolve = (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
+    const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
+      ? wire.workspace
+      : `${opts.agentsRoot}/${wire.workspace}`;
+    return {
+      agentId: wire.agentId,
+      workspace,
+      home: new AgentHome(workspace),
+      projectRoot: wire.projectRoot,
+      model: wire.model,
+      reasoningEffort: wire.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
+      toolDenylist: wire.toolDenylist,
+      ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
+    };
+  };
+  const client = new A8sOperatorClient({ a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
+  const adminTools = buildClusterAdminTools(client);
+  return (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
+    const base = baseResolve(wire);
+    if (wire.labels?.role !== 'a8s-admin') return base;
+    const existing = Array.from(base.hostTools ?? []);
+    const existingNames = new Set(existing.map((t) => t.definition.name));
+    const additions = adminTools.filter((t) => !existingNames.has(t.definition.name));
+    return {
+      ...base,
+      hostTools: [...existing, ...additions],
+      hostHandDisplayName: base.hostHandDisplayName ?? 'a8s cluster administration',
+    };
+  };
 }
 
 /**
@@ -159,6 +214,11 @@ export async function ensureAdminAgent(
   // through the same path human-created agents take. Skip if the agent
   // is already mounted on this worker — bootstrap runs on every a8s
   // start, and createAgent is not idempotent on its own.
+  //
+  // The `labels.role = 'a8s-admin'` is what wires up the cluster-admin
+  // Hand: the worker daemon's resolveSpec sees it and injects the 8
+  // tools via withClusterAdminHostTools. a8s-server itself never
+  // imports cluster-admin code — the wiring is by label convention.
   const existingLocation = server.plane.getAgentLocation(agentId);
   if (existingLocation.workerId == null) {
     const spec: WireWorkerAgentSpec = {
@@ -166,6 +226,7 @@ export async function ensureAdminAgent(
       workspace,
       model: config.model ?? 'tier:strong',
       ensureDefaultMcpConfig: false,
+      labels: { role: 'a8s-admin' },
     };
     await server.plane.createAgent(spec, { tag: 'admin-bootstrap' });
   }
@@ -175,16 +236,6 @@ export async function ensureAdminAgent(
     // createAgent should have placed it on our local worker (only option),
     // but defend against a future scheduler that picks differently.
     throw new Error(`ensureAdminAgent: agent ${agentId} was not mounted on the local worker after createAgent`);
-  }
-
-  // Install (or replace) the cluster-admin hand. Doing this every
-  // startup is fine — addHand is idempotent on hand id.
-  if (!mount.runtime.hasHand?.('cluster-admin')) {
-    const client = new A8sOperatorClient({
-      a8sUrl: config.a8sUrl ?? `http://localhost:${config.a8sPort}`,
-      adminToken,
-    });
-    mount.runtime.addHand(createClusterAdminHand({ client }));
   }
 
   // Seed AGENTS.md only on first boot so an operator who has customized

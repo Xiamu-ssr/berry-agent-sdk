@@ -71,15 +71,20 @@ export interface WorkerNode<TEntry = unknown> {
 
 export interface InProcessWorkerNodeOptions {
   /**
-   * Total capacity advertised when the underlying Worker has no supervisor
-   * (i.e. when there's no durable RuntimeWorker entry to read from).
-   * Defaults to POSITIVE_INFINITY so unscheduled in-process workers are
-   * treated as always-available — matches the previous behavior, but lets
-   * tests and small deployments cap a worker without spinning up the
-   * supervisor stack.
+   * Optional capacity reported when the underlying Worker has no
+   * supervisor. Defaults to `Infinity` — tests and single-process
+   * deployments without a supervisor accept unlimited agents.
    */
   defaultCapacity?: number;
   labels?: Readonly<Record<string, string>>;
+  /**
+   * Wire-spec → full-WorkerAgentSpec hook. Called for every runAgent.
+   * Lets callers inject hostTools / overrides based on the wire spec
+   * (typically by inspecting `labels`), the same way the worker daemon
+   * does for HTTP-attached workers. When omitted, the node constructs
+   * a minimal full spec with `new AgentHome(workspace)`.
+   */
+  resolveSpec?: (wire: WireWorkerAgentSpec) => WorkerAgentSpec;
 }
 
 /**
@@ -89,6 +94,7 @@ export interface InProcessWorkerNodeOptions {
 export class InProcessWorkerNode<TEntry = unknown> implements WorkerNode<TEntry> {
   public readonly labels?: Readonly<Record<string, string>>;
   private readonly defaultCapacity: number;
+  private readonly resolveSpec?: (wire: WireWorkerAgentSpec) => WorkerAgentSpec;
 
   constructor(
     public readonly workerId: string,
@@ -97,6 +103,7 @@ export class InProcessWorkerNode<TEntry = unknown> implements WorkerNode<TEntry>
   ) {
     this.labels = options.labels;
     this.defaultCapacity = options.defaultCapacity ?? Number.POSITIVE_INFINITY;
+    this.resolveSpec = options.resolveSpec;
   }
 
   async capacity(): Promise<WorkerNodeCapacity> {
@@ -127,16 +134,23 @@ export class InProcessWorkerNode<TEntry = unknown> implements WorkerNode<TEntry>
     // (AgentHome, default hostTools) locally because we're in the same
     // process as the SDK. Remote workers do this via their
     // resolveSpec callback in worker-daemon.
-    const fullSpec: WorkerAgentSpec = {
-      agentId: spec.agentId,
-      workspace: spec.workspace,
-      home: new AgentHome(spec.workspace),
-      projectRoot: spec.projectRoot,
-      model: spec.model,
-      reasoningEffort: spec.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
-      toolDenylist: spec.toolDenylist,
-      ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
-    };
+    //
+    // When the caller provides their own resolveSpec, defer to it
+    // entirely — that's how cluster-admin / team-mode tools get
+    // injected for in-process workers by the same label-conventions
+    // that fire for daemon-hosted workers.
+    const fullSpec: WorkerAgentSpec = this.resolveSpec
+      ? this.resolveSpec(spec)
+      : {
+          agentId: spec.agentId,
+          workspace: spec.workspace,
+          home: new AgentHome(spec.workspace),
+          projectRoot: spec.projectRoot,
+          model: spec.model,
+          reasoningEffort: spec.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
+          toolDenylist: spec.toolDenylist,
+          ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
+        };
     if (this.worker.supervisor()) {
       await this.worker.runAgent(agentId, entry, fullSpec, hooks);
     } else {
