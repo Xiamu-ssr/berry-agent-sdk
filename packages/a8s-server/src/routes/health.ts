@@ -2,17 +2,18 @@
 // Routes: health, /metrics, /ui
 // ============================================================
 //
-// Unauthenticated endpoints. /ui is the operator-facing single-page
-// app; the page itself ships no secrets, the user pastes the admin
-// token into an in-page modal. /metrics is also unauthenticated by
-// convention (Prometheus scrape targets historically don't auth) — put
-// it behind nginx for restricted deployments.
+// Unauthenticated endpoints. /ui serves the React app built in
+// `ui/` (output dist/ui/). The page itself ships no secrets; the
+// user pastes the admin token into an in-page modal which lives in
+// localStorage. /metrics is also unauthenticated by convention
+// (Prometheus scrape targets historically don't auth) — put it behind
+// nginx for restricted deployments.
 
 import { A8S_PATHS, healthResponseSchema } from '@berry-agent/cluster-protocol';
 import { writeJson, writeText } from '../http-helpers.js';
-import type { RouteDefinition } from '../router.js';
+import type { RouteContext, RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { A8S_UI_HTML } from '../ui-html.js';
+import { fallbackHtml, loadUiAsset } from '../ui-assets.js';
 
 export function healthRoutes(deps: ServerDeps): RouteDefinition[] {
   return [
@@ -33,9 +34,6 @@ export function healthRoutes(deps: ServerDeps): RouteDefinition[] {
       pattern: '/metrics',
       name: 'GET /metrics',
       handler: ({ res }) => {
-        // Refresh the cluster-cardinality gauges so /metrics is a
-        // self-contained snapshot. Counters/histograms are accumulated
-        // by the per-request metrics middleware.
         const agents = deps.plane.listAgents();
         deps.metrics.agentsTotal.set(agents.length);
         writeText(res, 200, deps.metrics.render(), 'text/plain; version=0.0.4');
@@ -45,16 +43,45 @@ export function healthRoutes(deps: ServerDeps): RouteDefinition[] {
 }
 
 export function uiRoutes(_deps: ServerDeps): RouteDefinition[] {
-  const handler = (path: string) => ({
-    method: 'GET' as const,
-    pattern: path,
-    name: `GET ${path}`,
-    handler: ({ res }: { res: import('node:http').ServerResponse }) => {
-      res.statusCode = 200;
-      res.setHeader('content-type', 'text/html; charset=utf-8');
-      res.setHeader('cache-control', 'no-store');
-      res.end(A8S_UI_HTML);
+  return [
+    // Root and bare /ui → index.html
+    { method: 'GET', pattern: '/', name: 'GET /', handler: serveIndex },
+    { method: 'GET', pattern: '/ui', name: 'GET /ui', handler: serveIndex },
+    { method: 'GET', pattern: '/ui/', name: 'GET /ui/', handler: serveIndex },
+    // SPA assets: /ui/assets/foo.js, /ui/index-XYZ.css, etc.
+    {
+      method: 'GET',
+      pattern: '/ui/:asset',
+      name: 'GET /ui/:asset',
+      handler: ({ params, res }) => serveAsset(`/${params.asset}`, res),
     },
-  });
-  return [handler('/'), handler('/ui'), handler('/ui/')];
+    {
+      method: 'GET',
+      pattern: '/ui/:dir/:asset',
+      name: 'GET /ui/:dir/:asset',
+      handler: ({ params, res }) => serveAsset(`/${params.dir}/${params.asset}`, res),
+    },
+  ];
+}
+
+async function serveIndex({ res }: RouteContext): Promise<void> {
+  const asset = (await loadUiAsset('/index.html')) ?? fallbackHtml();
+  res.statusCode = 200;
+  res.setHeader('content-type', asset.contentType);
+  res.setHeader('cache-control', asset.cacheControl);
+  res.end(asset.body);
+}
+
+async function serveAsset(rel: string, res: import('node:http').ServerResponse): Promise<void> {
+  const asset = await loadUiAsset(rel);
+  if (!asset) {
+    res.statusCode = 404;
+    res.setHeader('content-type', 'text/plain');
+    res.end(`not found: ${rel}`);
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('content-type', asset.contentType);
+  res.setHeader('cache-control', asset.cacheControl);
+  res.end(asset.body);
 }

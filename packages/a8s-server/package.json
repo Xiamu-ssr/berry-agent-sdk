@@ -14,7 +14,8 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && tsc && chmod +x dist/cli.js 2>/dev/null || true",
+    "build": "rm -rf dist && tsc && chmod +x dist/cli.js 2>/dev/null || true && npm run --silent build:ui --if-present",
+    "build:ui": "if [ -d ui/node_modules ]; then cd ui && npm run build; else echo '[a8s-server] ui/node_modules missing; skipping UI build (run: cd packages/a8s-server/ui && npm install)'; fi",
     "dev": "tsc -w"
   },
   "dependencies": {
