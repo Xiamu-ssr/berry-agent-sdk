@@ -71,10 +71,15 @@ Options:
                         Default: /var/berry/agents
   --capacity <n>        Local worker capacity (default 4).
 
-  --admin-agent         Ensure a 'berry-admin' agent is mounted on the local
-                        worker, with cluster-admin tools installed. Implies
-                        --local-worker. Requires --models-config so the
-                        agent's LLM provider can resolve. Default: off.
+  --admin-agent         Ensure a 'berry-admin' agent is scheduled onto an
+                        active worker (cluster-admin tools are injected by
+                        whichever worker mounts it, via labels.role). Implies
+                        --local-worker so there is guaranteed capacity at
+                        boot — remote workers register asynchronously and may
+                        not be up yet. Requires --models-config so the agent's
+                        LLM provider can resolve. Default: off. (The a8s UI
+                        Settings page can also bootstrap it later once any
+                        worker is up.)
   --models-config <p>   JSON file with { providers, models, tiers } in
                         @berry-agent/models shape. Required when
                         --local-worker or --admin-agent is set.

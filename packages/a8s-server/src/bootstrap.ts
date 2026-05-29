@@ -73,14 +73,14 @@ export interface AdminAgentConfig {
 
 /**
  * Spin up an in-process worker and register it with this a8s server.
- * Returns the Worker so the caller can later mount agents on it directly
- * (e.g. ensureAdminAgent) without going through HTTP.
+ * Returns the Worker (the caller rarely needs it now — scheduling goes
+ * through the plane, not the worker handle).
  *
  * `adminToken` enables the same cluster-admin label-injection that
  * external worker daemons get — agents created with
  * `labels.role === 'a8s-admin'` get the cluster-admin Hand tools
  * auto-mounted via the worker node's resolveSpec hook. Passing it is
- * required if you intend to call ensureAdminAgent.
+ * required if this local worker is to host the berry-admin agent.
  */
 export async function ensureLocalWorker(
   server: A8sServer,
