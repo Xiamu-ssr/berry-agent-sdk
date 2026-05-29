@@ -40,6 +40,25 @@ export function requireAdminToken(deps: ServerDeps): Middleware {
 }
 
 /**
+ * Middleware that requires the per-machine token issued at registration.
+ * Reads machineId from ctx.params.machineId. Symmetric to
+ * requireWorkerToken but backed by the MachineRegistry.
+ */
+export function requireMachineToken(deps: ServerDeps): Middleware {
+  return async (ctx, next) => {
+    const machineId = ctx.params.machineId;
+    if (!machineId) throw httpError(400, 'invalid_request', 'machineId param missing');
+    const presented = parseWorkerAuthHeader(
+      ctx.req.headers[WORKER_AUTH_HEADER.toLowerCase()] as string | undefined,
+    );
+    if (!deps.machines.verifyToken(machineId, presented)) {
+      throw httpError(401, 'unauthorized', `invalid or unknown machine token for ${machineId}`);
+    }
+    return next();
+  };
+}
+
+/**
  * Middleware that requires the request to carry the per-worker token
  * issued at registration. Reads workerId from ctx.params.workerId.
  */

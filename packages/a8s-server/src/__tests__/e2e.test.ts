@@ -35,6 +35,10 @@ import {
   WorkerDaemon,
   WorkerRegistrationClient,
 } from '@berry-agent/worker-daemon';
+import {
+  MachineConnectorDaemon,
+  MachineRegistrationClient,
+} from '@berry-agent/machine-connector';
 import { A8sServer } from '../server.js';
 import { ensureAdminAgent, ensureLocalWorker } from '../bootstrap.js';
 
@@ -1319,6 +1323,69 @@ describe('a8s-server + worker-daemon E2E', () => {
     });
     expect(ghostResp.status).toBe(404);
 
+    await a8s.stop();
+  });
+
+  it('machine layer: connector registers, a8s brokers exec, operator lists it', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'mach-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer mach-secret', 'content-type': 'application/json' };
+
+    // ---- Bring up a real machine connector on a random port ----
+    const machinePort = await pickPort();
+    const connector = new MachineConnectorDaemon({
+      machineId: 'mac-1',
+      port: machinePort,
+      bindHost: '127.0.0.1',
+    });
+    const cInfo = await connector.start();
+
+    const reg = new MachineRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      machineId: 'mac-1',
+      callbackUrl: cInfo.callbackUrl,
+      heartbeatTtlMs: 30_000,
+      platform: 'macos',
+      adminToken: 'mach-secret',
+    });
+    const regResult = await reg.register();
+    connector.setAuthToken(regResult.machineToken);
+
+    // ---- Operator sees the machine as active ----
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorMachines}`, { headers: adminHeaders });
+    const list = await listResp.json() as { machines: Array<{ machineId: string; state: string; platform?: string }> };
+    const found = list.machines.find((m) => m.machineId === 'mac-1');
+    expect(found).toBeDefined();
+    expect(found!.state).toBe('active');
+    expect(found!.platform).toBe('macos');
+
+    // ---- a8s brokers an exec to the machine (caller never sees machine token) ----
+    const execResp = await fetch(`${a8sInfo.url}/v1/machines/mac-1/exec`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ command: 'echo via-a8s-broker', cwd: process.cwd(), env: {} }),
+    });
+    expect(execResp.status).toBe(200);
+    const execReply = await execResp.json() as { output: string; isError: boolean };
+    expect(execReply.isError).toBe(false);
+    expect(execReply.output).toContain('via-a8s-broker');
+
+    // ---- exec to unknown machine → 404 ----
+    const ghost = await fetch(`${a8sInfo.url}/v1/machines/ghost/exec`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ command: 'echo x', cwd: process.cwd(), env: {} }),
+    });
+    expect(ghost.status).toBe(404);
+
+    await reg.withdraw();
+    await connector.stop();
     await a8s.stop();
   });
 });

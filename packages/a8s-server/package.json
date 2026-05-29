@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@berry-agent/runtime-sqlite": "*",
+    "@berry-agent/machine-connector": "*",
     "@types/node": "^22.10.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

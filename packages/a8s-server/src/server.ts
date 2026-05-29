@@ -30,11 +30,13 @@ import type { ServerDeps, WorkerTokenEntry } from './deps.js';
 import { A8sMetrics } from './metrics.js';
 import { withMetrics, withRateLimit } from './middleware.js';
 import { ModelsTemplateStore } from './models-template-store.js';
+import { MachineRegistry } from './machine-registry.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
 
 import { agentRoutes } from './routes/agents.js';
 import { healthRoutes, uiRoutes } from './routes/health.js';
+import { machineRoutes } from './routes/machines.js';
 import { modelsRoutes } from './routes/models.js';
 import { operatorRoutes } from './routes/operator.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -103,6 +105,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly audit: AuditLog;
   private readonly metrics = new A8sMetrics();
   private readonly modelsTemplate: ModelsTemplateStore;
+  private readonly machines = new MachineRegistry();
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
   private router: Router | null = null;
@@ -151,6 +154,7 @@ export class A8sServer<TEntry = unknown> {
       audit: this.audit,
       metrics: this.metrics,
       modelsTemplate: this.modelsTemplate,
+      machines: this.machines,
       logger: this.logger,
       adminToken: this.adminToken,
       advertiseUrl: this.options.advertiseUrl,
@@ -171,6 +175,7 @@ export class A8sServer<TEntry = unknown> {
       ...wakeRoutes(this.deps),
       ...operatorRoutes(this.deps),
       ...modelsRoutes(this.deps),
+      ...machineRoutes(this.deps),
     ];
     // Wrap each route. Metrics first (so 429s still get counted), then
     // rate limit (except for streaming and the unbounded send call).
