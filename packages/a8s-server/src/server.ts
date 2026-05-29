@@ -48,6 +48,7 @@ import {
 } from '@berry-agent/a8s';
 import { ManagedRuntimeWakeScheduler, type RuntimeWake } from '@berry-agent/runtime';
 import type { WorkerAgentSpec } from '@berry-agent/worker';
+import { A8S_UI_HTML } from './ui-html.js';
 
 // We can't import `createServer` from node:http and also have a module
 // called createServer here without conflict. Use namespacing.
@@ -193,6 +194,18 @@ export class A8sServer<TEntry = unknown> {
         version: this.options.version ?? '0.0.0',
         uptime: Math.floor((Date.now() - this.startedAt) / 1000),
       }));
+    }
+
+    // ---- Unauthenticated: operator UI (the page itself). All API
+    //      calls inside the page carry the admin token; the HTML
+    //      shipping doesn't reveal anything sensitive. Serving /
+    //      redirects to /ui so a stock browser visit lands somewhere.
+    if (req.method === 'GET' && (url === '/' || url === '/ui' || url === '/ui/')) {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.setHeader('cache-control', 'no-store');
+      res.end(A8S_UI_HTML);
+      return;
     }
 
     // ---- Worker-scope: authenticated per-worker (own assertWorkerAuth) ----

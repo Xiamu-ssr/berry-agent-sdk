@@ -63,6 +63,8 @@ export interface WorkerDaemonOptions<TEntry = unknown> {
     reasoningEffort?: string;
     toolDenylist?: string[];
     ensureDefaultMcpConfig?: boolean;
+    /** Agent-level labels stamped at createAgent time (free-form). */
+    labels?: Readonly<Record<string, string>>;
   }) => WorkerAgentSpec;
   /** Built-in version string surfaced via /health. */
   version?: string;
@@ -209,6 +211,7 @@ export class WorkerDaemon<TEntry = unknown> {
       reasoningEffort: parsed.spec.reasoningEffort,
       toolDenylist: parsed.spec.toolDenylist,
       ensureDefaultMcpConfig: parsed.spec.ensureDefaultMcpConfig,
+      labels: parsed.spec.labels,
     });
 
     if (this.worker.supervisor()) {

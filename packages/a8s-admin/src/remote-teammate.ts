@@ -7,21 +7,21 @@
 // runtimes. Returns a TeamAgentRuntime-shaped facade whose `send()`
 // hops product → a8s → owning worker → real agent.
 //
-// First-iteration scope:
-//   - `spawn_teammate` creates the agent through a8s; a8s scheduler
-//     picks a worker (so the teammate can be on a different host than
-//     the leader).
-//   - `message_teammate` forwards via /v1/agents/:id/send and returns
-//     the awaited turn result, identical semantics to in-process.
-//   - `hasHand` always returns false; `addHand` throws. The team-side
-//     teammate tools (message_leader / worklist) would need to be
-//     pre-installed on the remote worker — that's a separate piece of
-//     plumbing (worker daemon resolveSpec hook), not in this iteration.
+// Communication channels:
+//   - **Leader → teammate**: `message_teammate` (sync RPC) forwards via
+//     /v1/agents/:id/send and returns the awaited turn result, identical
+//     semantics to in-process.
+//   - **Teammate → leader** (async): the teammate's worker daemon (when
+//     started with an admin token, which is required for joining a8s
+//     anyway) auto-injects a `message_leader` hostTool that schedules a
+//     wake against the leader's agentId via /v1/wakes/schedule. The
+//     wake delivery loop in a8s-server sends the leader a structured
+//     `[system wake] reason: teammate_message ...` prompt next tick.
 //
-// What you lose vs in-process: the teammate cannot asynchronously
-// notify the leader (no message_leader yet). What you gain: a leader
-// on worker A can delegate to a teammate on worker B without ever
-// touching A's process — true cross-machine teams.
+// What you give up vs in-process: `addHand` on the facade throws —
+// you cannot inject runtime objects across the network. Teammate-side
+// behaviour must be expressible as labels or via the worker daemon's
+// resolveSpec hook (the team-mode helper handles message_leader).
 
 import {
   A8S_PATHS,

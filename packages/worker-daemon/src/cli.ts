@@ -23,7 +23,7 @@ import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { WorkerDaemon, WorkerRegistrationClient } from './index.js';
+import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools } from './index.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -221,6 +221,12 @@ async function main(argv: string[]): Promise<number> {
   const machine = values.machine ?? config.machine ?? hostname();
   const labels: Record<string, string> = { ...(config.labels ?? {}), machine };
 
+  // Resolve admin token early — needed by both registration (bootstrap
+  // handshake) and team-mode (when the daemon mounts a teammate, the
+  // injected message_leader tool calls a8s /v1/wakes/schedule which is
+  // admin-scoped).
+  const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken;
+
   // ---- Build the WorkerEnvironment ----
   const env: WorkerEnvironment = {
     registry: config.registry as unknown as ModelsRegistry,
@@ -232,32 +238,34 @@ async function main(argv: string[]): Promise<number> {
   const worker = new Worker({ env });
 
   // ---- Build the daemon ----
+  // Base resolveSpec maps wire → full WorkerAgentSpec. We then wrap it
+  // with the team-mode helper so agents arriving with labels.team='true'
+  // get the message_leader hostTool auto-injected — but only when we
+  // know how to authenticate against a8s for the wake schedule call.
+  const baseResolveSpec = (wire: Parameters<NonNullable<ConstructorParameters<typeof WorkerDaemon>[0]['resolveSpec']>>[0]): WorkerAgentSpec => {
+    const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
+      ? wire.workspace
+      : join(agentsRoot, wire.workspace);
+    return {
+      agentId: wire.agentId,
+      workspace,
+      home: new AgentHome(workspace),
+      projectRoot: wire.projectRoot,
+      model: wire.model,
+      ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
+    };
+  };
+  const resolveSpec = adminToken
+    ? withTeamModeHostTools(baseResolveSpec, { a8sUrl, adminToken })
+    : baseResolveSpec;
+
   const daemon = new WorkerDaemon({
     worker,
     workerId,
     port,
     bindHost: config.bindHost,
     version: '0.5.0-alpha.1',
-    /**
-     * Resolve a wire spec into a full WorkerAgentSpec. The agent's
-     * workspace is reinterpreted as relative to this machine's
-     * agentsRoot if it's a bare agent id (no path separator) — letting
-     * clients say `workspace: "coder"` without knowing absolute paths.
-     * Absolute paths are passed through verbatim for advanced setups.
-     */
-    resolveSpec: (wire): WorkerAgentSpec => {
-      const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
-        ? wire.workspace
-        : join(agentsRoot, wire.workspace);
-      return {
-        agentId: wire.agentId,
-        workspace,
-        home: new AgentHome(workspace),
-        projectRoot: wire.projectRoot,
-        model: wire.model,
-        ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
-      };
-    },
+    resolveSpec,
   });
 
   const info = await daemon.start();
@@ -274,7 +282,7 @@ async function main(argv: string[]): Promise<number> {
     capacity: config.capacity,
     heartbeatTtlMs: config.heartbeatTtlMs,
     labels,
-    adminToken: values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken,
+    adminToken,
   });
 
   const regResult = await reg.register();

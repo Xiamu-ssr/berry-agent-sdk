@@ -936,6 +936,32 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
+  it('serves the built-in operator UI on / and /ui without admin token', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'ui-secret',
+    });
+    const a8sInfo = await a8s.start();
+
+    for (const path of ['/', '/ui', '/ui/']) {
+      const resp = await fetch(`${a8sInfo.url}${path}`);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('content-type')).toMatch(/text\/html/);
+      const html = await resp.text();
+      expect(html).toContain('berry-a8s');
+      expect(html).toContain('/v1/operator/cluster');
+      // The HTML must NOT contain the admin token — only the browser
+      // collects it via the modal.
+      expect(html).not.toContain('ui-secret');
+    }
+    await a8s.stop();
+  });
+
   it('worker restart: re-mounts owned agents from disk via register response', async () => {
     // Persistence is the whole point: use an actual durable store (memory
     // is fine in-process since both worker instances share one JS heap;
