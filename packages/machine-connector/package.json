@@ -1,0 +1,36 @@
+{
+  "name": "@berry-agent/machine-connector",
+  "version": "0.5.0-alpha.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "berry-machine": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc && chmod +x dist/cli.js 2>/dev/null || true",
+    "dev": "tsc -w"
+  },
+  "dependencies": {
+    "@berry-agent/cluster-protocol": "*",
+    "@berry-agent/tools-common": "*",
+    "@berry-agent/core": "*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT"
+}
