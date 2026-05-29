@@ -378,6 +378,35 @@ export type OperatorClusterReport = z.infer<typeof operatorClusterReportSchema>;
 export const operatorOkResponseSchema = z.object({ ok: z.literal(true) }).strict();
 export type OperatorOkResponse = z.infer<typeof operatorOkResponseSchema>;
 
+// ============================================================
+// Operator: wake queue view
+// ============================================================
+//
+// Wakes go through pending → claimed → completed | failed | cancelled.
+// Operators want to see the queue to debug long-tail tasks ("why hasn't
+// my agent woken up at 9 am yet?") and to cancel obsolete schedules.
+
+export const operatorWakeSchema = z.object({
+  wakeId: z.string().min(1),
+  agentId: z.string().min(1),
+  reason: z.string().min(1),
+  state: z.enum(['pending', 'claimed', 'completed', 'failed', 'cancelled']),
+  createdAt: z.number().int(),
+  dueAt: z.number().int(),
+  claimedAt: z.number().int().optional(),
+  completedAt: z.number().int().optional(),
+  failedAt: z.number().int().optional(),
+  cancelledAt: z.number().int().optional(),
+  errorMessage: z.string().optional(),
+  sessionId: z.string().optional(),
+}).passthrough();
+export type OperatorWake = z.infer<typeof operatorWakeSchema>;
+
+export const operatorWakeListResponseSchema = z.object({
+  wakes: z.array(operatorWakeSchema),
+}).strict();
+export type OperatorWakeListResponse = z.infer<typeof operatorWakeListResponseSchema>;
+
 /**
  * Operator → a8s: "give me a copy-paste-able shell snippet that will
  * install + start a worker on a fresh host so it joins this cluster."
@@ -473,6 +502,9 @@ export const A8S_PATHS = {
   operatorWorkerEvict: (workerId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/${encodeURIComponent(workerId)}/evict`,
   operatorLeases: `/${CLUSTER_PROTOCOL_VERSION}/operator/leases`,
+  operatorWakes: `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes`,
+  operatorWakeCancel: (wakeId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes/${encodeURIComponent(wakeId)}`,
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
 } as const;
 

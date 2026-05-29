@@ -1182,4 +1182,78 @@ describe('a8s-server + worker-daemon E2E', () => {
     await worker.dispose();
     await a8s2.stop();
   });
+
+  it('exposes /metrics in Prometheus text format', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort, controlPlane: { orchestrator }, adminToken: 'm-secret',
+    });
+    const a8sInfo = await a8s.start();
+    // Generate one request that's counted: hit health.
+    await fetch(`${a8sInfo.url}${A8S_PATHS.health}`);
+    const resp = await fetch(`${a8sInfo.url}/metrics`);
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get('content-type')).toMatch(/text\/plain/);
+    const body = await resp.text();
+    // Prometheus exposition: HELP/TYPE lines + sample lines.
+    expect(body).toContain('# HELP a8s_requests_total');
+    expect(body).toContain('# TYPE a8s_requests_total counter');
+    expect(body).toContain('a8s_request_duration_seconds');
+    expect(body).toContain('a8s_agents_total');
+    await a8s.stop();
+  });
+
+  it('operator wake API: list + cancel', async () => {
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort, controlPlane: { orchestrator }, adminToken: 'w-secret',
+      // Disable the wake-delivery loop so the wake stays pending for us to inspect.
+      wakeTickMs: 0,
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer w-secret' };
+
+    // Schedule a wake far in the future so it doesn't auto-claim.
+    const schedResp = await fetch(`${a8sInfo.url}${A8S_PATHS.wakesSchedule}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...adminHeaders },
+      body: JSON.stringify({
+        agentId: 'op-w-a',
+        dueAt: Date.now() + 60_000_000,
+        reason: 'op-test',
+      }),
+    });
+    expect(schedResp.status).toBe(200);
+    const { wakeId } = await schedResp.json() as { wakeId: string };
+
+    // List shows it.
+    const listResp = await fetch(`${a8sInfo.url}/v1/operator/wakes`, { headers: adminHeaders });
+    expect(listResp.status).toBe(200);
+    const list = await listResp.json() as { wakes: Array<{ wakeId: string; state: string }> };
+    const found = list.wakes.find((w) => w.wakeId === wakeId);
+    expect(found).toBeDefined();
+    expect(found!.state).toBe('pending');
+
+    // Cancel.
+    const cancelResp = await fetch(`${a8sInfo.url}/v1/operator/wakes/${wakeId}`, {
+      method: 'DELETE',
+      headers: adminHeaders,
+    });
+    expect(cancelResp.status).toBe(200);
+
+    // 404 on unknown.
+    const ghostResp = await fetch(`${a8sInfo.url}/v1/operator/wakes/ghost`, {
+      method: 'DELETE',
+      headers: adminHeaders,
+    });
+    expect(ghostResp.status).toBe(404);
+
+    await a8s.stop();
+  });
 });
