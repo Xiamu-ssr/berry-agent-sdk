@@ -29,7 +29,7 @@ import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withClusterAdminHostTools } from './index.js';
+import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withClusterAdminHostTools, withMachineHostTools } from './index.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -332,6 +332,7 @@ async function main(argv: string[]): Promise<number> {
   if (adminToken) {
     resolveSpec = withTeamModeHostTools(resolveSpec, { a8sUrl, adminToken });
     resolveSpec = withClusterAdminHostTools(resolveSpec, { a8sUrl, adminToken });
+    resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl, adminToken });
   }
 
   const daemon = new WorkerDaemon({

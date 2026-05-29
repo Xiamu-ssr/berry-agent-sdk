@@ -13,3 +13,6 @@ export type { TeamModeResolverOptions, WireResolveInput } from './team-mode.js';
 
 export { withClusterAdminHostTools } from './cluster-admin-mode.js';
 export type { ClusterAdminModeResolverOptions } from './cluster-admin-mode.js';
+
+export { withMachineHostTools } from './machine-mode.js';
+export type { MachineModeResolverOptions } from './machine-mode.js';

@@ -1388,4 +1388,66 @@ describe('a8s-server + worker-daemon E2E', () => {
     await connector.stop();
     await a8s.stop();
   });
+
+  it('machine layer: an agent with labels.machines gets a machine exec tool that reaches the connector', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'mix-secret',
+    });
+    const a8sInfo = await a8s.start();
+
+    // Local worker whose resolveSpec injects machine tools by label.
+    const root = mkdtempSync(join(tmpdir(), 'a8s-mix-'));
+    const worker = await ensureLocalWorker(a8s, {
+      env: makeTestWorkerEnv(root),
+      dataRoot: root,
+      agentsRoot: join(root, 'agents'),
+      capacity: 4,
+      workerId: 'a8s-local',
+      adminToken: 'mix-secret',
+      a8sPort,
+    });
+
+    // A real connector for machine "mac-1".
+    const machinePort = await pickPort();
+    const connector = new MachineConnectorDaemon({ machineId: 'mac-1', port: machinePort, bindHost: '127.0.0.1' });
+    const cInfo = await connector.start();
+    const reg = new MachineRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      machineId: 'mac-1',
+      callbackUrl: cInfo.callbackUrl,
+      heartbeatTtlMs: 30_000,
+      adminToken: 'mix-secret',
+    });
+    connector.setAuthToken((await reg.register()).machineToken);
+
+    // Create an agent that declares it operates mac-1.
+    await a8s.plane.createAgent(
+      {
+        agentId: 'operator-agent',
+        workspace: 'operator-agent',
+        model: 'tier:strong',
+        ensureDefaultMcpConfig: false,
+        labels: { machines: 'mac-1' },
+      },
+      { tag: 'mix' } as never,
+    );
+
+    // The mounted agent should expose the machine exec tool. (That the
+    // tool actually reaches the connector through the a8s broker is
+    // covered by the broker e2e above + the a8s-admin unit test; here we
+    // assert the label-driven injection wiring end-to-end.)
+    const mount = worker.get('operator-agent');
+    expect(mount).toBeDefined();
+    const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));
+    expect(toolNames.has('machine_mac-1_exec')).toBe(true);
+
+    await reg.withdraw();
+    await connector.stop();
+    await worker.dispose();
+    await a8s.stop();
+  });
 });

@@ -22,17 +22,23 @@ import {
   operatorJoinScriptRequestSchema,
   operatorJoinScriptResponseSchema,
   operatorLeaseListResponseSchema,
+  operatorMachineListResponseSchema,
   operatorOkResponseSchema,
   operatorWorkerListResponseSchema,
+  machineExecReplySchema,
+  machineExecRequestSchema,
   sendRequestSchema,
   sendResponseSchema,
   type CreateAgentRequest,
   type CreateAgentResponse,
   type ListAgentsResponse,
+  type MachineExecReply,
+  type MachineExecRequest,
   type OperatorClusterReport,
   type OperatorJoinScriptRequest,
   type OperatorJoinScriptResponse,
   type OperatorLeaseListResponse,
+  type OperatorMachineListResponse,
   type OperatorWorkerListResponse,
   type SendRequest,
   type SendResponse,
@@ -147,6 +153,37 @@ export class A8sOperatorClient {
       throw new Error(`a8s POST send failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
     }
     return sendResponseSchema.parse(await resp.json());
+  }
+
+  // ----- Machines (machine layer) -----
+
+  async listMachines(): Promise<OperatorMachineListResponse> {
+    return this.parseGet(A8S_PATHS.operatorMachines, operatorMachineListResponseSchema);
+  }
+
+  /**
+   * Run a command on a registered machine, brokered by a8s. The caller
+   * authenticates with the admin token; a8s holds the machine token and
+   * forwards. Returns the machine's exec reply.
+   */
+  async machineExec(machineId: string, input: MachineExecRequest): Promise<MachineExecReply> {
+    const body = JSON.stringify(machineExecRequestSchema.parse(input));
+    const resp = await this.fetchImpl(
+      `${this.baseUrl}/v1/machines/${encodeURIComponent(machineId)}/exec`,
+      {
+        method: 'POST',
+        headers: {
+          [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+          'content-type': 'application/json',
+        },
+        body,
+      },
+    );
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST machine exec failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return machineExecReplySchema.parse(await resp.json());
   }
 
   // ----- Internal HTTP helpers -----

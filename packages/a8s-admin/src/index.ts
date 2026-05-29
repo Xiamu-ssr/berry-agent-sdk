@@ -21,6 +21,8 @@ export { A8sOperatorClient } from './operator-client.js';
 export type { A8sOperatorClientOptions } from './operator-client.js';
 export { createClusterAdminHand, buildClusterAdminTools } from './cluster-admin-hand.js';
 export type { ClusterAdminHandOptions } from './cluster-admin-hand.js';
+export { createMachineHand, buildMachineTools } from './machine-hand.js';
+export type { MachineHandOptions } from './machine-hand.js';
 export { createRemoteTeammateRuntimeFactory } from './remote-teammate.js';
 export type { RemoteTeammateRuntimeFactoryOptions } from './remote-teammate.js';
 export { DEFAULT_ADMIN_SYSTEM_PROMPT, seedAdminAgentHome } from './admin-agent-defaults.js';

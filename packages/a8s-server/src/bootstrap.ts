@@ -27,7 +27,7 @@ import { hostname } from 'node:os';
 import { AgentHome } from '@berry-agent/core';
 import { InProcessWorkerNode, type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { A8sOperatorClient, buildClusterAdminTools, seedAdminAgentHome } from '@berry-agent/a8s-admin';
+import { A8sOperatorClient, buildClusterAdminTools, buildMachineTools, seedAdminAgentHome } from '@berry-agent/a8s-admin';
 import type { A8sServer } from './server.js';
 
 export interface LocalWorkerConfig {
@@ -128,10 +128,13 @@ export async function ensureLocalWorker(
 }
 
 /**
- * Build a resolveSpec that injects the cluster-admin Hand for any
- * spec carrying `labels.role === 'a8s-admin'`. Defined here (not in
- * worker-daemon) because the local worker doesn't go through the
- * daemon CLI — it builds its own resolveSpec chain inline.
+ * Build a resolveSpec for the in-process local worker that mirrors the
+ * worker daemon's label-driven injection:
+ *   - `labels.role === 'a8s-admin'` → cluster-admin tools + seed AGENTS.md
+ *   - `labels.machines = "id1,id2"` → per-machine exec tools
+ * Defined here (not reused from worker-daemon) because a8s-server cannot
+ * depend on worker-daemon; it shares the single-source tool *builders*
+ * from a8s-admin, so the tool surface stays identical to the daemon path.
  */
 function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; agentsRoot: string }) {
   const baseResolve = (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
@@ -153,18 +156,33 @@ function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; a
   const adminTools = buildClusterAdminTools(client);
   return (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
     const base = baseResolve(wire);
-    if (wire.labels?.role !== 'a8s-admin') return base;
-    // First-boot: seed default AGENTS.md if absent. Same single-source
-    // helper the worker daemon uses; runs here because the in-process
-    // worker shares this host's filesystem.
-    seedAdminAgentHome(base.workspace);
+    const isAdmin = wire.labels?.role === 'a8s-admin';
+    const machineIds = (wire.labels?.machines ?? '')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    if (!isAdmin && machineIds.length === 0) return base;
+
+    const additions: ReturnType<typeof buildClusterAdminTools> = [];
+    let displayName = base.hostHandDisplayName;
+    if (isAdmin) {
+      // First-boot: seed default AGENTS.md if absent. Same single-source
+      // helper the worker daemon uses; runs here because the in-process
+      // worker shares this host's filesystem.
+      seedAdminAgentHome(base.workspace);
+      additions.push(...adminTools);
+      displayName = displayName ?? 'a8s cluster administration';
+    }
+    for (const machineId of machineIds) {
+      additions.push(...buildMachineTools({ client, machineId }));
+      displayName = displayName ?? 'Machine access';
+    }
+
     const existing = Array.from(base.hostTools ?? []);
     const existingNames = new Set(existing.map((t) => t.definition.name));
-    const additions = adminTools.filter((t) => !existingNames.has(t.definition.name));
+    const merged = additions.filter((t) => !existingNames.has(t.definition.name));
     return {
       ...base,
-      hostTools: [...existing, ...additions],
-      hostHandDisplayName: base.hostHandDisplayName ?? 'a8s cluster administration',
+      hostTools: [...existing, ...merged],
+      hostHandDisplayName: displayName,
     };
   };
 }
