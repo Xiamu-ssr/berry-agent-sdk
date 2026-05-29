@@ -34,6 +34,15 @@ export interface ShellToolOptions {
   blockedCommands?: string[];
   /** Command executor. Defaults to NodeExecutor (no sandbox). */
   executor?: CommandExecutor;
+  /**
+   * Fail closed: when true, an absent `executor` is a hard error instead of
+   * silently falling back to the unsandboxed local NodeExecutor. Required by
+   * callers that bind shell tools to a *remote* execution point (machine
+   * Hands) — there, a silent fallback would run the command on the brain's
+   * own host, which is exactly the wrong machine. Local-convenience callers
+   * leave this off and keep the NodeExecutor default.
+   */
+  requireExecutor?: boolean;
 }
 
 type ProcessStatus = 'running' | 'exited';
@@ -73,6 +82,13 @@ export function createShellTools(projectRoot: string, options?: ShellToolOptions
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
   const maxOutput = options?.maxOutput ?? MAX_OUTPUT;
   const blocked = new Set(options?.blockedCommands ?? []);
+  if (options?.requireExecutor && !options.executor) {
+    throw new Error(
+      'createShellTools: requireExecutor is set but no executor was provided. '
+      + 'Refusing to fall back to the local NodeExecutor — a remote/machine Hand '
+      + 'must bind an executor pointing at its target host.',
+    );
+  }
   const executor = options?.executor ?? new NodeExecutor();
   const manager = new ProcessSessionManager(projectRoot, maxOutput, executor);
 

@@ -17,6 +17,8 @@ const SEARCH_TIMEOUT = 15_000;
 export interface SearchToolOptions {
   /** Command executor. Defaults to NodeExecutor (no sandbox). */
   executor?: CommandExecutor;
+  /** Fail closed when executor is absent. See ShellToolOptions.requireExecutor. */
+  requireExecutor?: boolean;
 }
 
 /**
@@ -31,6 +33,12 @@ export function createSearchTools(
   projectRoot: string,
   options?: SearchToolOptions,
 ): ToolRegistration[] {
+  if (options?.requireExecutor && !options.executor) {
+    throw new Error(
+      'createSearchTools: requireExecutor is set but no executor was provided. '
+      + 'Refusing to fall back to the local NodeExecutor for a remote/machine Hand.',
+    );
+  }
   const executor = options?.executor ?? new NodeExecutor();
 
   const run = async (cmd: string): Promise<{ content: string; isError?: boolean }> => {

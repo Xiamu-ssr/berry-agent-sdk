@@ -365,6 +365,19 @@ describe('web_fetch tool', () => {
 
     expect(killed).toEqual(['SIGTERM']);
   });
+
+  it('requireExecutor throws instead of silently falling back to local NodeExecutor', () => {
+    // Machine/remote Hands set requireExecutor so an absent executor is a
+    // hard error — a silent NodeExecutor fallback would run on the brain's
+    // own host, the wrong machine.
+    expect(() => createShellTools(tmpDir, { requireExecutor: true })).toThrow(/requireExecutor/);
+    // With an executor provided, it constructs fine.
+    const executor: CommandExecutor = {
+      exec: vi.fn(async () => ({ output: '', isError: false })),
+      spawn: vi.fn(),
+    };
+    expect(() => createShellTools(tmpDir, { requireExecutor: true, executor })).not.toThrow();
+  });
 });
 
 describe('web_search tool', () => {
