@@ -1,4 +1,4 @@
-export type View = 'dashboard' | 'workers' | 'agents' | 'wakes' | 'admin' | 'settings';
+export type View = 'dashboard' | 'workers' | 'machines' | 'agents' | 'wakes' | 'admin' | 'settings';
 
 export interface SidebarProps {
   view: View;
@@ -8,6 +8,7 @@ export interface SidebarProps {
 const NAV: Array<{ key: View; label: string; icon: string }> = [
   { key: 'dashboard', label: 'Dashboard', icon: '◐' },
   { key: 'workers', label: 'Workers', icon: '▤' },
+  { key: 'machines', label: 'Machines', icon: '🖐' },
   { key: 'agents', label: 'Agents', icon: '◊' },
   { key: 'wakes', label: 'Wake queue', icon: '⏰' },
   { key: 'admin', label: 'Admin chat', icon: '✦' },

@@ -5,6 +5,7 @@ import { Topbar } from './components/Topbar.js';
 import { getToken } from './api/client.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { WorkersPage } from './pages/WorkersPage.js';
+import { MachinesPage } from './pages/MachinesPage.js';
 import { AgentsPage } from './pages/AgentsPage.js';
 import { WakesPage } from './pages/WakesPage.js';
 import { AdminChatPage } from './pages/AdminChatPage.js';
@@ -34,6 +35,7 @@ export function App() {
         <main className="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full">
           {view === 'dashboard' && <DashboardPage />}
           {view === 'workers' && <WorkersPage />}
+          {view === 'machines' && <MachinesPage />}
           {view === 'agents' && <AgentsPage />}
           {view === 'wakes' && <WakesPage />}
           {view === 'admin' && <AdminChatPage />}

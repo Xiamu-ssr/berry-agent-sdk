@@ -74,6 +74,37 @@ export function useJoinScript() {
   });
 }
 
+// ---- Machines (machine layer) ----
+
+export interface Machine {
+  machineId: string;
+  state: 'active' | 'withdrawn' | 'expired';
+  callbackUrl: string;
+  platform?: string;
+  labels?: Record<string, string>;
+  mcpServers: string[];
+  registeredAt: number;
+  heartbeatAt: number;
+  heartbeatExpiresAt: number;
+}
+export function useMachines() {
+  return useQuery({
+    queryKey: ['machines'],
+    queryFn: () => api<{ machines: Machine[] }>('/v1/operator/machines').then((r) => r.machines),
+    refetchInterval: 5000,
+  });
+}
+
+export function useMachineJoinScript() {
+  return useMutation({
+    mutationFn: (input: { machineId?: string; port?: number } = {}) =>
+      api<{ script: string; resolved: Record<string, unknown> }>(
+        '/v1/operator/machines/join-script',
+        { method: 'POST', body: JSON.stringify(input) },
+      ),
+  });
+}
+
 // ---- Agents ----
 
 export interface Agent {

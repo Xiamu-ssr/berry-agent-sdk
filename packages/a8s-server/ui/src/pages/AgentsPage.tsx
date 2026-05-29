@@ -6,6 +6,7 @@ import {
   useCreateAgent,
   useModelsTemplate,
   useWorkers,
+  useMachines,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { relativeTime } from '../components/StatusPill.js';
@@ -132,11 +133,13 @@ function CreateAgentModal({
 }) {
   const template = useModelsTemplate();
   const workers = useWorkers();
+  const machines = useMachines();
   const create = useCreateAgent();
 
   const [agentId, setAgentId] = useState('');
   const [model, setModel] = useState('');
   const [preferredMachine, setPreferredMachine] = useState('');
+  const [grantedMachines, setGrantedMachines] = useState<string[]>([]);
 
   const modelOptions = useMemo(() => {
     if (!template.data?.template) return { tiers: [], models: [] as string[] };
@@ -194,6 +197,9 @@ function CreateAgentModal({
                   agentId: agentId.trim(),
                   model: model.trim(),
                   preferredMachine: preferredMachine.trim() || undefined,
+                  labels: grantedMachines.length > 0
+                    ? { machines: grantedMachines.join(',') }
+                    : undefined,
                 },
                 {
                   onSuccess: () => onClose(),
@@ -256,6 +262,39 @@ function CreateAgentModal({
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
+            </Field>
+
+            <Field
+              label="Grant machines"
+              hint="Optional. Each selected machine gives this agent a machine_<id>_exec tool to run commands on that host."
+            >
+              {(machines.data ?? []).filter((m) => m.state === 'active').length === 0 ? (
+                <div className="text-xs text-ink-500 dark:text-ink-400">
+                  No active machines. Add one on the Machines page.
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {(machines.data ?? [])
+                    .filter((m) => m.state === 'active')
+                    .map((m) => {
+                      const on = grantedMachines.includes(m.machineId);
+                      return (
+                        <button
+                          type="button"
+                          key={m.machineId}
+                          className={`pill ${on ? 'pill-success' : 'pill-muted'} cursor-pointer`}
+                          onClick={() =>
+                            setGrantedMachines((prev) =>
+                              on ? prev.filter((x) => x !== m.machineId) : [...prev, m.machineId],
+                            )
+                          }
+                        >
+                          {on ? '✓ ' : ''}{m.machineId}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
             </Field>
 
             {create.error && <ErrorBanner error={create.error} />}
