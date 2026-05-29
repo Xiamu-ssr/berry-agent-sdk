@@ -2,7 +2,7 @@
 // @berry-agent/a8s-server — startup bootstrap helpers
 // ============================================================
 //
-// Two opt-in startup helpers that make a fresh `berry-a8s start` usable
+// Two opt-in helpers that make a fresh `berry-a8s start` usable
 // without a separate worker deployment:
 //
 //   - ensureLocalWorker  — boot an in-process Worker on the same host as
@@ -11,22 +11,23 @@
 //     berry-admin agent (which is what this is mostly for) — production
 //     agents should live on workers deployed on other machines.
 //
-//   - ensureAdminAgent   — make sure a 'berry-admin' agent is mounted on
-//     the local worker, with the cluster-admin Hand installed. The
-//     human operator (or the UI) chats with this agent to drive the
-//     cluster instead of curl-ing /v1/operator/* by hand.
+//   - ensureAdminAgent   — make sure a 'berry-admin' agent is scheduled
+//     onto *some* active worker, carrying `labels.role = 'a8s-admin'`.
+//     The worker that mounts it injects the cluster-admin tools and
+//     seeds the default AGENTS.md (both via its resolveSpec). a8s-server
+//     never touches the agent's on-disk home — that lives on the worker's
+//     machine. The human operator (or the UI) then chats with this agent
+//     to drive the cluster instead of curl-ing /v1/operator/* by hand.
 //
 // Both are idempotent on restart — registerWorker uses a stable id and
-// createAgent short-circuits when an active lease already binds the
-// agent to a worker.
+// ensureAdminAgent short-circuits when the agent is already assigned.
 
 import { mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
 import { AgentHome } from '@berry-agent/core';
-import { InProcessWorkerNode, type WireWorkerAgentSpec } from '@berry-agent/a8s';
+import { InProcessWorkerNode, type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { A8sOperatorClient, buildClusterAdminTools } from '@berry-agent/a8s-admin';
+import { A8sOperatorClient, buildClusterAdminTools, seedAdminAgentHome } from '@berry-agent/a8s-admin';
 import type { A8sServer } from './server.js';
 
 export interface LocalWorkerConfig {
@@ -68,16 +69,6 @@ export interface AdminAgentConfig {
   agentId?: string;
   /** Model ref; default 'tier:strong'. */
   model?: string;
-  /** Override the built-in system prompt. */
-  systemPrompt?: string;
-  /** a8s URL the admin agent's cluster-admin hand should hit. Default 'http://localhost:<a8sPort>'. */
-  a8sUrl?: string;
-}
-
-export interface BootstrapResult {
-  worker: Worker;
-  workerId: string;
-  agentId: string;
 }
 
 /**
@@ -163,6 +154,10 @@ function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; a
   return (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
     const base = baseResolve(wire);
     if (wire.labels?.role !== 'a8s-admin') return base;
+    // First-boot: seed default AGENTS.md if absent. Same single-source
+    // helper the worker daemon uses; runs here because the in-process
+    // worker shares this host's filesystem.
+    seedAdminAgentHome(base.workspace);
     const existing = Array.from(base.hostTools ?? []);
     const existingNames = new Set(existing.map((t) => t.definition.name));
     const additions = adminTools.filter((t) => !existingNames.has(t.definition.name));
@@ -175,82 +170,46 @@ function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; a
 }
 
 /**
- * Default system prompt for the berry-admin agent. Spelled out here so
- * a future skill / template package isn't required just to boot a8s.
- */
-const DEFAULT_ADMIN_SYSTEM_PROMPT = `You are berry-admin, the cluster operator for this a8s control plane.
-
-You have tools to inspect and operate the cluster (cluster_report, list_workers, list_agents, list_leases, drain_worker, undrain_worker, evict_worker, worker_join_script). You answer operator questions and execute cluster operations on their behalf.
-
-Conventions:
-- When the operator asks "how is the cluster?", start with cluster_report; then drill down with list_workers / list_agents if they want detail.
-- Before any destructive operation (drain / evict), confirm the workerId with list_workers and state what will happen ("evicting worker-b will release N agents; they need to be re-scheduled"). Then call the tool.
-- Prefer drain_worker over evict_worker for planned maintenance. evict_worker is for unrecoverable hosts.
-- When the operator asks "how do I add a worker?", use worker_join_script and present the returned snippet verbatim. The snippet embeds the cluster admin token — never log it.
-- Use plain English in responses; show JSON only when the operator asks for the raw shape.
-- You are the only agent that can run these tools — keep it boring, predictable, and explicit.
-`;
-
-/**
- * Ensure the berry-admin agent exists, is mounted on the given worker,
- * and has the cluster-admin hand installed. Idempotent.
+ * Ensure the berry-admin agent is scheduled onto an active worker.
+ * Idempotent: short-circuits when the agent is already assigned.
  *
- * `agentsRoot` must match what was passed to ensureLocalWorker so the
- * agent home lives at the machine-scoped location.
+ * Stamps `labels.role = 'a8s-admin'`, which is the entire wiring story —
+ * whichever worker the scheduler picks sees that label and (via its
+ * resolveSpec) injects the cluster-admin tools and seeds the default
+ * AGENTS.md on the worker's own filesystem. a8s-server neither imports
+ * cluster-admin code nor touches the agent's on-disk home.
+ *
+ * `workspace` is intentionally the bare agentId — each worker resolves
+ * it against its own machine-scoped agentsRoot. Returns the agentId.
  */
 export async function ensureAdminAgent(
-  server: A8sServer,
-  worker: Worker,
-  agentsRoot: string,
-  adminToken: string,
-  config: AdminAgentConfig & { a8sPort: number },
+  plane: ControlPlane,
+  config: AdminAgentConfig = {},
 ): Promise<string> {
   const agentId = config.agentId ?? 'berry-admin';
-  const workspace = join(agentsRoot, agentId);
-  const home = new AgentHome(workspace);
-  await home.ensure();
 
-  // Mount via the plane so the assignment + lease are persisted
-  // through the same path human-created agents take. Skip if the agent
-  // is already mounted on this worker — bootstrap runs on every a8s
-  // start, and createAgent is not idempotent on its own.
-  //
-  // The `labels.role = 'a8s-admin'` is what wires up the cluster-admin
-  // Hand: the worker daemon's resolveSpec sees it and injects the 8
-  // tools via withClusterAdminHostTools. a8s-server itself never
-  // imports cluster-admin code — the wiring is by label convention.
-  const existingLocation = server.plane.getAgentLocation(agentId);
-  if (existingLocation.workerId == null) {
-    const spec: WireWorkerAgentSpec = {
-      agentId,
-      workspace,
-      model: config.model ?? 'tier:strong',
-      ensureDefaultMcpConfig: false,
-      labels: { role: 'a8s-admin' },
-    };
-    await server.plane.createAgent(spec, { tag: 'admin-bootstrap' });
+  // Already scheduled? Nothing to do. Runs on every a8s start.
+  if (plane.getAgentLocation(agentId).workerId != null) {
+    return agentId;
   }
 
-  const mount = worker.get(agentId);
-  if (!mount) {
-    // createAgent should have placed it on our local worker (only option),
-    // but defend against a future scheduler that picks differently.
-    throw new Error(`ensureAdminAgent: agent ${agentId} was not mounted on the local worker after createAgent`);
-  }
+  const spec: WireWorkerAgentSpec = {
+    agentId,
+    workspace: agentId,
+    model: config.model ?? 'tier:strong',
+    ensureDefaultMcpConfig: false,
+    labels: { role: 'a8s-admin' },
+  };
+  const result = await plane.createAgent(spec, { tag: 'admin-bootstrap' });
 
-  // Seed AGENTS.md only on first boot so an operator who has customized
-  // it doesn't get clobbered.
-  await writeIfMissing(home.agentMdPath, config.systemPrompt ?? DEFAULT_ADMIN_SYSTEM_PROMPT);
+  // Persist a lease so the assignment survives an a8s restart with a
+  // durable store (same TTL the agent-create route uses).
+  await plane.orchestrator.acquireLease({
+    agentId: result.agentId,
+    holderId: result.workerId,
+    workerId: result.workerId,
+    ttlMs: 5 * 60_000,
+  });
 
   return agentId;
-}
-
-async function writeIfMissing(path: string, content: string): Promise<void> {
-  const { writeFile, access } = await import('node:fs/promises');
-  try {
-    await access(path);
-    return; // already exists
-  } catch {
-    await writeFile(path, content, 'utf-8');
-  }
 }

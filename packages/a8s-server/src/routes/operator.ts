@@ -4,6 +4,7 @@
 
 import {
   A8S_PATHS,
+  adminAgentStatusResponseSchema,
   operatorClusterReportSchema,
   operatorLeaseListResponseSchema,
   operatorLeaseSchema,
@@ -12,6 +13,10 @@ import { writeJson } from '../http-helpers.js';
 import type { RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
 import { requireAdminToken } from '../auth.js';
+import { withAudit } from '../middleware.js';
+import { ensureAdminAgent } from '../bootstrap.js';
+
+const ADMIN_AGENT_ID = 'berry-admin';
 
 export function operatorRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
   return [
@@ -72,6 +77,41 @@ export function operatorRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinitio
           sessionId: l.sessionId,
         }));
         writeJson(res, 200, operatorLeaseListResponseSchema.parse({ leases: list }));
+      },
+    },
+    {
+      method: 'GET',
+      pattern: A8S_PATHS.operatorAdminAgent,
+      name: 'GET /v1/operator/admin-agent',
+      middleware: [requireAdminToken(deps)],
+      handler: ({ res }) => {
+        const loc = deps.plane.getAgentLocation(ADMIN_AGENT_ID);
+        writeJson(res, 200, adminAgentStatusResponseSchema.parse({
+          agentId: ADMIN_AGENT_ID,
+          present: loc.workerId != null,
+          workerId: loc.workerId ?? null,
+        }));
+      },
+    },
+    {
+      method: 'POST',
+      pattern: A8S_PATHS.operatorAdminAgent,
+      name: 'POST /v1/operator/admin-agent',
+      middleware: [
+        requireAdminToken(deps),
+        withAudit(deps.audit, { action: 'admin_agent.ensure', target: () => ADMIN_AGENT_ID }),
+      ],
+      handler: async ({ res }) => {
+        // Idempotent: schedules berry-admin onto an active worker if it
+        // isn't already running. The worker injects the cluster-admin
+        // tools + seeds AGENTS.md via its resolveSpec (label-driven).
+        await ensureAdminAgent(deps.plane);
+        const loc = deps.plane.getAgentLocation(ADMIN_AGENT_ID);
+        writeJson(res, 200, adminAgentStatusResponseSchema.parse({
+          agentId: ADMIN_AGENT_ID,
+          present: loc.workerId != null,
+          workerId: loc.workerId ?? null,
+        }));
       },
     },
   ];

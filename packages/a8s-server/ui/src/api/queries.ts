@@ -100,6 +100,43 @@ export function useDeleteAgent() {
   });
 }
 
+export interface CreateAgentInput {
+  agentId: string;
+  model: string;
+  workspace?: string;
+  preferredMachine?: string;
+  labels?: Record<string, string>;
+}
+export interface CreateAgentResponse {
+  agentId: string;
+  workerId: string;
+  leaseId: string;
+}
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateAgentInput) =>
+      api<CreateAgentResponse>('/v1/agents', {
+        method: 'POST',
+        body: JSON.stringify({
+          spec: {
+            agentId: input.agentId,
+            workspace: input.workspace ?? input.agentId,
+            model: input.model,
+            ensureDefaultMcpConfig: false,
+            labels: input.labels,
+          },
+          preferredMachine: input.preferredMachine,
+        }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      void qc.invalidateQueries({ queryKey: ['cluster'] });
+      void qc.invalidateQueries({ queryKey: ['workers'] });
+    },
+  });
+}
+
 // ---- Sessions ----
 
 export interface SessionSummary {
@@ -165,6 +202,71 @@ export function useCancelWake() {
     mutationFn: (wakeId: string) =>
       api(`/v1/operator/wakes/${encodeURIComponent(wakeId)}`, { method: 'DELETE' }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['wakes'] }); },
+  });
+}
+
+// ---- Models template ----
+
+export interface ModelsTemplate {
+  providers: Record<string, {
+    presetId: string;
+    apiKey: string;
+    baseUrl?: string;
+    label?: string;
+    [k: string]: unknown;
+  }>;
+  models: Record<string, {
+    label?: string;
+    contextWindow?: number;
+    providers: Array<{ providerId: string; remoteModelId?: string }>;
+    [k: string]: unknown;
+  }>;
+  tiers: Record<string, string>;
+}
+export interface ModelsTemplateResponse {
+  template: ModelsTemplate | null;
+  updatedAt: number | null;
+}
+export function useModelsTemplate() {
+  return useQuery({
+    queryKey: ['models-template'],
+    queryFn: () => api<ModelsTemplateResponse>('/v1/operator/models-template'),
+  });
+}
+export function usePutModelsTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (template: ModelsTemplate) =>
+      api('/v1/operator/models-template', {
+        method: 'PUT',
+        body: JSON.stringify({ template }),
+      }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['models-template'] }); },
+  });
+}
+
+// ---- Admin agent (berry-admin) ----
+
+export interface AdminAgentStatus {
+  agentId: string;
+  present: boolean;
+  workerId: string | null;
+}
+export function useAdminAgentStatus() {
+  return useQuery({
+    queryKey: ['admin-agent'],
+    queryFn: () => api<AdminAgentStatus>('/v1/operator/admin-agent'),
+    refetchInterval: 10_000,
+  });
+}
+export function useEnsureAdminAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<AdminAgentStatus>('/v1/operator/admin-agent', { method: 'POST', body: '{}' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-agent'] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+    },
   });
 }
 

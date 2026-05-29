@@ -439,6 +439,24 @@ export const modelsTemplatePutRequestSchema = z.object({
 export type ModelsTemplatePutRequest = z.infer<typeof modelsTemplatePutRequestSchema>;
 
 // ============================================================
+// Operator: admin agent (berry-admin) bootstrap
+// ============================================================
+//
+// GET reports whether the cluster's berry-admin agent is scheduled and
+// where. POST schedules it onto an active worker (idempotent). The
+// worker that mounts it injects the cluster-admin tools by label.
+
+export const adminAgentStatusResponseSchema = z.object({
+  /** Stable agent id, always 'berry-admin' for now. */
+  agentId: z.string().min(1),
+  /** True once the agent is assigned to a worker. */
+  present: z.boolean(),
+  /** Worker the agent is mounted on; null when not yet scheduled. */
+  workerId: z.string().nullable(),
+}).strict();
+export type AdminAgentStatusResponse = z.infer<typeof adminAgentStatusResponseSchema>;
+
+// ============================================================
 // Operator: wake queue view
 // ============================================================
 //
@@ -567,6 +585,7 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes/${encodeURIComponent(wakeId)}`,
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
   operatorModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/operator/models-template`,
+  operatorAdminAgent: `/${CLUSTER_PROTOCOL_VERSION}/operator/admin-agent`,
 } as const;
 
 export const WORKER_PATHS = {

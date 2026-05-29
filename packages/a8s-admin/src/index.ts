@@ -23,3 +23,4 @@ export { createClusterAdminHand, buildClusterAdminTools } from './cluster-admin-
 export type { ClusterAdminHandOptions } from './cluster-admin-hand.js';
 export { createRemoteTeammateRuntimeFactory } from './remote-teammate.js';
 export type { RemoteTeammateRuntimeFactoryOptions } from './remote-teammate.js';
+export { DEFAULT_ADMIN_SYSTEM_PROMPT, seedAdminAgentHome } from './admin-agent-defaults.js';

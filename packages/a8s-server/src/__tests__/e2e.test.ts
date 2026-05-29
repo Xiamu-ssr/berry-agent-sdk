@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { AddressInfo } from 'node:net';
 import {
   A8S_PATHS,
+  adminAgentStatusResponseSchema,
   createAgentRequestSchema,
   createAgentResponseSchema,
   listAgentsResponseSchema,
@@ -793,9 +794,7 @@ describe('a8s-server + worker-daemon E2E', () => {
       adminToken: 'boot-secret',
       a8sPort,
     });
-    const agentId = await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', {
-      a8sPort,
-    });
+    const agentId = await ensureAdminAgent(a8s.plane);
     expect(agentId).toBe('berry-admin');
 
     // ---- Local worker appears in operator list ----
@@ -831,12 +830,63 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(toolNames.has('worker_join_script')).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
-    await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', { a8sPort });
+    await ensureAdminAgent(a8s.plane);
     const agentsResp2 = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
     const agents2 = listAgentsResponseSchema.parse(await agentsResp2.json());
     expect(agents2.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
 
     await worker.dispose();
+    await a8s.stop();
+  });
+
+  it('operator admin-agent endpoint: GET reports absent, POST schedules it, idempotent', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'op-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const headers = { authorization: 'Bearer op-secret', 'content-type': 'application/json' };
+    const adminUrl = `${a8sInfo.url}${A8S_PATHS.operatorAdminAgent}`;
+
+    const root = mkdtempSync(join(tmpdir(), 'a8s-adminep-'));
+    await ensureLocalWorker(a8s, {
+      env: makeTestWorkerEnv(root),
+      dataRoot: root,
+      agentsRoot: join(root, 'agents'),
+      capacity: 4,
+      workerId: 'a8s-local',
+      adminToken: 'op-secret',
+      a8sPort,
+    });
+
+    // ---- GET before bootstrap: absent ----
+    const before = adminAgentStatusResponseSchema.parse(
+      await fetch(adminUrl, { headers }).then((r) => r.json()),
+    );
+    expect(before.present).toBe(false);
+    expect(before.workerId).toBeNull();
+
+    // ---- POST: schedules berry-admin onto the local worker ----
+    const created = adminAgentStatusResponseSchema.parse(
+      await fetch(adminUrl, { method: 'POST', headers, body: '{}' }).then((r) => r.json()),
+    );
+    expect(created.present).toBe(true);
+    expect(created.workerId).toBe('a8s-local');
+
+    // ---- POST again: idempotent, still one berry-admin ----
+    await fetch(adminUrl, { method: 'POST', headers, body: '{}' });
+    const agents = listAgentsResponseSchema.parse(
+      await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers }).then((r) => r.json()),
+    );
+    expect(agents.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
+
+    // ---- Requires admin token ----
+    const unauth = await fetch(adminUrl, { headers: { 'content-type': 'application/json' } });
+    expect(unauth.status).toBe(401);
+
     await a8s.stop();
   });
 

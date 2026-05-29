@@ -8,6 +8,7 @@ import { WorkersPage } from './pages/WorkersPage.js';
 import { AgentsPage } from './pages/AgentsPage.js';
 import { WakesPage } from './pages/WakesPage.js';
 import { AdminChatPage } from './pages/AdminChatPage.js';
+import { SettingsPage } from './pages/SettingsPage.js';
 
 export function App() {
   const [view, setView] = useState<View>('dashboard');
@@ -36,6 +37,7 @@ export function App() {
           {view === 'agents' && <AgentsPage />}
           {view === 'wakes' && <WakesPage />}
           {view === 'admin' && <AdminChatPage />}
+          {view === 'settings' && <SettingsPage />}
         </main>
       </div>
     </div>

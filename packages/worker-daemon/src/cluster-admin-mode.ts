@@ -20,6 +20,7 @@
 import {
   A8sOperatorClient,
   buildClusterAdminTools,
+  seedAdminAgentHome,
 } from '@berry-agent/a8s-admin';
 import type { ToolRegistration } from '@berry-agent/core';
 import type { WorkerAgentSpec } from '@berry-agent/worker';
@@ -61,6 +62,9 @@ export function withClusterAdminHostTools(
   return (wire) => {
     const baseSpec = baseResolve(wire);
     if (wire.labels?.role !== 'a8s-admin') return baseSpec;
+    // First-boot: seed default AGENTS.md if absent. Idempotent.
+    // Runs at the physical host so the data lives where the agent does.
+    seedAdminAgentHome(baseSpec.workspace);
     const existing: ToolRegistration[] = Array.from(baseSpec.hostTools ?? []);
     const existingNames = new Set(existing.map((t) => t.definition.name));
     const additions = adminTools.filter((t) => !existingNames.has(t.definition.name));

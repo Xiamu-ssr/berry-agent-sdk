@@ -191,7 +191,7 @@ async function main(argv: string[]): Promise<number> {
       credentials: new DefaultCredentialStore({ filePath: `${dataRoot}/creds.json` }),
       observer: createObserver({ dbPath: `${dataRoot}/observe.db` }),
     };
-    const worker = await ensureLocalWorker(server, {
+    await ensureLocalWorker(server, {
       env,
       dataRoot,
       agentsRoot,
@@ -202,9 +202,7 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`   local worker mounted (capacity ${capacity}, data ${dataRoot}, agents ${agentsRoot})\n`);
 
     if (wantAdminAgent && adminToken) {
-      const agentId = await ensureAdminAgent(server, worker, agentsRoot, adminToken, {
-        a8sPort: port,
-      });
+      const agentId = await ensureAdminAgent(server.plane);
       process.stdout.write(`   berry-admin agent ready (id ${agentId})\n`);
     }
   }
