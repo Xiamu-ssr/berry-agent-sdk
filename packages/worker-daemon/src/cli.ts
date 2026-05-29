@@ -32,29 +32,47 @@ Usage:
   berry-worker --help
 
 Options:
-  --config <path>     Path to worker config JSON file. Required for "start".
-  --port <n>          HTTP port to listen on (overrides config.port, default: 7100)
-  --a8s <url>         a8s control plane URL (overrides config.a8s)
-  --worker-id <id>    Stable worker id (overrides config.workerId, default: hostname)
-  --data-root <path>  Root dir for worker data (overrides config.dataRoot,
-                      default: /var/berry/workers/<workerId>)
-  --admin-token <s>   Bootstrap secret presented to a8s on join. Overrides
-                      config.adminToken; env BERRY_A8S_ADMIN_TOKEN.
-  --version           Print version
-  --help              Show this help
+  --config <path>      Path to worker config JSON file. Required for "start".
+  --port <n>           HTTP port to listen on (overrides config.port, default: 7100)
+  --a8s <url>          a8s control plane URL (overrides config.a8s)
+  --worker-id <id>     Stable worker id (overrides config.workerId, default: hostname)
+  --data-root <path>   Root dir for worker-private data — observe.db, creds.json,
+                       logs (overrides config.dataRoot,
+                       default: /var/berry/workers/<workerId>)
+  --agents-root <path> Root dir for agent homes (overrides config.agentsRoot,
+                       default: /var/berry/agents). Lives at the *machine*
+                       level so any worker on this host can pick up an agent
+                       after a process crash without copying data.
+  --machine <id>       Machine identifier stamped into the worker's labels
+                       (overrides config.machine, default: os.hostname()).
+                       The a8s scheduler uses it as a same-machine affinity
+                       hint when rescheduling stranded agents.
+  --admin-token <s>    Bootstrap secret presented to a8s on join. Overrides
+                       config.adminToken; env BERRY_A8S_ADMIN_TOKEN.
+  --version            Print version
+  --help               Show this help
 
-DIRECTORY CONVENTION:
-  Worker stores all its data under dataRoot:
-    <dataRoot>/
-      ├── observe.db    ← worker's observe SQLite
-      ├── creds.json    ← credential store
-      └── agents/       ← agent home root (each agent gets its own subdir)
-          └── <agentId>/{agent.json, AGENTS.md, MEMORY.md, sessions/, ...}
+DIRECTORY CONVENTION (machine-scoped agent data):
 
-  Default dataRoot is /var/berry/workers/<workerId>.
-  Specify credentialsPath / observerDbPath in config only if you want to
-  override individual paths (they default to <dataRoot>/creds.json and
-  <dataRoot>/observe.db).
+  /var/berry/
+    ├── workers/<workerId>/       ← worker-private (per-process)
+    │   ├── observe.db
+    │   └── creds.json
+    └── agents/<agentId>/         ← machine-shared (this is the key:
+        ├── agent.json              data follows the *machine*, not the
+        ├── AGENTS.md               worker process)
+        ├── MEMORY.md
+        ├── .mcp.json
+        └── sessions/<sessionId>/
+            ├── messages.json
+            └── events.jsonl
+
+  Why split: when a worker process crashes (deploy, OOM, bug — the common
+  case), systemd restarts it and a8s re-mounts the agents from the same
+  /var/berry/agents/<id> directory. Zero data movement, zero RTO. If a
+  *different* worker on the same machine takes over after lease expiry,
+  the agent dir is right there for it too. Only true cross-machine
+  failover (rare) requires real data movement.
 `;
 
 const configSchema = z.object({
@@ -80,11 +98,29 @@ const configSchema = z.object({
   /** Optional labels for affinity scheduling. */
   labels: z.record(z.string()).optional(),
   /**
-   * Root directory for all worker data. Defaults to
-   * /var/berry/workers/<workerId>. The worker auto-creates this and the
-   * subdirs (agents/, observe.db, creds.json) on first launch.
+   * Machine identifier stamped into the worker's labels under
+   * `labels.machine`. Defaults to os.hostname(). The a8s scheduler
+   * treats workers sharing a machine value as failover-affinity peers —
+   * an agent stranded by a crashed worker is preferentially re-mounted
+   * on another worker on the same host, where its on-disk data already
+   * lives.
+   */
+  machine: z.string().min(1).optional(),
+  /**
+   * Root directory for worker-private data — observe.db, credentials,
+   * logs. Defaults to /var/berry/workers/<workerId>. Does NOT contain
+   * agent homes (see agentsRoot).
    */
   dataRoot: z.string().min(1).optional(),
+  /**
+   * Root directory for agent homes, machine-scoped. Defaults to
+   * /var/berry/agents. Each agent gets a subdir <agentsRoot>/<agentId>/
+   * containing agent.json, AGENTS.md, MEMORY.md, sessions/, etc. Shared
+   * across all workers on the same machine so a worker process crash is
+   * transparent — restart the daemon, re-mount the same dir, no data
+   * movement.
+   */
+  agentsRoot: z.string().min(1).optional(),
   /** Override credentials path (default: <dataRoot>/creds.json). */
   credentialsPath: z.string().min(1).optional(),
   /** Override observer db path (default: <dataRoot>/observe.db). */
@@ -130,6 +166,8 @@ async function main(argv: string[]): Promise<number> {
       a8s: { type: 'string' },
       'worker-id': { type: 'string' },
       'data-root': { type: 'string' },
+      'agents-root': { type: 'string' },
+      machine: { type: 'string' },
       'admin-token': { type: 'string' },
     },
     allowPositionals: false,
@@ -161,14 +199,27 @@ async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
-  // ---- Resolve dataRoot + derived paths ----
+  // ---- Resolve paths ----
+  // Worker-private state (per-process, can be wiped on reinstall).
   const dataRoot = values['data-root'] ?? config.dataRoot ?? `/var/berry/workers/${workerId}`;
-  const agentsDir = join(dataRoot, 'agents');
+  // Agent homes (machine-scoped, survives worker restarts and is shared
+  // across workers on the same machine for in-place failover).
+  const agentsRoot = values['agents-root'] ?? config.agentsRoot ?? '/var/berry/agents';
   const credentialsPath = config.credentialsPath ?? join(dataRoot, 'creds.json');
   const observerDbPath = config.observerDbPath ?? join(dataRoot, 'observe.db');
 
-  // Auto-create directory tree so a fresh deploy just works.
-  mkdirSync(agentsDir, { recursive: true });
+  // Auto-create both roots so a fresh deploy just works. agentsRoot may
+  // already exist (other worker on the same machine), which is exactly
+  // the point — mkdir recursive is idempotent.
+  mkdirSync(dataRoot, { recursive: true });
+  mkdirSync(agentsRoot, { recursive: true });
+
+  // ---- Assemble labels ----
+  // The `machine` label is the affinity key the scheduler uses for
+  // same-host failover; we always set it (default = hostname) so the
+  // signal exists even when the operator didn't explicitly opt in.
+  const machine = values.machine ?? config.machine ?? hostname();
+  const labels: Record<string, string> = { ...(config.labels ?? {}), machine };
 
   // ---- Build the WorkerEnvironment ----
   const env: WorkerEnvironment = {
@@ -189,15 +240,15 @@ async function main(argv: string[]): Promise<number> {
     version: '0.5.0-alpha.1',
     /**
      * Resolve a wire spec into a full WorkerAgentSpec. The agent's
-     * workspace is reinterpreted as relative to this worker's agentsDir
-     * if it's a bare agent id (no path separator) — letting clients say
-     * `workspace: "coder"` without knowing absolute paths on the worker.
+     * workspace is reinterpreted as relative to this machine's
+     * agentsRoot if it's a bare agent id (no path separator) — letting
+     * clients say `workspace: "coder"` without knowing absolute paths.
      * Absolute paths are passed through verbatim for advanced setups.
      */
     resolveSpec: (wire): WorkerAgentSpec => {
       const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
         ? wire.workspace
-        : join(agentsDir, wire.workspace);
+        : join(agentsRoot, wire.workspace);
       return {
         agentId: wire.agentId,
         workspace,
@@ -211,7 +262,9 @@ async function main(argv: string[]): Promise<number> {
 
   const info = await daemon.start();
   process.stdout.write(`🍓 berry-worker "${workerId}" listening on ${info.callbackUrl}\n`);
+  process.stdout.write(`   machine: ${machine}\n`);
   process.stdout.write(`   data root: ${dataRoot}\n`);
+  process.stdout.write(`   agents root: ${agentsRoot}\n`);
 
   // ---- Register with a8s ----
   const reg = new WorkerRegistrationClient({
@@ -220,13 +273,38 @@ async function main(argv: string[]): Promise<number> {
     callbackUrl: info.callbackUrl,
     capacity: config.capacity,
     heartbeatTtlMs: config.heartbeatTtlMs,
-    labels: config.labels,
+    labels,
     adminToken: values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken,
   });
 
   const regResult = await reg.register();
   daemon.setAuthToken(regResult.workerToken);
   process.stdout.write(`🔗 registered with a8s at ${a8sUrl}\n`);
+
+  // ---- Auto-rehydrate owned agents from disk ----
+  // The register response carries the agentIds that durable lease state
+  // says this worker should own. Common case: a fresh join → empty.
+  // Restart case (process crashed, systemd respawned us): the list
+  // contains every agent we were running. For each one, read its
+  // agent.json out of the machine-scoped agentsRoot and re-mount.
+  if (regResult.ownedAgents.length > 0) {
+    process.stdout.write(`🧬 rehydrating ${regResult.ownedAgents.length} agent(s) from disk...\n`);
+    for (const agentId of regResult.ownedAgents) {
+      try {
+        const spec = await loadAgentSpecFromDisk(agentId, agentsRoot);
+        if (worker.supervisor()) {
+          await worker.runAgent(agentId, {}, spec);
+        } else {
+          worker.runAgentSync(agentId, {}, spec);
+        }
+        process.stdout.write(`   ✓ ${agentId}\n`);
+      } catch (err) {
+        process.stderr.write(
+          `   ✗ ${agentId}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+  }
 
   // ---- Graceful shutdown ----
   const shutdown = async (signal: string) => {
@@ -246,6 +324,35 @@ async function main(argv: string[]): Promise<number> {
 
   await new Promise<void>(() => { /* never resolves */ });
   return 0;
+}
+
+/**
+ * Re-build a WorkerAgentSpec from on-disk state. Used during the
+ * post-registration rehydrate loop to bring back agents that the
+ * orchestrator says we still own after a worker process restart.
+ *
+ * `agent.json` is authoritative for model selection + reasoning effort;
+ * everything else (projectRoot, ensureDefaultMcpConfig) is intentionally
+ * minimal — the SDK rebuilds the rest from the on-disk home (sessions/,
+ * skills/, .mcp.json). `projectRoot` is left undefined because nothing
+ * persists it; agents that need it must be re-created through the full
+ * a8s createAgent path.
+ */
+async function loadAgentSpecFromDisk(agentId: string, agentsRoot: string): Promise<WorkerAgentSpec> {
+  const workspace = join(agentsRoot, agentId);
+  const home = new AgentHome(workspace);
+  const raw = await import('node:fs/promises').then((m) => m.readFile(home.metadataPath, 'utf-8'));
+  const meta = JSON.parse(raw) as { id?: string; model?: string };
+  if (!meta.model) {
+    throw new Error(`agent.json at ${home.metadataPath} has no "model" — cannot rehydrate`);
+  }
+  return {
+    agentId,
+    workspace,
+    home,
+    model: meta.model,
+    ensureDefaultMcpConfig: false,
+  };
 }
 
 main(process.argv.slice(2)).then(

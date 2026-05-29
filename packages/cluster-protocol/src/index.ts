@@ -54,6 +54,13 @@ export const workerRegistrationResponseSchema = z.object({
   heartbeatTtlMs: z.number().int().positive(),
   /** Token the worker uses on subsequent calls to authenticate. */
   workerToken: z.string().min(1),
+  /**
+   * Agents that durable lease state says this worker already owns. The
+   * worker daemon mounts these from disk after registration. Typically
+   * non-empty only when a worker restarts after a crash — fresh joins
+   * see an empty array.
+   */
+  ownedAgents: z.array(z.string().min(1)).default([]),
 }).strict();
 export type WorkerRegistrationResponse = z.infer<typeof workerRegistrationResponseSchema>;
 
@@ -112,6 +119,13 @@ export const createAgentRequestSchema = z.object({
    * may ignore. Useful for "stay on the same worker after redeploy."
    */
   preferredWorkerId: z.string().optional(),
+  /**
+   * Affinity hint: which machine should the agent land on? a8s scheduler
+   * prefers a worker whose `labels.machine` matches, falling back to its
+   * default policy otherwise. Used to keep agents on the host where
+   * their on-disk home already lives (same-machine failover affinity).
+   */
+  preferredMachine: z.string().optional(),
 }).strict();
 export type CreateAgentRequest = z.infer<typeof createAgentRequestSchema>;
 

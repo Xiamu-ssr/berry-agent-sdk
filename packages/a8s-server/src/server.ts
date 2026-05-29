@@ -346,10 +346,26 @@ export class A8sServer<TEntry = unknown> {
       labels: parsed.labels,
     }));
 
+    // Bring the in-memory assignment map back in sync with durable
+    // leases. This is the key failover hook: when a worker restarts
+    // after a crash and re-registers with the same workerId, any active
+    // leases bound to it become routable again immediately — no
+    // operator action, no data movement.
+    const hydrated = await this.plane.hydrateAssignments();
+    if (hydrated.restored.length > 0) {
+      this.logger.log?.(
+        `[a8s-server] hydrated ${hydrated.restored.length} assignment(s) after ${parsed.workerId} registered`,
+      );
+    }
+    const ownedAgents = hydrated.restored
+      .filter((entry) => entry.workerId === parsed.workerId)
+      .map((entry) => entry.agentId);
+
     return writeJson(res, 200, workerRegistrationResponseSchema.parse({
       workerId: parsed.workerId,
       heartbeatTtlMs: parsed.heartbeatTtlMs,
       workerToken: token,
+      ownedAgents,
     }));
   }
 
@@ -407,6 +423,7 @@ export class A8sServer<TEntry = unknown> {
     const result = await this.plane.createAgent(
       wireSpec,
       (parsed.entry ?? {}) as TEntry,
+      { preferredMachine: parsed.preferredMachine },
     );
 
     // Acquire a durable lease so cluster failover semantics hold across

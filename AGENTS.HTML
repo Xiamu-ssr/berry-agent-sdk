@@ -119,7 +119,7 @@
     <thead><tr><th>包</th><th>状态</th><th>一句话职责</th></tr></thead>
     <tbody>
       <tr><td><code>@berry-agent/worker</code></td><td><span class="ok">已完整</span></td><td>单机 worker 类:<code>buildAgentRuntime()</code> 工厂、<code>Worker</code> 类(N 个 agent mount + 可选 supervisor)、<code>/test-utils</code> subpath 供下游测试复用。</td></tr>
-      <tr><td><code>@berry-agent/worker-daemon</code></td><td><span class="ok">已完整</span></td><td>Worker HTTP 服务进程:<code>WorkerDaemon</code> 类 + <code>WorkerRegistrationClient</code> + <code>berry-worker</code> CLI(<code>start --config worker.json</code>)。Bearer-token 鉴权,自动注册到 a8s 并周期 heartbeat。数据面提供 session 列表、分页 events 读、SSE 实时 events 流(支持 Last-Event-ID 断线续传)。</td></tr>
+      <tr><td><code>@berry-agent/worker-daemon</code></td><td><span class="ok">已完整</span></td><td>Worker HTTP 服务进程:<code>WorkerDaemon</code> 类 + <code>WorkerRegistrationClient</code> + <code>berry-worker</code> CLI(<code>start --config worker.json [--agents-root /var/berry/agents --machine ...]</code>)。Bearer-token 鉴权,自动注册到 a8s 并周期 heartbeat。数据面提供 session 列表、分页 events 读、SSE 实时 events 流(支持 Last-Event-ID 断线续传)。<strong>失败恢复</strong>:register 响应携带 <code>ownedAgents</code>,worker 进程重启后从机器级 <code>agentsRoot</code> 自动再 mount。</td></tr>
     </tbody>
   </table>
 
@@ -146,23 +146,30 @@ berry-claw start
 # 单进程跑 N 个 agent,关进程全没</code></pre>
 
   <h3>形态 B — 单机或多机集群(已可用)</h3>
-  <p>1 个 <code>berry-a8s</code> 进程 + N 个 <code>berry-worker</code> 进程(可以在同机也可以跨机) + 共享 SQLite(单机)或 Postgres(跨机)。Worker 主动出网注册到 a8s,周期 heartbeat,接收 a8s 派来的任务。Worker 进程崩了 → lease 过期 → a8s 重新调度(需要 agent home 在共享存储)。</p>
-  <pre><code># 服务器 A:启动 a8s
+  <p>1 个 <code>berry-a8s</code> 进程 + N 个 <code>berry-worker</code> 进程(可以在同机也可以跨机) + 共享 SQLite(单机)或 Postgres(跨机)。Worker 主动出网注册到 a8s,周期 heartbeat,接收 a8s 派来的任务。<strong>Worker 进程崩了 → systemd 拉起同 workerId → a8s 在 register 响应里告诉它要再 mount 哪些 agent → 从机器级 <code>/var/berry/agents/&lt;id&gt;</code> 自动 mount,数据零移动</strong>(参见"失效模式与恢复")。</p>
+  <pre><code># 服务器 A:启动 a8s,带 admin token + 可选的 local worker + admin agent
 sudo mkdir -p /var/berry/a8s
-berry-a8s start --port 8080 --store sqlite:///var/berry/a8s/orch.db
+berry-a8s start --port 8080 \
+  --store sqlite:///var/berry/a8s/orch.db \
+  --admin-token "$ADMIN_TOKEN" \
+  --advertise-url https://a8s.example.com \
+  --local-worker --admin-agent \
+  --models-config /etc/berry/models.json
 
-# 服务器 B:写 worker 配置(指定 a8s URL + agent 数据存哪)
-sudo mkdir -p /var/berry/workers/worker-b/agents
+# 服务器 B:写 worker 配置(指定 a8s URL + admin token + 数据布局)
+sudo mkdir -p /var/berry/workers/worker-b /var/berry/agents
 cat &gt; /var/berry/workers/worker-b/worker.json &lt;&lt;EOF
 {
   "workerId": "worker-b",
   "port": 7100,
   "bindHost": "10.0.1.10",
-  "a8s": "http://10.0.1.5:8080",
+  "a8s": "https://a8s.example.com",
+  "adminToken": "$ADMIN_TOKEN",
   "capacity": 16,
   "heartbeatTtlMs": 30000,
-  "credentialsPath": "/var/berry/workers/worker-b/creds.json",
-  "observerDbPath": "/var/berry/workers/worker-b/observe.db",
+  "dataRoot": "/var/berry/workers/worker-b",
+  "agentsRoot": "/var/berry/agents",
+  "machine": "machine-b",
   "registry": { ...provider/model/tier... }
 }
 EOF
@@ -170,13 +177,14 @@ EOF
 # 启动 worker
 berry-worker start --config /var/berry/workers/worker-b/worker.json
 
-# 任何客户端创建 agent
-curl -X POST http://10.0.1.5:8080/v1/agents \
+# 任何客户端创建 agent(workspace 用 bare id,worker 自动解析到 agentsRoot)
+curl -X POST https://a8s.example.com/v1/agents \
+  -H "authorization: Bearer $ADMIN_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"spec":{"agentId":"coder","workspace":"/var/berry/workers/worker-b/agents/coder","model":"tier:strong"}}'</code></pre>
+  -d '{"spec":{"agentId":"coder","workspace":"coder","model":"tier:strong"}}'</code></pre>
 
-  <h3>形态 C — Agent 数据共享(高可用,待做)</h3>
-  <p>在形态 B 基础上,把 agent home 从 worker 本地盘换成共享存储(对象存储 / Postgres / NFS),实现 agent 可在 worker 间自由迁移。当前 SDK 只有 <code>FileSessionStore</code> 等本地实现;远程实现等真实部署场景驱动。</p>
+  <h3>形态 C — 跨机灾难恢复(待做)</h3>
+  <p>形态 B 解决了"worker 进程崩"和"同机 worker 接管"两条路径(机器级 <code>agentsRoot</code> + same-machine 亲和力)。剩下的"机器整个死"目前需要 operator 手动 rsync agent home 到目标机 + 调 <code>migrateAgent(preferredMachine: null)</code>。自动跨机恢复需要远端 SessionStore / 对象存储,等真实痛点驱动。</p>
 
   <h2>判断一段代码该放哪</h2>
   <table>
@@ -192,30 +200,31 @@ curl -X POST http://10.0.1.5:8080/v1/agents \
   </table>
 
   <h2>目录事实源</h2>
-  <p>Berry 把生产部署的所有数据组织在一个 <strong>berry root</strong>(默认 <code>/var/berry/</code>)下,跟其他服务区分。Worker 数据再按 worker id 子目录,同机多 worker 完全隔离。</p>
+  <p>Berry 把生产部署的所有数据组织在一个 <strong>berry root</strong>(默认 <code>/var/berry/</code>)下。<strong>关键设计</strong>:agent home 是<strong>机器级</strong>路径(<code>/var/berry/agents/&lt;id&gt;/</code>),不归任何 worker 私有 — worker 只持有 lease 来"挂载"。worker 自己的状态(observe.db、creds.json)才放 <code>/var/berry/workers/&lt;workerId&gt;/</code>。</p>
   <pre><code>/var/berry/                                  ← berry root (用户可改)
 ├── a8s/                                     ← a8s control plane 数据
 │   ├── orch.db                              ← SQLite orchestration store
 │   │                                          (runtime_workers / runtime_leases / runtime_wakes)
 │   └── a8s.log
 │
-└── workers/                                 ← worker 数据,一个 worker 一个目录
-    ├── &lt;workerId&gt;/                     ← e.g. worker-b
-    │   ├── observe.db                       ← worker 自己的 observe SQLite
-    │   ├── creds.json                       ← credential store
-    │   └── agents/                          ← agent home 根
-    │       └── &lt;agentId&gt;/               ← e.g. coder
-    │           ├── agent.json               ← agent 不变身份 + 当前模型选择
-    │           ├── AGENTS.md                ← 系统提示(用户写)
-    │           ├── MEMORY.md                ← 长期记忆(agent 写)
-    │           ├── .mcp.json
-    │           ├── skills/
-    │           ├── memory/
-    │           └── sessions/&lt;sessionId&gt;/
-    │               ├── messages.json        ← LLM 上下文事实源(compact 后稳定)
-    │               ├── metadata.json
-    │               └── events.jsonl         ← append-only timeline(审计 + UI)
-    └── &lt;otherWorkerId&gt;/...               ← 同机第二个 worker,完全隔离
+├── workers/                                 ← worker 进程自己的状态
+│   ├── &lt;workerId&gt;/                     ← e.g. worker-b
+│   │   ├── observe.db                       ← worker 的 observe SQLite
+│   │   └── creds.json                       ← credential store
+│   └── &lt;otherWorkerId&gt;/                 ← 同机第二个 worker,各管各的
+│
+└── agents/                                  ← agent home(机器级,worker 不私有)
+    └── &lt;agentId&gt;/                       ← e.g. coder
+        ├── agent.json                       ← agent 不变身份 + 当前模型选择
+        ├── AGENTS.md                        ← 系统提示(用户写)
+        ├── MEMORY.md                        ← 长期记忆(agent 写)
+        ├── .mcp.json
+        ├── skills/
+        ├── memory/
+        └── sessions/&lt;sessionId&gt;/
+            ├── messages.json                ← LLM 上下文事实源(compact 后稳定)
+            ├── metadata.json
+            └── events.jsonl                 ← append-only timeline(审计 + UI)
 
 &lt;project-root&gt;/                          ← agent 工作的项目目录(产品/用户提供)
 ├── AGENTS.md                                ← project-level 上下文
@@ -227,16 +236,46 @@ curl -X POST http://10.0.1.5:8080/v1/agents \
   <p><strong>数据归属</strong>:</p>
   <ul>
     <li><strong>a8s</strong> 只读写 <code>/var/berry/a8s/</code>(元数据,几 KB ~ 几 MB)。它不碰任何 agent home 数据。</li>
-    <li><strong>Worker</strong> 拥有 <code>/var/berry/workers/&lt;workerId&gt;/</code>。Agent 数据(home 目录)默认放本地 SSD,所以 agent 默认绑当前 worker。</li>
-    <li><strong>多机 failover</strong> 需要把 agent home 放到共享存储(NFS / 对象存储 / Postgres)。SDK 的 <code>SessionStore</code> / <code>AgentHome</code> 是接口,实现可换。</li>
-    <li><strong>同机多 worker</strong> 各自一个 <code>workers/&lt;workerId&gt;</code> 子目录,文件系统权限隔离,互不干扰。</li>
+    <li><strong>Worker 进程状态</strong>(observe.db、creds.json)绑在 <code>/var/berry/workers/&lt;workerId&gt;/</code>。同机多 worker 各自一个子目录,文件系统权限隔离。</li>
+    <li><strong>Agent home</strong> 放在 <code>/var/berry/agents/&lt;agentId&gt;/</code>,**对同机所有 worker 可见**。Worker 持有 lease 时挂载,lease 释放则可被同机其他 worker 接管。**Lease 在 orch.db 里全局唯一**,数据竞争不会发生。</li>
+    <li><strong>跨机 failover</strong>(机器死)目前不自动,需要把 agent home 同步到目标机器(rsync / 对象存储 / 远端 SessionStore)。常见的"worker 进程崩"路径完全不需要数据搬运,见下。</li>
   </ul>
+
+  <h2>失效模式与恢复</h2>
+  <p>Worker 怎么"死",对应不同的恢复路径。berry 的 layout 专门为常见路径优化,罕见路径诚实地交给运维。</p>
+  <table>
+    <thead><tr><th>失效</th><th>频率</th><th>数据状态</th><th>恢复路径</th><th>RTO</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>worker 进程崩(deploy / OOM / bug)</td>
+        <td>常见</td>
+        <td>磁盘完好</td>
+        <td>systemd <code>Restart=always</code> 拉起同一 workerId 的新进程 → 重新注册到 a8s → a8s 在 register 响应里告诉它 <code>ownedAgents</code> → worker 从 <code>/var/berry/agents/&lt;id&gt;/agent.json</code> 读 spec 自动 mount。零运维,数据零移动。</td>
+        <td>秒级</td>
+      </tr>
+      <tr>
+        <td>同机其他 worker 接管(多 worker 部署)</td>
+        <td>不常见</td>
+        <td>磁盘完好</td>
+        <td>lease TTL 过期 → a8s 释放 → 同机另一 worker 通过 scheduler 的 <strong>same-machine 亲和力</strong>(<code>labels.machine</code> 匹配 + <code>preferredMachine</code> hint)被调度 → 它也能读 <code>/var/berry/agents/&lt;id&gt;/</code> → mount。零数据移动。</td>
+        <td>分钟级(TTL)</td>
+      </tr>
+      <tr>
+        <td>跨机 failover(机器死)</td>
+        <td>罕见</td>
+        <td>磁盘失联</td>
+        <td>需要 agent home 已在共享存储,或 operator 手动 rsync 后 <code>migrateAgent</code>(<code>preferredMachine: null</code> 强制换机)。alpha 阶段:lease 自动释放,a8s 标记 agent stranded。未来:远端 SessionStore 解锁自动恢复。</td>
+        <td>人工介入</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>scheduler 通过 <code>labels.machine</code>(默认 = <code>os.hostname()</code>)识别同机 worker;<code>createLeastLoadedScheduler</code> 收到 <code>preferredMachine</code> 时先在同机子集找可用 worker,找不到再回落全局。</p>
 
   <h2>开发命令</h2>
   <pre><code>npm install
 npm run build
 npm test
-# 当前 705 tests in SDK</code></pre>
+# 当前 740 tests in SDK</code></pre>
 </main>
 </body>
 </html>

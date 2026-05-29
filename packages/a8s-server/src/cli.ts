@@ -58,8 +58,12 @@ Options:
   --local-worker        Spin up an in-process worker on the same host (so a
                         fresh a8s has capacity > 0 without deploying a
                         separate worker first). Default: off.
-  --data-root <path>    Local worker's data dir.
+  --data-root <path>    Local worker's private data dir (observe.db, creds).
                         Default: /var/berry/a8s/local-worker
+  --agents-root <path>  Machine-scoped agent home dir. Shared across all
+                        workers on this host so the same on-disk state
+                        survives worker process crashes.
+                        Default: /var/berry/agents
   --capacity <n>        Local worker capacity (default 4).
 
   --admin-agent         Ensure a 'berry-admin' agent is mounted on the local
@@ -103,6 +107,7 @@ async function main(argv: string[]): Promise<number> {
       'local-worker': { type: 'boolean' },
       'admin-agent': { type: 'boolean' },
       'data-root': { type: 'string' },
+      'agents-root': { type: 'string' },
       capacity: { type: 'string' },
       'models-config': { type: 'string' },
     },
@@ -127,6 +132,7 @@ async function main(argv: string[]): Promise<number> {
   const wantLocalWorker = !!values['local-worker'] || !!values['admin-agent'];
   const wantAdminAgent = !!values['admin-agent'];
   const dataRoot = values['data-root'] ?? '/var/berry/a8s/local-worker';
+  const agentsRoot = values['agents-root'] ?? '/var/berry/agents';
   const capacity = values.capacity ? parseInt(values.capacity, 10) : 4;
   if (capacity < 0 || !Number.isFinite(capacity)) {
     process.stderr.write(`invalid --capacity: ${values.capacity}\n`);
@@ -177,12 +183,13 @@ async function main(argv: string[]): Promise<number> {
     const worker = await ensureLocalWorker(server, {
       env,
       dataRoot,
+      agentsRoot,
       capacity,
     });
-    process.stdout.write(`   local worker mounted (capacity ${capacity}, data ${dataRoot})\n`);
+    process.stdout.write(`   local worker mounted (capacity ${capacity}, data ${dataRoot}, agents ${agentsRoot})\n`);
 
     if (wantAdminAgent && adminToken) {
-      const agentId = await ensureAdminAgent(server, worker, dataRoot, adminToken, {
+      const agentId = await ensureAdminAgent(server, worker, agentsRoot, adminToken, {
         a8sPort: port,
       });
       process.stdout.write(`   berry-admin agent ready (id ${agentId})\n`);

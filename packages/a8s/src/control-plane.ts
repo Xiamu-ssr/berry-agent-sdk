@@ -96,11 +96,16 @@ export class ControlPlane<TEntry = unknown> {
   /**
    * Schedule + mount an agent. Throws if no worker has capacity, or if the
    * agent is already assigned somewhere.
+   *
+   * `options.preferredMachine` is a soft hint passed to the scheduler:
+   * when set, workers whose `labels.machine` matches win over peers,
+   * giving us same-host failover affinity (re-mount the agent where
+   * its on-disk home already lives).
    */
   async createAgent(
     spec: WorkerAgentSpec,
     entry: TEntry,
-    hooks: WorkerRuntimeHooks = {},
+    options: { hooks?: WorkerRuntimeHooks; preferredMachine?: string } = {},
   ): Promise<CreateAgentResult> {
     if (this.assignments.has(spec.agentId)) {
       throw new Error(`Agent "${spec.agentId}" is already running on worker ${this.assignments.get(spec.agentId)}`);
@@ -114,13 +119,14 @@ export class ControlPlane<TEntry = unknown> {
       agentId: spec.agentId,
       entry,
       workers: workerViews,
+      preferredMachine: options.preferredMachine,
     });
     if (!node) {
       throw new Error(`No worker has capacity for agent "${spec.agentId}"`);
     }
 
     try {
-      await node.runAgent(spec.agentId, entry, spec, hooks);
+      await node.runAgent(spec.agentId, entry, spec, options.hooks);
     } catch (error) {
       this.logger.warn?.(`[a8s] runAgent failed on worker ${node.workerId}:`, error);
       throw error;
@@ -144,15 +150,32 @@ export class ControlPlane<TEntry = unknown> {
     this.assignments.delete(agentId);
   }
 
-  /** Move an agent from its current worker to a new one. */
+  /**
+   * Move an agent from its current worker to a new one. Inherits the
+   * current worker's machine label as `preferredMachine` by default so
+   * a migrate that doesn't explicitly cross machines stays local (zero
+   * data movement under the machine-scoped agentsRoot layout). Pass
+   * `preferredMachine: null` to opt out, or `preferredMachine: '<id>'`
+   * to force a different machine.
+   */
   async migrateAgent(
     agentId: string,
     spec: WorkerAgentSpec,
     entry: TEntry,
-    hooks: WorkerRuntimeHooks = {},
+    options: { hooks?: WorkerRuntimeHooks; preferredMachine?: string | null } = {},
   ): Promise<CreateAgentResult> {
+    let preferred: string | undefined;
+    if (options.preferredMachine === null) {
+      preferred = undefined;
+    } else if (options.preferredMachine !== undefined) {
+      preferred = options.preferredMachine;
+    } else {
+      const currentWorkerId = this.assignments.get(agentId);
+      const currentNode = currentWorkerId ? this.workers.get(currentWorkerId) : undefined;
+      preferred = currentNode?.labels?.machine;
+    }
     await this.deleteAgent(agentId);
-    return this.createAgent(spec, entry, hooks);
+    return this.createAgent(spec, entry, { hooks: options.hooks, preferredMachine: preferred });
   }
 
   /**

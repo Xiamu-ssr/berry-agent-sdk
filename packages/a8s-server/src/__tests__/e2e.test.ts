@@ -782,14 +782,16 @@ describe('a8s-server + worker-daemon E2E', () => {
     const adminHeaders = { authorization: 'Bearer boot-secret' };
 
     const root = mkdtempSync(join(tmpdir(), 'a8s-boot-'));
+    const agentsRoot = join(root, 'agents');
     const env = makeTestWorkerEnv(root);
     const worker = await ensureLocalWorker(a8s, {
       env,
       dataRoot: root,
+      agentsRoot,
       capacity: 4,
       workerId: 'a8s-local',
     });
-    const agentId = await ensureAdminAgent(a8s, worker, root, 'boot-secret', {
+    const agentId = await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', {
       a8sPort,
     });
     expect(agentId).toBe('berry-admin');
@@ -797,7 +799,11 @@ describe('a8s-server + worker-daemon E2E', () => {
     // ---- Local worker appears in operator list ----
     const wlResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders });
     const wl = operatorWorkerListResponseSchema.parse(await wlResp.json());
-    expect(wl.workers.find((w) => w.workerId === 'a8s-local')).toBeDefined();
+    const localEntry = wl.workers.find((w) => w.workerId === 'a8s-local');
+    expect(localEntry).toBeDefined();
+    // machine label is always stamped, default = os.hostname()
+    expect(localEntry!.labels?.machine).toBeTypeOf('string');
+    expect(localEntry!.labels?.machine?.length).toBeGreaterThan(0);
 
     // ---- Admin agent shows up as an active assignment ----
     const agentsResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
@@ -812,7 +818,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(mount!.runtime.hasHand?.('cluster-admin')).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
-    await ensureAdminAgent(a8s, worker, root, 'boot-secret', { a8sPort });
+    await ensureAdminAgent(a8s, worker, agentsRoot, 'boot-secret', { a8sPort });
     const agentsResp2 = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
     const agents2 = listAgentsResponseSchema.parse(await agentsResp2.json());
     expect(agents2.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
@@ -927,6 +933,146 @@ describe('a8s-server + worker-daemon E2E', () => {
     }
     expect(finalState).toBe('failed');
 
+    await a8s.stop();
+  });
+
+  it('worker restart: re-mounts owned agents from disk via register response', async () => {
+    // Persistence is the whole point: use an actual durable store (memory
+    // is fine in-process since both worker instances share one JS heap;
+    // the real failure mode we care about is the worker DAEMON dying and
+    // a fresh one taking over, not the store dying).
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+    });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'rh-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer rh-secret' };
+
+    // Shared, machine-scoped agents dir. This is the "data follows the
+    // machine, not the worker process" contract we're testing.
+    const agentsRoot = mkdtempSync(join(tmpdir(), 'rh-agents-'));
+
+    // First worker daemon instance ----
+    const dataRoot1 = mkdtempSync(join(tmpdir(), 'rh-w1-'));
+    const port1 = await pickPort();
+    const env1 = makeTestWorkerEnv(dataRoot1);
+    const worker1 = new Worker<TestEntry>({ env: env1 });
+    const daemon1 = new WorkerDaemon<TestEntry>({
+      worker: worker1, workerId: 'rh-w', port: port1, bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace),
+        home: new AgentHome(wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace)),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const d1Info = await daemon1.start();
+    const reg1 = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url, workerId: 'rh-w', callbackUrl: d1Info.callbackUrl,
+      capacity: 4, heartbeatTtlMs: 30_000, adminToken: 'rh-secret',
+      labels: { machine: 'machine-A' },
+    });
+    const reg1Result = await reg1.register();
+    daemon1.setAuthToken(reg1Result.workerToken);
+    // First registration: no prior leases.
+    expect(reg1Result.ownedAgents).toHaveLength(0);
+
+    // Spawn an agent through a8s ----
+    const createResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...adminHeaders },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: {
+          agentId: 'rh-a',
+          workspace: 'rh-a',  // bare id -> resolveSpec puts it under agentsRoot
+          model: 'tier:strong',
+          ensureDefaultMcpConfig: false,
+        },
+        entry: { tag: 'rh' },
+      })),
+    });
+    expect(createResp.status).toBe(200);
+    expect(worker1.has('rh-a')).toBe(true);
+    // agent.json must exist on disk for rehydrate to find a model.
+    const { writeFileSync, existsSync } = await import('node:fs');
+    const metaPath = join(agentsRoot, 'rh-a', 'agent.json');
+    // The runtime writes agent.json on first init, but in tests we may
+    // race the assertion. Make sure it exists by seeding if missing.
+    if (!existsSync(metaPath)) {
+      writeFileSync(
+        metaPath,
+        JSON.stringify({ id: 'rh-a', name: 'rh-a', createdAt: new Date().toISOString(), model: 'tier:strong' }),
+        'utf-8',
+      );
+    }
+
+    // ---- Simulate worker crash: stop daemon + dispose, leave the
+    //      agent home + leases intact. We do NOT call reg.withdraw() —
+    //      that's the graceful exit, which deliberately releases leases.
+    //      A crash leaves the lease in place until TTL expiry.
+    await daemon1.stop();
+    await worker1.dispose();
+
+    // Second worker daemon instance — same workerId, same agentsRoot,
+    // different process state (fresh Worker, fresh env). This is what
+    // systemd Restart=always would give us.
+    const dataRoot2 = mkdtempSync(join(tmpdir(), 'rh-w2-'));
+    const port2 = await pickPort();
+    const env2 = makeTestWorkerEnv(dataRoot2);
+    const worker2 = new Worker<TestEntry>({ env: env2 });
+    const daemon2 = new WorkerDaemon<TestEntry>({
+      worker: worker2, workerId: 'rh-w', port: port2, bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace),
+        home: new AgentHome(wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace)),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const d2Info = await daemon2.start();
+    const reg2 = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url, workerId: 'rh-w', callbackUrl: d2Info.callbackUrl,
+      capacity: 4, heartbeatTtlMs: 30_000, adminToken: 'rh-secret',
+      labels: { machine: 'machine-A' },
+    });
+    const reg2Result = await reg2.register();
+    daemon2.setAuthToken(reg2Result.workerToken);
+
+    // Core claim: a8s knew this worker should own rh-a, so the response
+    // tells the daemon to rehydrate it.
+    expect(reg2Result.ownedAgents).toContain('rh-a');
+
+    // Simulate the rehydrate loop the CLI runs (we don't drive the CLI
+    // process directly in this test — just exercise the same code path).
+    for (const agentId of reg2Result.ownedAgents) {
+      const workspace = join(agentsRoot, agentId);
+      const home = new AgentHome(workspace);
+      const raw = await import('node:fs/promises').then((m) => m.readFile(home.metadataPath, 'utf-8'));
+      const meta = JSON.parse(raw) as { model: string };
+      worker2.runAgentSync(agentId, {}, {
+        agentId, workspace, home,
+        model: meta.model, ensureDefaultMcpConfig: false,
+      });
+    }
+    expect(worker2.has('rh-a')).toBe(true);
+
+    // a8s now routes the agent to the new daemon. listAgents reports it.
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
+    const list = listAgentsResponseSchema.parse(await listResp.json());
+    expect(list.agents.find((a) => a.agentId === 'rh-a')?.workerId).toBe('rh-w');
+
+    await reg2.withdraw(true);
+    await daemon2.stop();
+    await worker2.dispose();
     await a8s.stop();
   });
 });

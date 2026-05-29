@@ -21,6 +21,7 @@
 // agent to a worker.
 
 import { mkdirSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { AgentHome } from '@berry-agent/core';
 import { InProcessWorkerNode } from '@berry-agent/a8s';
@@ -33,10 +34,31 @@ export interface LocalWorkerConfig {
   workerId?: string;
   /** Concurrent agent slots; default 4. */
   capacity?: number;
-  /** Root for agent home dirs and friends. Default `${a8sRoot}/local-worker`. */
+  /**
+   * Root for the worker's *private* data (observe.db, logs). Does NOT
+   * hold agent homes — those live under agentsRoot, machine-scoped.
+   * Default `/var/berry/a8s/local-worker`.
+   */
   dataRoot?: string;
+  /**
+   * Root for agent home directories, machine-scoped. Default
+   * `/var/berry/agents`. Sharing this with other workers on the same
+   * machine is intentional: it lets agents survive worker process
+   * crashes without data movement.
+   */
+  agentsRoot?: string;
+  /**
+   * Machine identifier stamped into the worker's labels.machine. The
+   * a8s scheduler treats workers sharing a machine value as failover
+   * peers (an agent stranded by a dead worker is preferentially
+   * re-mounted on another worker with the same machine label).
+   * Default os.hostname().
+   */
+  machine?: string;
   /** Heartbeat TTL in ms. Default 30 000. */
   heartbeatTtlMs?: number;
+  /** Additional labels. `machine` and `role` are stamped automatically. */
+  labels?: Readonly<Record<string, string>>;
   /** SDK runtime environment — registry / credentials / observer. Required. */
   env: WorkerEnvironment;
 }
@@ -71,18 +93,23 @@ export async function ensureLocalWorker(
   const capacity = config.capacity ?? 4;
   const heartbeatTtlMs = config.heartbeatTtlMs ?? 30_000;
   const dataRoot = config.dataRoot ?? '/var/berry/a8s/local-worker';
-  mkdirSync(join(dataRoot, 'agents'), { recursive: true });
+  const agentsRoot = config.agentsRoot ?? '/var/berry/agents';
+  const machine = config.machine ?? hostname();
+
+  mkdirSync(dataRoot, { recursive: true });
+  mkdirSync(agentsRoot, { recursive: true });
 
   const worker = new Worker({ env: config.env });
 
   // 1. Durable side: insert into orchestrator so cluster reports + lease
-  //    acquisition see this worker.
+  //    acquisition see this worker. Always stamp the machine + role
+  //    labels so same-machine failover affinity has data to work with.
   await server.plane.orchestrator.registerWorker({
     workerId,
     holderId: workerId,
     capacity,
     heartbeatTtlMs,
-    labels: { role: 'a8s-local' },
+    labels: { ...(config.labels ?? {}), role: 'a8s-local', machine },
   });
 
   // 2. In-memory side: add a WorkerNode so the plane's data-plane
@@ -98,12 +125,13 @@ export async function ensureLocalWorker(
  */
 const DEFAULT_ADMIN_SYSTEM_PROMPT = `You are berry-admin, the cluster operator for this a8s control plane.
 
-You have tools to inspect and operate the cluster (cluster_report, list_workers, list_agents, list_leases, drain_worker, undrain_worker, evict_worker). You answer operator questions and execute cluster operations on their behalf.
+You have tools to inspect and operate the cluster (cluster_report, list_workers, list_agents, list_leases, drain_worker, undrain_worker, evict_worker, worker_join_script). You answer operator questions and execute cluster operations on their behalf.
 
 Conventions:
 - When the operator asks "how is the cluster?", start with cluster_report; then drill down with list_workers / list_agents if they want detail.
 - Before any destructive operation (drain / evict), confirm the workerId with list_workers and state what will happen ("evicting worker-b will release N agents; they need to be re-scheduled"). Then call the tool.
 - Prefer drain_worker over evict_worker for planned maintenance. evict_worker is for unrecoverable hosts.
+- When the operator asks "how do I add a worker?", use worker_join_script and present the returned snippet verbatim. The snippet embeds the cluster admin token — never log it.
 - Use plain English in responses; show JSON only when the operator asks for the raw shape.
 - You are the only agent that can run these tools — keep it boring, predictable, and explicit.
 `;
@@ -112,18 +140,18 @@ Conventions:
  * Ensure the berry-admin agent exists, is mounted on the given worker,
  * and has the cluster-admin hand installed. Idempotent.
  *
- * `dataRoot` is where the agent's home directory lives — typically the
- * same dataRoot the local worker uses, with one subdir per agent.
+ * `agentsRoot` must match what was passed to ensureLocalWorker so the
+ * agent home lives at the machine-scoped location.
  */
 export async function ensureAdminAgent(
   server: A8sServer,
   worker: Worker,
-  dataRoot: string,
+  agentsRoot: string,
   adminToken: string,
   config: AdminAgentConfig & { a8sPort: number },
 ): Promise<string> {
   const agentId = config.agentId ?? 'berry-admin';
-  const workspace = join(dataRoot, 'agents', agentId);
+  const workspace = join(agentsRoot, agentId);
   const home = new AgentHome(workspace);
   await home.ensure();
 
