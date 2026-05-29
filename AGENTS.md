@@ -1,5 +1,11 @@
 # Berry Agent SDK
 
-人类和 agent 的协作事实源统一维护在 [AGENTS.HTML](./AGENTS.HTML)。
+Public quick-start lives in [README.md](./README.md).
 
-修改架构、规范、包职责、代码量统计或开发约定时，只改 `AGENTS.HTML`。
+Human + agent collaboration fact source is [`AGENTS.HTML`](./AGENTS.HTML) —
+open it in a browser. When you change architecture, package responsibilities,
+deployment forms, or test counts, edit `AGENTS.HTML`; never duplicate that
+content into other files.
+
+Conceptual background (Anthropic's managed-agents paper + Berry's mapping)
+lives in [`../docs/anthropic-managed-agents-notes.md`](../docs/anthropic-managed-agents-notes.md).
