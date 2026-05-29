@@ -165,6 +165,43 @@ export function buildClusterAdminTools(client: A8sOperatorClient): ToolRegistrat
         }
       },
     },
+    {
+      definition: {
+        name: 'list_machines',
+        description: 'List hosts that have registered a machine connector (the machine layer). Returns id, state (active/withdrawn/expired), platform, labels, and the MCP servers each can proxy. Use this to answer "what machines can I operate?" and to pick a target before issuing commands via that machine\'s exec tool.',
+        inputSchema: { type: 'object', properties: {} },
+      },
+      execute: async () => {
+        const { machines } = await client.listMachines();
+        return { content: JSON.stringify(machines, null, 2) };
+      },
+    },
+    {
+      definition: {
+        name: 'machine_join_script',
+        description: 'Generate a bash snippet the operator pastes on a NEW host to install + start a machine connector that joins this cluster. Optional inputs preset machineId (defaults to the target hostname) and port (default 7200). The snippet embeds the cluster admin token — present it verbatim to the operator, never log it. After the host runs it, that machine becomes operable: an agent given labels.machines=<id> gets an exec tool for it.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            machineId: { type: 'string', description: 'Override the machine id; defaults to $(hostname) on the target.' },
+            port: { type: 'number', description: 'Port the connector listens on. Default 7200.' },
+          },
+        },
+      },
+      execute: async (input) => {
+        const req: Record<string, unknown> = {};
+        if (typeof input.machineId === 'string' && input.machineId.trim()) req.machineId = input.machineId.trim();
+        if (typeof input.port === 'number') req.port = input.port;
+        try {
+          const result = await client.machineJoinScript(req as Parameters<typeof client.machineJoinScript>[0]);
+          return {
+            content: `Resolved config:\n${JSON.stringify(result.resolved, null, 2)}\n\n--- Paste the following on the new host (it embeds the cluster admin token; do not log) ---\n\n${result.script}`,
+          };
+        } catch (err) {
+          return { content: err instanceof Error ? err.message : String(err), isError: true };
+        }
+      },
+    },
   ];
 }
 

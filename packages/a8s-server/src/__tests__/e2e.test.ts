@@ -1450,4 +1450,43 @@ describe('a8s-server + worker-daemon E2E', () => {
     await worker.dispose();
     await a8s.stop();
   });
+
+  it('machine join-script: refuses in dev mode, embeds admin token + connector install otherwise', async () => {
+    // Dev mode → refuse.
+    const orchA = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const portA = await pickPort();
+    const a8sA = new A8sServer<TestEntry>({ port: portA, controlPlane: { orchestrator: orchA } });
+    const infoA = await a8sA.start();
+    const devResp = await fetch(`${infoA.url}${A8S_PATHS.operatorMachineJoinScript}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(devResp.status).toBe(409);
+    await a8sA.stop();
+
+    // With admin token → embeds it + advertiseUrl + the connector install.
+    const orchB = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const portB = await pickPort();
+    const a8sB = new A8sServer<TestEntry>({
+      port: portB,
+      controlPlane: { orchestrator: orchB },
+      adminToken: 'join-secret',
+      advertiseUrl: 'https://a8s.example.com',
+    });
+    const infoB = await a8sB.start();
+    const respB = await fetch(`${infoB.url}${A8S_PATHS.operatorMachineJoinScript}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer join-secret' },
+      body: JSON.stringify({ machineId: 'office-mac', port: 7250 }),
+    });
+    expect(respB.status).toBe(200);
+    const bodyB = await respB.json() as { script: string; resolved: { machineId: string; port: number; a8sUrl: string } };
+    expect(bodyB.script).toContain('@berry-agent/machine-connector');
+    expect(bodyB.script).toContain('join-secret');
+    expect(bodyB.script).toContain('https://a8s.example.com');
+    expect(bodyB.script).toContain('office-mac');
+    expect(bodyB.resolved.port).toBe(7250);
+    await a8sB.stop();
+  });
 });

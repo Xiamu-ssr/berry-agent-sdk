@@ -618,6 +618,27 @@ export const operatorJoinScriptResponseSchema = z.object({
 }).strict();
 export type OperatorJoinScriptResponse = z.infer<typeof operatorJoinScriptResponseSchema>;
 
+// ---- Machine connector join-script ----
+
+export const operatorMachineJoinScriptRequestSchema = z.object({
+  machineId: z.string().min(1).optional(),
+  port: z.number().int().positive().optional(),
+  /** Hostname/IP the connector advertises back to a8s. Defaults to `$(hostname)`. */
+  bindHost: z.string().min(1).optional(),
+  labels: z.record(z.string()).optional(),
+}).strict();
+export type OperatorMachineJoinScriptRequest = z.infer<typeof operatorMachineJoinScriptRequestSchema>;
+
+export const operatorMachineJoinScriptResponseSchema = z.object({
+  script: z.string().min(1),
+  resolved: z.object({
+    machineId: z.string(),
+    port: z.number().int(),
+    a8sUrl: z.string(),
+  }).strict(),
+}).strict();
+export type OperatorMachineJoinScriptResponse = z.infer<typeof operatorMachineJoinScriptResponseSchema>;
+
 // ============================================================
 // Live event stream (Server-Sent Events)
 // ============================================================

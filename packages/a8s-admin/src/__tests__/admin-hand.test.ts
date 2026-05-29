@@ -80,7 +80,9 @@ describe('createClusterAdminHand', () => {
       'evict_worker',
       'list_agents',
       'list_leases',
+      'list_machines',
       'list_workers',
+      'machine_join_script',
       'undrain_worker',
       'worker_join_script',
     ]);

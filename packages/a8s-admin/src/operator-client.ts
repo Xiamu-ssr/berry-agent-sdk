@@ -22,6 +22,8 @@ import {
   operatorJoinScriptRequestSchema,
   operatorJoinScriptResponseSchema,
   operatorLeaseListResponseSchema,
+  operatorMachineJoinScriptRequestSchema,
+  operatorMachineJoinScriptResponseSchema,
   operatorMachineListResponseSchema,
   operatorOkResponseSchema,
   operatorWorkerListResponseSchema,
@@ -38,6 +40,8 @@ import {
   type OperatorJoinScriptRequest,
   type OperatorJoinScriptResponse,
   type OperatorLeaseListResponse,
+  type OperatorMachineJoinScriptRequest,
+  type OperatorMachineJoinScriptResponse,
   type OperatorMachineListResponse,
   type OperatorWorkerListResponse,
   type SendRequest,
@@ -159,6 +163,26 @@ export class A8sOperatorClient {
 
   async listMachines(): Promise<OperatorMachineListResponse> {
     return this.parseGet(A8S_PATHS.operatorMachines, operatorMachineListResponseSchema);
+  }
+
+  /** Generate the connector install snippet for a new machine. */
+  async machineJoinScript(
+    input: OperatorMachineJoinScriptRequest = {},
+  ): Promise<OperatorMachineJoinScriptResponse> {
+    const body = JSON.stringify(operatorMachineJoinScriptRequestSchema.parse(input));
+    const resp = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.operatorMachineJoinScript}`, {
+      method: 'POST',
+      headers: {
+        [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST machine join-script failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return operatorMachineJoinScriptResponseSchema.parse(await resp.json());
   }
 
   /**
