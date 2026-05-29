@@ -283,6 +283,12 @@ async function main(argv: string[]): Promise<number> {
     heartbeatTtlMs: config.heartbeatTtlMs,
     labels,
     adminToken,
+    // a8s convergence hook: tell the control plane every agent we
+    // currently have mounted (in case its lease table was wiped, e.g.
+    // memory store + a8s restart). On a fresh worker start this is
+    // empty; on a worker process restart this is the list we just
+    // rehydrated from disk above.
+    mountedAgentsProvider: () => worker.ids(),
   });
 
   const regResult = await reg.register();

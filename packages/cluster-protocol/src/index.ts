@@ -45,6 +45,19 @@ export const workerRegistrationRequestSchema = z.object({
   heartbeatTtlMs: z.number().int().positive(),
   /** Optional opaque labels for affinity scheduling (e.g. {"region":"us-west"}). */
   labels: z.record(z.string()).optional(),
+  /**
+   * Agents this worker has already mounted in memory at registration
+   * time (typically empty on fresh start; non-empty when an a8s control
+   * plane restart left the worker holding live mounts the new control
+   * plane has no record of). a8s reconciles: any agent in this list
+   * whose lease is missing or held by someone else is rebound to the
+   * registering worker — the worker process is authoritative because
+   * its in-memory mount IS the runtime. This closes the loop with
+   * `ownedAgents` in the response: ownedAgents = "what a8s thinks you
+   * should own", mountedAgents = "what you actually own". After
+   * register, both sides converge.
+   */
+  mountedAgents: z.array(z.string().min(1)).optional().default([]),
 }).strict();
 export type WorkerRegistrationRequest = z.infer<typeof workerRegistrationRequestSchema>;
 

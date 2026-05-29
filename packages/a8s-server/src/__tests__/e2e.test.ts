@@ -1101,4 +1101,85 @@ describe('a8s-server + worker-daemon E2E', () => {
     await worker2.dispose();
     await a8s.stop();
   });
+
+  it('a8s restart with wiped store: worker self-reports mounts, a8s reconciles', async () => {
+    // Simulate the "a8s lost its memory store + worker still running" case.
+    // Use two separate A8sServer instances backed by SEPARATE memory stores
+    // (not one shared store) so the second instance starts truly blank.
+    const a8sPort = await pickPort();
+    const agentsRoot = mkdtempSync(join(tmpdir(), 'rc-agents-'));
+    const adminHeaders = { authorization: 'Bearer rc-secret' };
+
+    // ---- Round 1: a8s + worker + agent ----
+    const orch1 = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8s1 = new A8sServer<TestEntry>({
+      port: a8sPort, controlPlane: { orchestrator: orch1 }, adminToken: 'rc-secret',
+    });
+    const a8s1Info = await a8s1.start();
+
+    const dataRoot = mkdtempSync(join(tmpdir(), 'rc-w-'));
+    const wPort = await pickPort();
+    const env = makeTestWorkerEnv(dataRoot);
+    const worker = new Worker<TestEntry>({ env });
+    const daemon = new WorkerDaemon<TestEntry>({
+      worker, workerId: 'rc-w', port: wPort, bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace),
+        home: new AgentHome(wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace)),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const dInfo = await daemon.start();
+    const reg = new WorkerRegistrationClient({
+      a8sUrl: a8s1Info.url, workerId: 'rc-w', callbackUrl: dInfo.callbackUrl,
+      capacity: 4, heartbeatTtlMs: 30_000, adminToken: 'rc-secret',
+      mountedAgentsProvider: () => worker.ids(),
+    });
+    await reg.register();
+    daemon.setAuthToken((await reg.register()).workerToken); // second call to refresh after restart not used here
+
+    // Create an agent through a8s.
+    const createResp = await fetch(`${a8s1Info.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...adminHeaders },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: { agentId: 'rc-a', workspace: 'rc-a', model: 'tier:strong', ensureDefaultMcpConfig: false },
+        entry: { tag: 'rc' },
+      })),
+    });
+    expect(createResp.status).toBe(200);
+    expect(worker.has('rc-a')).toBe(true);
+
+    // ---- Simulated a8s catastrophic restart: stop a8s1, start a8s2 on the
+    //      same port with a FRESH store. Worker keeps running. ----
+    await a8s1.stop();
+    // wait for port release
+    await new Promise((r) => setTimeout(r, 100));
+
+    const orch2 = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8s2 = new A8sServer<TestEntry>({
+      port: a8sPort, controlPlane: { orchestrator: orch2 }, adminToken: 'rc-secret',
+    });
+    await a8s2.start();
+
+    // Worker's existing heartbeat will get 404 (a8s2 doesn't know rc-w)
+    // and auto-re-register, this time reporting mountedAgents: ['rc-a'].
+    // Trigger this by manually re-registering (production flow uses the
+    // heartbeat → 404 → re-register path; we shortcut here for determinism).
+    const reg2Result = await reg.register();
+    expect(reg2Result.ownedAgents).toContain('rc-a');
+
+    // a8s2 now knows about rc-a → rc-w binding.
+    const locResp = await fetch(`${a8s1Info.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
+    const loc = listAgentsResponseSchema.parse(await locResp.json());
+    expect(loc.agents.find((a) => a.agentId === 'rc-a')?.workerId).toBe('rc-w');
+
+    await reg.withdraw(true);
+    await daemon.stop();
+    await worker.dispose();
+    await a8s2.stop();
+  });
 });

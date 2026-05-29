@@ -211,6 +211,19 @@ export class ControlPlane<TEntry = unknown> {
   }
 
   /**
+   * Imperatively register an existing (agentId, workerId) binding in the
+   * in-memory assignment table — used when an out-of-band signal proves
+   * the worker is already running the agent (e.g. worker self-reports
+   * `mountedAgents` at registration after a control plane restart with
+   * a wiped lease table). Callers MUST have already secured the durable
+   * lease before calling; this method does not touch the orchestrator
+   * store. Idempotent.
+   */
+  bindAssignment(agentId: string, workerId: string): void {
+    this.assignments.set(agentId, workerId);
+  }
+
+  /**
    * Rebuild the in-memory `assignments` map from the orchestrator's active
    * leases. Run on startup before serving traffic so getAgentLocation /
    * openAgent / listAgents see the durable truth instead of an empty cache

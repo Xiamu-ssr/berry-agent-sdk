@@ -41,6 +41,15 @@ export interface RegistrationClientOptions {
    * When unset and a8s is in dev mode, registration still succeeds.
    */
   adminToken?: string;
+  /**
+   * Lazy provider for agents this worker has *already mounted* before
+   * (re-)registering with a8s. Lets a8s converge on the worker's
+   * authoritative in-memory state when its own lease table was lost
+   * (e.g. a control-plane restart with a memory store) — the worker
+   * process is the truth, a8s metadata is the index. Defaults to "no
+   * mounted agents", which is correct on a fresh worker start.
+   */
+  mountedAgentsProvider?: () => string[];
   /** Test injection. */
   fetch?: typeof fetch;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
@@ -66,12 +75,14 @@ export class WorkerRegistrationClient {
    * the WorkerDaemon via setAuthToken so the daemon will accept a8s calls.
    */
   async register(): Promise<WorkerRegistrationResponse> {
+    const mountedAgents = this.options.mountedAgentsProvider?.() ?? [];
     const body = workerRegistrationRequestSchema.parse({
       workerId: this.options.workerId,
       callbackUrl: this.options.callbackUrl,
       capacity: this.options.capacity,
       heartbeatTtlMs: this.options.heartbeatTtlMs,
       labels: this.options.labels,
+      mountedAgents,
     });
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.options.adminToken) {
@@ -132,6 +143,21 @@ export class WorkerRegistrationClient {
           body: JSON.stringify(body),
         },
       );
+      if (response.status === 401 || response.status === 404 || response.status === 410) {
+        // a8s no longer knows about us — its lease/worker table was lost
+        // (restart with memory store, fresh control plane, evict, etc).
+        // Re-register, which lets the worker self-report its current
+        // mounts so a8s can converge on the truth.
+        this.logger.warn?.(
+          `[worker-daemon] heartbeat got HTTP ${response.status} from a8s; re-registering to converge`,
+        );
+        try {
+          await this.register();
+        } catch (err) {
+          this.logger.warn?.('[worker-daemon] re-register failed:', err);
+        }
+        return;
+      }
       if (!response.ok) {
         this.logger.warn?.(`[worker-daemon] heartbeat HTTP ${response.status}`);
         return;

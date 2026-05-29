@@ -370,9 +370,56 @@ export class A8sServer<TEntry = unknown> {
         `[a8s-server] hydrated ${hydrated.restored.length} assignment(s) after ${parsed.workerId} registered`,
       );
     }
-    const ownedAgents = hydrated.restored
-      .filter((entry) => entry.workerId === parsed.workerId)
-      .map((entry) => entry.agentId);
+
+    // Reverse convergence: when the worker reports `mountedAgents` that
+    // a8s has no lease for (e.g. a8s lost its state due to memory-store
+    // restart), the worker process is authoritative — we acquire fresh
+    // leases on its behalf and add them to the in-memory plane. Any
+    // agent the worker mounts but a different worker already holds the
+    // lease for stays with the existing holder; we log the conflict
+    // because it indicates a torn cluster state the operator should see.
+    const reconciled: string[] = [];
+    const conflicts: Array<{ agentId: string; existingHolder: string }> = [];
+    for (const agentId of parsed.mountedAgents) {
+      if (hydrated.restored.some((r) => r.agentId === agentId && r.workerId === parsed.workerId)) {
+        continue; // already accounted for by hydrateAssignments
+      }
+      const acquired = await this.options.controlPlane.orchestrator.acquireLease({
+        agentId,
+        holderId: parsed.workerId,
+        workerId: parsed.workerId,
+        ttlMs: 5 * 60_000,
+      });
+      if (acquired.acquired) {
+        this.plane.bindAssignment(agentId, parsed.workerId);
+        reconciled.push(agentId);
+      } else if (acquired.active.workerId !== parsed.workerId) {
+        conflicts.push({ agentId, existingHolder: acquired.active.workerId ?? acquired.active.holderId });
+      } else {
+        // The lease exists and is already ours but hydrateAssignments
+        // missed it (race). Bind the in-memory assignment so future
+        // routing finds it.
+        this.plane.bindAssignment(agentId, parsed.workerId);
+        reconciled.push(agentId);
+      }
+    }
+    if (reconciled.length > 0) {
+      this.logger.log?.(
+        `[a8s-server] reconciled ${reconciled.length} self-reported mount(s) from ${parsed.workerId}: ${reconciled.join(', ')}`,
+      );
+    }
+    for (const c of conflicts) {
+      this.logger.warn?.(
+        `[a8s-server] worker ${parsed.workerId} reports mount of ${c.agentId} but lease is held by ${c.existingHolder}; keeping existing holder`,
+      );
+    }
+
+    const ownedAgents = [
+      ...hydrated.restored
+        .filter((entry) => entry.workerId === parsed.workerId)
+        .map((entry) => entry.agentId),
+      ...reconciled,
+    ];
 
     return writeJson(res, 200, workerRegistrationResponseSchema.parse({
       workerId: parsed.workerId,
