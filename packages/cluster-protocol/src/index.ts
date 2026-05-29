@@ -97,6 +97,103 @@ export const workerWithdrawRequestSchema = z.object({
 export type WorkerWithdrawRequest = z.infer<typeof workerWithdrawRequestSchema>;
 
 // ============================================================
+// Machine registration & control  (the "machine layer")
+// ============================================================
+//
+// A *machine* is a host that offers an ExecutionEnvironment to the
+// cluster without running agent brains. It registers like a worker
+// (admin token bootstrap → machine token), heartbeats, and serves an
+// /exec endpoint a8s can call back. a8s projects each registered
+// machine into a remote ExecutionEnvironment whose createHands() yields
+// machine-bound exec/file Hands; agents opt in by label.
+//
+// Why separate from workers: a worker mounts agent runtimes (heavy,
+// holds leases, capacity-scheduled). A machine only lends an execution
+// surface (light, no brain, no lease). Conflating them would force a
+// machine to carry capacity/lease semantics it has no use for.
+
+/** Machine connector → a8s: "I'm a host you can run commands on." */
+export const machineRegistrationRequestSchema = z.object({
+  /** Stable id chosen by the connector; persists across restarts. */
+  machineId: z.string().min(1),
+  /** Connector's external URL so a8s can call back for /exec. */
+  callbackUrl: z.string().url(),
+  /** Heartbeat TTL the connector will respect. */
+  heartbeatTtlMs: z.number().int().positive(),
+  /** OS family so the scheduler / UI can show it and skills can adapt. */
+  platform: z.enum(['macos', 'linux', 'windows', 'other']).optional(),
+  /** Opaque labels (e.g. {"env":"office","arch":"arm64"}). */
+  labels: z.record(z.string()).optional(),
+  /**
+   * MCP server ids the connector found in the machine's local .mcp.json
+   * and can proxy. a8s lists these as available Hands; the actual proxy
+   * wiring is M6. Empty / omitted on a connector with no local MCP.
+   */
+  mcpServers: z.array(z.string().min(1)).optional().default([]),
+}).strict();
+export type MachineRegistrationRequest = z.infer<typeof machineRegistrationRequestSchema>;
+
+export const machineRegistrationResponseSchema = z.object({
+  machineId: z.string().min(1),
+  heartbeatTtlMs: z.number().int().positive(),
+  /** Token the connector uses on subsequent calls; a8s uses it to call back. */
+  machineToken: z.string().min(1),
+}).strict();
+export type MachineRegistrationResponse = z.infer<typeof machineRegistrationResponseSchema>;
+
+export const machineHeartbeatRequestSchema = z.object({}).strict();
+export type MachineHeartbeatRequest = z.infer<typeof machineHeartbeatRequestSchema>;
+
+export const machineHeartbeatResponseSchema = z.object({
+  ok: z.literal(true),
+  heartbeatTtlMs: z.number().int().positive(),
+}).strict();
+export type MachineHeartbeatResponse = z.infer<typeof machineHeartbeatResponseSchema>;
+
+export const machineWithdrawRequestSchema = z.object({}).strict();
+export type MachineWithdrawRequest = z.infer<typeof machineWithdrawRequestSchema>;
+
+/**
+ * a8s → machine connector: "run this command on your host."
+ * Mirrors the SDK's RemoteExecRequest (tools-common) but is the
+ * cross-process source of truth so the connector needn't depend on
+ * tools-common. The connector executes via a local NodeExecutor.
+ */
+export const machineExecRequestSchema = z.object({
+  command: z.string().min(1),
+  cwd: z.string().min(1),
+  env: z.record(z.string()).default({}),
+  timeoutMs: z.number().int().positive().optional(),
+  maxBuffer: z.number().int().positive().optional(),
+}).strict();
+export type MachineExecRequest = z.infer<typeof machineExecRequestSchema>;
+
+export const machineExecReplySchema = z.object({
+  output: z.string(),
+  isError: z.boolean(),
+}).strict();
+export type MachineExecReply = z.infer<typeof machineExecReplySchema>;
+
+/** Operator view of one registered machine. */
+export const operatorMachineSchema = z.object({
+  machineId: z.string().min(1),
+  state: z.enum(['active', 'withdrawn', 'expired']),
+  callbackUrl: z.string(),
+  platform: z.string().optional(),
+  labels: z.record(z.string()).optional(),
+  mcpServers: z.array(z.string()).default([]),
+  registeredAt: z.number().int(),
+  heartbeatAt: z.number().int(),
+  heartbeatExpiresAt: z.number().int(),
+}).strict();
+export type OperatorMachine = z.infer<typeof operatorMachineSchema>;
+
+export const operatorMachineListResponseSchema = z.object({
+  machines: z.array(operatorMachineSchema),
+}).strict();
+export type OperatorMachineListResponse = z.infer<typeof operatorMachineListResponseSchema>;
+
+// ============================================================
 // Agent lifecycle — product → a8s
 // ============================================================
 
@@ -556,6 +653,11 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/workers/${encodeURIComponent(workerId)}/heartbeat`,
   workerWithdraw: (workerId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/workers/${encodeURIComponent(workerId)}/withdraw`,
+  machinesRegister: `/${CLUSTER_PROTOCOL_VERSION}/machines/register`,
+  machineHeartbeat: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/heartbeat`,
+  machineWithdraw: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/withdraw`,
   agents: `/${CLUSTER_PROTOCOL_VERSION}/agents`,
   agent: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}`,
@@ -586,6 +688,8 @@ export const A8S_PATHS = {
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
   operatorModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/operator/models-template`,
   operatorAdminAgent: `/${CLUSTER_PROTOCOL_VERSION}/operator/admin-agent`,
+  operatorMachines: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines`,
+  operatorMachineJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/join-script`,
 } as const;
 
 export const WORKER_PATHS = {
@@ -607,6 +711,16 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   hasAgent: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/has`,
+} as const;
+
+/**
+ * Endpoints a *machine connector* serves (a8s → machine). Mirrors the
+ * minimal shape of WORKER_PATHS but for a host that only lends an
+ * execution surface: health + exec. spawn/stream come with M6.
+ */
+export const MACHINE_PATHS = {
+  health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
+  exec: `/${CLUSTER_PROTOCOL_VERSION}/exec`,
 } as const;
 
 // ============================================================
