@@ -12,3 +12,10 @@ export {
   type MemorySearchResult,
   type MemoryGetResult,
 } from './provider.js';
+
+export {
+  createSessionHistoryProvider,
+  type SessionHistoryProvider,
+  type SessionHistoryProviderOptions,
+  type SessionHistorySearchResult,
+} from './session-history.js';
