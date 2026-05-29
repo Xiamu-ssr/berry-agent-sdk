@@ -40,8 +40,96 @@ Conventions:
 `;
 
 /**
- * Synchronous seed: write the default AGENTS.md only if the file does
- * not already exist. Sync on purpose so callers can use it from the
+ * The "install a worker on a machine" skill. Shipped as content (not a
+ * tool) because it IS the design point: installing a worker is something
+ * the agent does by driving a machine's generic exec tool, not a fixed
+ * connector RPC. Seeded into the admin agent's skills dir on first boot.
+ */
+export const INSTALL_WORKER_SKILL = `---
+name: install-worker
+description: Install and start a berry worker on a machine you have exec access to, so it can host agent brains.
+whenToUse: When the operator wants to add worker capacity on a registered machine — "install a worker on machine X", "turn host Y into a worker", "we need more capacity".
+---
+
+# Install a worker on a machine
+
+You install a worker by **driving the target machine's exec tool**
+(\`machine_<id>_exec\`). There is no special "install worker" command — the
+machine is a generic execution surface and you compose ordinary shell
+steps. This is deliberate: it keeps machines flexible (the connector has
+no fixed menu) and keeps the install logic here, where it can evolve
+without redeploying anything.
+
+## Preconditions
+
+1. The target host must already be a registered machine. Run \`list_machines\`
+   and confirm the machine is \`active\`. If it isn't, the operator must add
+   it first (\`machine_join_script\` → they run the snippet on that host).
+2. You must have the machine's exec tool. If you don't see
+   \`machine_<id>_exec\` in your tools, you weren't granted that machine —
+   ask the operator to create/grant an agent with \`labels.machines\`
+   including this id.
+
+## Steps
+
+Use \`machine_<id>_exec\` for every command below. Substitute the real
+machine id. Pick a stable WORKER_ID (often the machine's hostname).
+
+1. **Check the toolchain** — confirm node + npm exist:
+   \`node --version && npm --version\`
+   If missing, install Node ≥20 first (the method depends on the host's
+   package manager — \`apt\`, \`brew\`, \`dnf\`, …; inspect with \`uname -a\`
+   and \`cat /etc/os-release\` when unsure).
+
+2. **Install the worker daemon** globally:
+   \`npm install -g @berry-agent/worker-daemon\`
+
+3. **Prepare the data + agents roots**:
+   \`mkdir -p /var/berry/workers/<WORKER_ID> /var/berry/agents\`
+
+4. **Write the worker config**. Keep \`"registry": null\` so the worker
+   pulls the cluster-wide models template from a8s at registration — do
+   NOT paste API keys into this file. Fill A8S_URL and ADMIN_TOKEN from
+   what the operator provides (the same a8s URL + admin token the machine
+   connector itself uses):
+   \`\`\`
+   cat > /var/berry/workers/<WORKER_ID>/worker.json <<'JSON'
+   {
+     "workerId": "<WORKER_ID>",
+     "port": 7100,
+     "a8s": "<A8S_URL>",
+     "adminToken": "<ADMIN_TOKEN>",
+     "capacity": 4,
+     "heartbeatTtlMs": 30000,
+     "dataRoot": "/var/berry/workers/<WORKER_ID>",
+     "agentsRoot": "/var/berry/agents",
+     "registry": null
+   }
+   JSON\`\`\`
+
+5. **Start it** (prefer a process manager so it survives reboots; a bare
+   start is fine for a first smoke test):
+   \`berry-worker start --config /var/berry/workers/<WORKER_ID>/worker.json\`
+   For production, install a systemd unit with \`Restart=always\` instead.
+
+6. **Verify** with \`list_workers\` — the new worker should appear \`active\`
+   with the capacity you set. If it doesn't within ~30s, re-run step 5 in
+   the foreground and read the output: the most common failure is a8s
+   having no models template yet (configure it in Settings → Models).
+
+## Notes
+
+- The worker pulls the models template at register time. If the operator
+  hasn't configured one, the worker starts but can't mount agents that
+  need an LLM. Tell them to set it first.
+- Never echo the admin token into logs. When you must show progress,
+  redact it.
+`;
+
+/**
+ * Synchronous seed: write the default AGENTS.md and the install-worker
+ * skill, each only if absent (so an operator who customized them isn't
+ * clobbered on restart). Sync on purpose so callers can use it from the
  * worker daemon's `resolveSpec` (a synchronous hook).
  *
  * `workspace` is the agent home directory (typically
@@ -49,8 +137,17 @@ Conventions:
  * worker's resolveSpec, before the runtime builder initializes the home.
  */
 export function seedAdminAgentHome(workspace: string, prompt: string = DEFAULT_ADMIN_SYSTEM_PROMPT): void {
-  const agentMdPath = join(workspace, 'AGENTS.md');
-  if (existsSync(agentMdPath)) return;
   mkdirSync(workspace, { recursive: true });
-  writeFileSync(agentMdPath, prompt, 'utf-8');
+  const agentMdPath = join(workspace, 'AGENTS.md');
+  if (!existsSync(agentMdPath)) {
+    writeFileSync(agentMdPath, prompt, 'utf-8');
+  }
+  const skillDir = join(workspace, 'skills', 'install-worker');
+  const skillPath = join(skillDir, 'SKILL.md');
+  if (!existsSync(skillPath)) {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(skillPath, INSTALL_WORKER_SKILL, 'utf-8');
+  }
 }
+
+

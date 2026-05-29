@@ -7,7 +7,7 @@
 // HTTP layer — verifies the wire protocol round-trips correctly.
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AddressInfo } from 'node:net';
@@ -832,6 +832,11 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(toolNames.has('list_workers')).toBe(true);
     expect(toolNames.has('drain_worker')).toBe(true);
     expect(toolNames.has('worker_join_script')).toBe(true);
+    expect(toolNames.has('list_machines')).toBe(true);
+    expect(toolNames.has('machine_join_script')).toBe(true);
+
+    // ---- First-boot seeded the install-worker skill into the agent home ----
+    expect(existsSync(join(agentsRoot, 'berry-admin', 'skills', 'install-worker', 'SKILL.md'))).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
     await ensureAdminAgent(a8s.plane);

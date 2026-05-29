@@ -25,4 +25,4 @@ export { createMachineHand, buildMachineTools } from './machine-hand.js';
 export type { MachineHandOptions } from './machine-hand.js';
 export { createRemoteTeammateRuntimeFactory } from './remote-teammate.js';
 export type { RemoteTeammateRuntimeFactoryOptions } from './remote-teammate.js';
-export { DEFAULT_ADMIN_SYSTEM_PROMPT, seedAdminAgentHome } from './admin-agent-defaults.js';
+export { DEFAULT_ADMIN_SYSTEM_PROMPT, INSTALL_WORKER_SKILL, seedAdminAgentHome } from './admin-agent-defaults.js';
