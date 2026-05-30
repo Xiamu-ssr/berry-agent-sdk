@@ -63,7 +63,9 @@ export function MachinesPage() {
                   <td className="table-cell"><MachineState state={m.state} /></td>
                   <td className="table-cell text-ink-500 dark:text-ink-400 text-xs">{m.platform ?? '—'}</td>
                   <td className="table-cell text-ink-500 dark:text-ink-400 text-xs">
-                    {m.mcpServers.length > 0 ? m.mcpServers.join(', ') : '—'}
+                    {m.mcpServers.length > 0
+                      ? `${m.mcpServers.join(', ')} (${m.mcpToolCount} tool${m.mcpToolCount === 1 ? '' : 's'})`
+                      : '—'}
                   </td>
                   <td className="table-cell text-ink-500 dark:text-ink-400 text-xs">
                     {relativeTime(m.heartbeatAt)}

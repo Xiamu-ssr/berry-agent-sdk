@@ -29,6 +29,9 @@ import {
   operatorWorkerListResponseSchema,
   machineExecReplySchema,
   machineExecRequestSchema,
+  machineMcpInvokeReplySchema,
+  machineMcpInvokeRequestSchema,
+  machineMcpManifestSchema,
   sendRequestSchema,
   sendResponseSchema,
   type CreateAgentRequest,
@@ -36,6 +39,9 @@ import {
   type ListAgentsResponse,
   type MachineExecReply,
   type MachineExecRequest,
+  type MachineMcpInvokeReply,
+  type MachineMcpInvokeRequest,
+  type MachineMcpManifest,
   type OperatorClusterReport,
   type OperatorJoinScriptRequest,
   type OperatorJoinScriptResponse,
@@ -208,6 +214,46 @@ export class A8sOperatorClient {
       throw new Error(`a8s POST machine exec failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
     }
     return machineExecReplySchema.parse(await resp.json());
+  }
+
+  /**
+   * Invoke an MCP tool on a registered machine, brokered by a8s. Same
+   * trust model as machineExec — a8s holds the machine token and forwards
+   * to the connector, which holds the persistent stdio MCP connection.
+   */
+  async machineMcpInvoke(
+    machineId: string,
+    input: MachineMcpInvokeRequest,
+  ): Promise<MachineMcpInvokeReply> {
+    const body = JSON.stringify(machineMcpInvokeRequestSchema.parse(input));
+    const resp = await this.fetchImpl(
+      `${this.baseUrl}/v1/machines/${encodeURIComponent(machineId)}/mcp/invoke`,
+      {
+        method: 'POST',
+        headers: {
+          [ADMIN_AUTH_HEADER]: adminAuthHeader(this.token),
+          'content-type': 'application/json',
+        },
+        body,
+      },
+    );
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`a8s POST machine mcp invoke failed: HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    return machineMcpInvokeReplySchema.parse(await resp.json());
+  }
+
+  /**
+   * Fetch a machine's MCP tool manifest so the brain can project each
+   * tool into a model-visible tool. Returns the flat tool list a8s stored
+   * verbatim at the connector's registration.
+   */
+  async machineMcpManifest(machineId: string): Promise<MachineMcpManifest> {
+    return this.parseGet(
+      `/v1/machines/${encodeURIComponent(machineId)}/mcp/manifest`,
+      machineMcpManifestSchema,
+    );
   }
 
   // ----- Internal HTTP helpers -----

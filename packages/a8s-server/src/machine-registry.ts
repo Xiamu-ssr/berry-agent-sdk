@@ -17,7 +17,7 @@
 // not the keys it brokers" stance as the rest of the control plane.
 
 import { randomBytes } from 'node:crypto';
-import type { MachineRegistrationRequest } from '@berry-agent/cluster-protocol';
+import type { MachineMcpTool, MachineRegistrationRequest } from '@berry-agent/cluster-protocol';
 
 export interface MachineEntry {
   machineId: string;
@@ -26,6 +26,12 @@ export interface MachineEntry {
   platform?: string;
   labels?: Record<string, string>;
   mcpServers: string[];
+  /**
+   * Flat MCP tool manifest the connector reported (M6). a8s stores it
+   * verbatim and hands it back to the brain for tool projection — it
+   * never interprets MCP structure itself.
+   */
+  mcpTools: MachineMcpTool[];
   heartbeatTtlMs: number;
   registeredAt: number;
   heartbeatAt: number;
@@ -52,6 +58,7 @@ export class MachineRegistry {
       platform: req.platform,
       labels: req.labels ? { ...req.labels } : undefined,
       mcpServers: [...(req.mcpServers ?? [])],
+      mcpTools: [...(req.mcpManifest?.tools ?? [])],
       heartbeatTtlMs: req.heartbeatTtlMs,
       registeredAt: existing?.registeredAt ?? now,
       heartbeatAt: now,

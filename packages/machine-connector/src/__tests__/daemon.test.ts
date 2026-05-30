@@ -10,8 +10,10 @@ import {
   WORKER_AUTH_HEADER,
   workerAuthHeader,
   machineExecReplySchema,
+  machineMcpInvokeReplySchema,
 } from '@berry-agent/cluster-protocol';
 import { MachineConnectorDaemon } from '../daemon.js';
+import type { MachineMcpHost } from '../mcp-host.js';
 
 async function pickPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -67,5 +69,46 @@ describe('MachineConnectorDaemon', () => {
     const reply = machineExecReplySchema.parse(await ok.json());
     expect(reply.isError).toBe(false);
     expect(reply.output).toContain('berry-machine-ok');
+  });
+
+  it('dispatches /mcp/invoke to the MCP host (M6)', async () => {
+    const port = await pickPort();
+    const calls: Array<{ server: string; name: string; input: Record<string, unknown> }> = [];
+    // Minimal stub standing in for MachineMcpHost — only invoke() is used.
+    const mcpHost = {
+      invoke: async (server: string, name: string, input: Record<string, unknown>) => {
+        calls.push({ server, name, input });
+        return { content: `ran ${server}/${name}`, isError: false };
+      },
+    } as unknown as MachineMcpHost;
+    daemon = new MachineConnectorDaemon({ machineId: 'm-mcp', port, bindHost: '127.0.0.1', mcpHost });
+    daemon.setAuthToken('s');
+    const info = await daemon.start();
+
+    const resp = await fetch(`${info.callbackUrl}${MACHINE_PATHS.mcpInvoke}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [WORKER_AUTH_HEADER]: workerAuthHeader('s') },
+      body: JSON.stringify({ server: 'playwright', name: 'browser_navigate', input: { url: 'x' } }),
+    });
+    expect(resp.status).toBe(200);
+    const reply = machineMcpInvokeReplySchema.parse(await resp.json());
+    expect(reply.content).toBe('ran playwright/browser_navigate');
+    expect(calls).toEqual([{ server: 'playwright', name: 'browser_navigate', input: { url: 'x' } }]);
+  });
+
+  it('returns isError when /mcp/invoke is called without an MCP host', async () => {
+    const port = await pickPort();
+    daemon = new MachineConnectorDaemon({ machineId: 'm-nomcp', port, bindHost: '127.0.0.1' });
+    daemon.setAuthToken('s');
+    const info = await daemon.start();
+    const resp = await fetch(`${info.callbackUrl}${MACHINE_PATHS.mcpInvoke}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [WORKER_AUTH_HEADER]: workerAuthHeader('s') },
+      body: JSON.stringify({ server: 'x', name: 'y', input: {} }),
+    });
+    expect(resp.status).toBe(200);
+    const reply = machineMcpInvokeReplySchema.parse(await resp.json());
+    expect(reply.isError).toBe(true);
+    expect(reply.content).toMatch(/no MCP host/);
   });
 });

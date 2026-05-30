@@ -118,18 +118,38 @@ brain 工具调用 → a8s/connector 转发 → 机器侧 connector 喂给本地
 MCP server 无感知(还是普通 stdio server),用户现有 MCP 配置零改动就能被云端 brain 用上。
 这是"云端 a8s 取代本地 Engine"的关键:本地怎么配 MCP,接入后云端照样能用。
 
-## 8. 实现顺序
+## 8. 实现顺序(M1–M7 全部完成)
 
-1. **M1** 收紧 executor 契约(fail-closed)—— 独立小 commit,先把地基钉死。
-2. **M2** cluster-protocol 加机器端点 wire schema(machine register/withdraw/heartbeat/exec)。
-3. **M3** machine connector daemon(通用 exec)——先打通"机器接入→exec Hand→agent 远程跑命令"。
-4. **M4** a8s 机器注册 → remote Environment → Hand 注入(label,路线甲)。
-5. **M5** install-worker skill —— agent 用通用 exec 自己拼命令装 worker。
-6. **M6** connector 本地 MCP 代理 → Hand(方案甲,单独 commit)。
-7. **M7** UI 机器管理 + AGENTS.HTML 机器层章节。
+1. ✅ **M1** 收紧 executor 契约(fail-closed,`requireExecutor`)。
+2. ✅ **M2** cluster-protocol 机器端点 wire schema(register/withdraw/heartbeat/exec/mcp)。
+3. ✅ **M3** machine connector daemon(通用 exec)。
+4. ✅ **M4** a8s 机器注册 → remote Environment → label 注入 Hand(路线甲)。
+5. ✅ **M5** install-worker skill。
+6. ✅ **M6** connector 本地 MCP 代理 → Hand。
+7. ✅ **M7** UI 机器管理 + AGENTS.HTML 机器层章节。
+
+### M6 落地细节(MCP 一等公民 + 双重命名空间)
+
+- **a8s 保持 MCP-agnostic**:connector 在机器本地连 `.mcp.json` 的 MCP server(持久 stdio
+  连接只在机器本地),启动时 `listTools` 汇成 manifest 在 register 时上报。a8s 只存 manifest
+  verbatim,只转发一问一答的 `{server, name, input}` invoke(`/v1/machines/:id/mcp/invoke`
+  broker,与 exec broker 同构)。没有持久连接穿过 a8s。
+- **brain 侧投影(一等公民)**:`buildMachineTools` 为每个 manifest tool 生成一个模型可见
+  工具,命名 `machine_<id>__<server>_<tool>`——机器命名空间 + MCP server 命名空间双重体现
+  (对齐 Claude Code 的 `mcp__server__tool`,但前缀加上机器)。dispatch key 是上游
+  `(server, name)`,模型可见的前缀永不泄漏回 MCP server。
+- **manifest 获取 vs resolveSpec 同步约束**:worker daemon 的 `withMachineHostTools` 维护一个
+  manifest 缓存,首次 resolve 某机器时后台拉取(`GET /v1/machines/:id/mcp/manifest`),exec
+  工具立即可用,MCP 工具在缓存暖了之后的下次 mount 出现。manifest 小且少变,惰性暖缓存是对的
+  取舍——不阻塞、最终完整。
+- **二等公民(渐进披露)是未来 SDK 投影层的独立优化**,对所有 Hand 通用,不只 MCP,不在本轮。
+  详见 [[product_infra_boundary]] 的调研结论。
 
 ## 9. 未来(不在本轮)
 
+- **MCP 二等公民投影**:tool 数过多时,SDK 侧 Hand→tool 投影改渐进披露(search_tools /
+  code-exec 元工具)。全行业当前默认一等平铺;Anthropic 在推二等。发生在 brain 投影层,
+  不碰机器层协议。可选轻量护栏:工具数超阈值告警(对齐 Cursor)。
 - **Environment 池 / Hand 池**:a8s 的基础注册表。机器层是 Environment 池第一个成员。
   池化的 UI/注册表是增量,不返工。
 - **Agent 模板池**:复用"起点配方"(system prompt + 预选 Hand + Environment 配方),

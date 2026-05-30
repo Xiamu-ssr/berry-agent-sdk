@@ -16,6 +16,9 @@ import {
   machineExecReplySchema,
   machineExecRequestSchema,
   machineHeartbeatResponseSchema,
+  machineMcpInvokeReplySchema,
+  machineMcpInvokeRequestSchema,
+  machineMcpManifestSchema,
   machineRegistrationRequestSchema,
   machineRegistrationResponseSchema,
   machineWithdrawRequestSchema,
@@ -125,6 +128,67 @@ export function machineRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       },
     },
 
+    // ---- MCP invoke proxy (agent → a8s → machine's local MCP) ----
+    // a8s stays MCP-agnostic: it forwards {server, name, input} to the
+    // connector, which holds the persistent stdio connection to the MCP
+    // server. Same broker shape as exec — one-shot request/reply.
+    {
+      method: 'POST',
+      pattern: '/v1/machines/:machineId/mcp/invoke',
+      name: 'POST /v1/machines/:id/mcp/invoke',
+      middleware: [
+        requireAdminToken(deps),
+        withAudit(deps.audit, { action: 'machine.mcp_invoke', target: (ctx) => ctx.params.machineId }),
+      ],
+      handler: async ({ params, req, res }) => {
+        const entry = deps.machines.get(params.machineId);
+        if (!entry) {
+          throw httpError(404, 'unknown_machine', `machine "${params.machineId}" is not registered`);
+        }
+        if (deps.machines.stateOf(entry, Date.now()) !== 'active') {
+          throw httpError(409, 'machine_unavailable', `machine "${params.machineId}" is not active (no recent heartbeat)`);
+        }
+        const invokeReq = machineMcpInvokeRequestSchema.parse(await readJsonBody(req));
+        const target = `${entry.callbackUrl.replace(/\/$/, '')}${MACHINE_PATHS.mcpInvoke}`;
+        let upstream: Response;
+        try {
+          upstream = await fetch(target, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+            },
+            body: JSON.stringify(invokeReq),
+          });
+        } catch (err) {
+          throw httpError(502, 'machine_unreachable', `machine "${params.machineId}" unreachable: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (!upstream.ok) {
+          const text = await upstream.text().catch(() => '');
+          throw httpError(502, 'machine_mcp_failed', `machine "${params.machineId}" mcp invoke HTTP ${upstream.status}: ${text.slice(0, 200)}`);
+        }
+        const reply = machineMcpInvokeReplySchema.parse(await upstream.json());
+        writeJson(res, 200, reply);
+      },
+    },
+
+    // ---- MCP manifest discovery (brain → a8s) ----
+    // The worker daemon fetches this to project each machine's MCP tools
+    // into model-visible tools. Admin-scoped (workers hold the token).
+    {
+      method: 'GET',
+      pattern: '/v1/machines/:machineId/mcp/manifest',
+      name: 'GET /v1/machines/:id/mcp/manifest',
+      middleware: [requireAdminToken(deps)],
+      handler: ({ params, res }) => {
+        const entry = deps.machines.get(params.machineId);
+        if (!entry) {
+          throw httpError(404, 'unknown_machine', `machine "${params.machineId}" is not registered`);
+        }
+        writeJson(res, 200, machineMcpManifestSchema.parse({ tools: entry.mcpTools }));
+      },
+    },
+
     // ---- Operator: list ----
     {
       method: 'GET',
@@ -140,6 +204,7 @@ export function machineRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
           platform: m.platform,
           labels: m.labels,
           mcpServers: m.mcpServers,
+          mcpToolCount: m.mcpTools.length,
           registeredAt: m.registeredAt,
           heartbeatAt: m.heartbeatAt,
           heartbeatExpiresAt: m.heartbeatAt + m.heartbeatTtlMs,

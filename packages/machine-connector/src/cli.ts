@@ -16,11 +16,13 @@
 // a worker), instead of the operator copy-pasting setup scripts.
 
 import { parseArgs } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { hostname, platform as osPlatform } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { MachineConnectorDaemon } from './daemon.js';
 import { MachineRegistrationClient } from './registration.js';
+import { MachineMcpHost } from './mcp-host.js';
 
 const VERSION = '0.5.0-alpha.1';
 
@@ -39,6 +41,9 @@ Options:
   --port <n>           HTTP port to listen on (default: 7200).
   --bind-host <h>      Hostname/IP advertised to a8s (default: os.hostname()).
   --heartbeat-ttl <ms> Heartbeat TTL (default: 30000).
+  --mcp-config <path>  Path to a .mcp.json whose servers this machine
+                       proxies as Hands (default: <cwd>/.mcp.json if present).
+                       The agent sees machine_<id>__<server>_<tool> tools.
   --version            Print version
   --help               Show this help
 
@@ -56,6 +61,7 @@ const configSchema = z.object({
   bindHost: z.string().min(1).optional(),
   heartbeatTtlMs: z.number().int().positive().optional(),
   labels: z.record(z.string()).optional(),
+  mcpConfig: z.string().min(1).optional(),
 }).strict();
 
 function detectPlatform(): 'macos' | 'linux' | 'windows' | 'other' {
@@ -91,6 +97,7 @@ async function main(argv: string[]): Promise<number> {
       port: { type: 'string' },
       'bind-host': { type: 'string' },
       'heartbeat-ttl': { type: 'string' },
+      'mcp-config': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -122,7 +129,22 @@ async function main(argv: string[]): Promise<number> {
     ? parseInt(values['heartbeat-ttl'], 10)
     : (config.heartbeatTtlMs ?? 30_000);
 
-  const daemon = new MachineConnectorDaemon({ machineId, port, bindHost, version: VERSION });
+  // ---- Local MCP (M6) ----
+  // Connect this machine's local MCP servers so the cluster can use them
+  // as Hands. Default to <cwd>/.mcp.json when present; explicit flag/config
+  // wins. The persistent stdio connections live here; a8s only forwards
+  // one-shot invokes.
+  const mcpConfigPath = values['mcp-config'] ?? config.mcpConfig
+    ?? (existsSync(join(process.cwd(), '.mcp.json')) ? join(process.cwd(), '.mcp.json') : undefined);
+  let mcpHost: MachineMcpHost | undefined;
+  if (mcpConfigPath) {
+    mcpHost = new MachineMcpHost({ configPath: mcpConfigPath });
+    await mcpHost.start();
+    const toolCount = mcpHost.manifest().tools.length;
+    process.stdout.write(`   MCP: ${mcpHost.serverIds().length} server(s), ${toolCount} tool(s) from ${mcpConfigPath}\n`);
+  }
+
+  const daemon = new MachineConnectorDaemon({ machineId, port, bindHost, version: VERSION, mcpHost });
   const info = await daemon.start();
   process.stdout.write(`🖐  berry-machine "${machineId}" listening on ${info.callbackUrl}\n`);
   process.stdout.write(`   platform: ${detectPlatform()}\n`);
@@ -135,6 +157,8 @@ async function main(argv: string[]): Promise<number> {
     platform: detectPlatform(),
     labels: config.labels,
     adminToken,
+    mcpServers: mcpHost?.serverIds(),
+    mcpManifest: mcpHost?.manifest(),
   });
   const result = await reg.register();
   daemon.setAuthToken(result.machineToken);
@@ -145,6 +169,7 @@ async function main(argv: string[]): Promise<number> {
     try {
       await reg.withdraw();
       await daemon.stop();
+      await mcpHost?.dispose();
       process.exit(0);
     } catch (err) {
       process.stderr.write(`[berry-machine] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);

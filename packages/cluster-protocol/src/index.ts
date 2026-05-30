@@ -112,6 +112,54 @@ export type WorkerWithdrawRequest = z.infer<typeof workerWithdrawRequestSchema>;
 // surface (light, no brain, no lease). Conflating them would force a
 // machine to carry capacity/lease semantics it has no use for.
 
+// ---- M6: local MCP, projected as machine capabilities (defined first
+// so the registration request can embed the manifest) ----------------
+//
+// The connector connects to the MCP servers in the machine's local
+// .mcp.json and reports their tools as a manifest at registration. a8s
+// stays MCP-agnostic: it stores the manifest verbatim and forwards a
+// generic "invoke this MCP tool" call to the connector. The persistent
+// MCP stdio connection lives entirely on the machine (connector ↔ server);
+// only one-shot request/reply crosses a8s — exactly like exec.
+
+/** One MCP tool the connector can proxy, in provider-call-safe shape. */
+export const machineMcpToolSchema = z.object({
+  /** MCP server id from the machine's .mcp.json (e.g. "playwright"). */
+  server: z.string().min(1),
+  /** Tool name as the upstream MCP server exposes it (dispatch key). */
+  name: z.string().min(1),
+  description: z.string().optional(),
+  /** JSON-schema-ish input shape; forwarded to the model verbatim. */
+  inputSchema: z.record(z.unknown()).optional(),
+}).strict();
+export type MachineMcpTool = z.infer<typeof machineMcpToolSchema>;
+
+/**
+ * The connector's full MCP capability manifest, reported at registration.
+ * Flat list so a8s never has to understand MCP structure — it just hands
+ * this back to the brain for tool projection.
+ */
+export const machineMcpManifestSchema = z.object({
+  tools: z.array(machineMcpToolSchema).default([]),
+}).strict();
+export type MachineMcpManifest = z.infer<typeof machineMcpManifestSchema>;
+
+/** a8s → connector: "invoke this MCP tool on your local server." */
+export const machineMcpInvokeRequestSchema = z.object({
+  server: z.string().min(1),
+  /** Upstream (unprefixed) tool name. */
+  name: z.string().min(1),
+  input: z.record(z.unknown()).default({}),
+}).strict();
+export type MachineMcpInvokeRequest = z.infer<typeof machineMcpInvokeRequestSchema>;
+
+export const machineMcpInvokeReplySchema = z.object({
+  /** Stringified tool result content. */
+  content: z.string(),
+  isError: z.boolean().optional(),
+}).strict();
+export type MachineMcpInvokeReply = z.infer<typeof machineMcpInvokeReplySchema>;
+
 /** Machine connector → a8s: "I'm a host you can run commands on." */
 export const machineRegistrationRequestSchema = z.object({
   /** Stable id chosen by the connector; persists across restarts. */
@@ -126,10 +174,16 @@ export const machineRegistrationRequestSchema = z.object({
   labels: z.record(z.string()).optional(),
   /**
    * MCP server ids the connector found in the machine's local .mcp.json
-   * and can proxy. a8s lists these as available Hands; the actual proxy
-   * wiring is M6. Empty / omitted on a connector with no local MCP.
+   * and can proxy. Kept as a lightweight list for the operator view.
    */
   mcpServers: z.array(z.string().min(1)).optional().default([]),
+  /**
+   * Full MCP tool manifest (M6). The connector connected to each local
+   * MCP server, listed its tools, and reports them here so the brain can
+   * project them into model-visible tools. a8s stores this verbatim and
+   * stays MCP-agnostic. Omitted/empty when the machine has no local MCP.
+   */
+  mcpManifest: machineMcpManifestSchema.optional(),
 }).strict();
 export type MachineRegistrationRequest = z.infer<typeof machineRegistrationRequestSchema>;
 
@@ -182,6 +236,8 @@ export const operatorMachineSchema = z.object({
   platform: z.string().optional(),
   labels: z.record(z.string()).optional(),
   mcpServers: z.array(z.string()).default([]),
+  /** Count of MCP tools the machine proxies (manifest size). UI hint. */
+  mcpToolCount: z.number().int().nonnegative().default(0),
   registeredAt: z.number().int(),
   heartbeatAt: z.number().int(),
   heartbeatExpiresAt: z.number().int(),
@@ -742,6 +798,7 @@ export const WORKER_PATHS = {
 export const MACHINE_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
   exec: `/${CLUSTER_PROTOCOL_VERSION}/exec`,
+  mcpInvoke: `/${CLUSTER_PROTOCOL_VERSION}/mcp/invoke`,
 } as const;
 
 // ============================================================

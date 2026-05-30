@@ -16,6 +16,7 @@
 // a8s-server → a8s-admin coupling.
 
 import { createToolRegistrationHand, type Hand, type ToolRegistration } from '@berry-agent/core';
+import type { MachineMcpTool } from '@berry-agent/cluster-protocol';
 import type { A8sOperatorClient } from './operator-client.js';
 
 export interface MachineHandOptions {
@@ -25,6 +26,13 @@ export interface MachineHandOptions {
   platform?: string;
   /** Default cwd for commands when the model omits one. */
   defaultCwd?: string;
+  /**
+   * MCP tools this machine proxies (M6), as reported in its manifest.
+   * Each becomes a model-visible tool named
+   * `machine_<id>__<server>_<tool>` that calls a8s's MCP invoke broker.
+   * Omit/empty when the machine has no local MCP.
+   */
+  mcpTools?: readonly MachineMcpTool[];
 }
 
 /**
@@ -33,6 +41,25 @@ export interface MachineHandOptions {
  */
 function toolSafe(machineId: string): string {
   return machineId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Coerce an MCP tool's reported input schema into the strict object-schema
+ * shape ToolDefinition requires. MCP servers should report an object
+ * schema, but be defensive: fall back to an empty object schema when the
+ * shape is missing or not an object.
+ */
+function coerceObjectSchema(
+  raw: Record<string, unknown> | undefined,
+): { type: 'object'; properties: Record<string, unknown>; required?: string[] } {
+  if (raw && raw.type === 'object' && typeof raw.properties === 'object' && raw.properties !== null) {
+    return {
+      type: 'object',
+      properties: raw.properties as Record<string, unknown>,
+      required: Array.isArray(raw.required) ? (raw.required as string[]) : undefined,
+    };
+  }
+  return { type: 'object', properties: {} };
 }
 
 /**
@@ -45,7 +72,7 @@ export function buildMachineTools(options: MachineHandOptions): ToolRegistration
   const safe = toolSafe(machineId);
   const where = options.platform ? ` (${options.platform})` : '';
   const cwdHint = options.defaultCwd ? ` Defaults to ${options.defaultCwd}.` : '';
-  return [
+  const tools: ToolRegistration[] = [
     {
       definition: {
         name: `machine_${safe}_exec`,
@@ -83,6 +110,44 @@ export function buildMachineTools(options: MachineHandOptions): ToolRegistration
       },
     },
   ];
+
+  // M6: one model-visible tool per MCP tool the machine proxies. Naming
+  // mirrors Claude Code's `mcp__server__tool` but embeds the machine so an
+  // agent driving several machines sees no ambiguity:
+  //   machine_<id>__<server>_<tool>
+  // The double underscore separates the machine namespace from the MCP
+  // namespace; the upstream (server, name) pair is the dispatch key sent
+  // to a8s's MCP invoke broker — a8s forwards to the connector, which
+  // holds the persistent stdio connection to the actual MCP server.
+  for (const mcp of options.mcpTools ?? []) {
+    const safeServer = toolSafe(mcp.server);
+    const safeTool = toolSafe(mcp.name);
+    const name = `machine_${safe}__${safeServer}_${safeTool}`;
+    tools.push({
+      definition: {
+        name,
+        description:
+          (mcp.description ? `${mcp.description}\n\n` : '')
+          + `(MCP tool "${mcp.name}" from server "${mcp.server}" on machine "${machineId}"${where}.)`,
+        inputSchema: coerceObjectSchema(mcp.inputSchema),
+      },
+      execute: async (input) => {
+        try {
+          const reply = await client.machineMcpInvoke(machineId, {
+            server: mcp.server,
+            name: mcp.name,
+            input: input ?? {},
+          });
+          return { content: reply.content || '(no output)', isError: reply.isError || undefined };
+        } catch (err) {
+          return { content: err instanceof Error ? err.message : String(err), isError: true };
+        }
+      },
+      source: { kind: 'mcp', server: `${machineId}:${mcp.server}` },
+    });
+  }
+
+  return tools;
 }
 
 /** Wrap a machine's tools as a standalone Hand (for non-worker callers). */

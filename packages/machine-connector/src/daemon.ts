@@ -1,15 +1,21 @@
 // ============================================================
 // @berry-agent/machine-connector — HTTP daemon
 // ============================================================
-// The machine-side server a8s calls back to run commands. Minimal by
-// design: /health (unauthenticated) + /exec (machine-token auth). The
-// command runs through a CommandExecutor — NodeExecutor by default,
-// which is correct *here* because this process literally is the target
-// machine (unlike the brain side, where a silent local executor would be
-// the wrong host — see M1's requireExecutor guard).
+// The machine-side server a8s calls back to. Minimal by design:
+//   /health     (unauthenticated)
+//   /exec       (machine-token auth) — run a shell command here
+//   /mcp/invoke (machine-token auth) — call a local MCP tool (M6)
 //
-// spawn()/streaming and MCP proxying are deliberately out of scope for
-// this file; they arrive with M6.
+// Commands run through a CommandExecutor — NodeExecutor by default, which
+// is correct *here* because this process literally is the target machine
+// (unlike the brain side, where a silent local executor would be the
+// wrong host — see M1's requireExecutor guard). MCP invokes dispatch to
+// the MachineMcpHost, which holds the persistent stdio connections to the
+// machine's local MCP servers. a8s only ever forwards one-shot calls; the
+// long-lived MCP sessions never leave this host.
+//
+// spawn()/streaming remain out of scope (background process tools need a
+// bidirectional transport; not needed for the connector's job).
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { hostname } from 'node:os';
@@ -20,11 +26,14 @@ import {
   healthResponseSchema,
   machineExecReplySchema,
   machineExecRequestSchema,
+  machineMcpInvokeReplySchema,
+  machineMcpInvokeRequestSchema,
   parseWorkerAuthHeader,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
 import type { CommandExecutor } from '@berry-agent/core';
 import { NodeExecutor } from '@berry-agent/tools-common';
+import type { MachineMcpHost } from './mcp-host.js';
 
 export interface MachineConnectorDaemonOptions {
   machineId: string;
@@ -39,6 +48,11 @@ export interface MachineConnectorDaemonOptions {
    * can do on this machine (recommended for anything but a throwaway box).
    */
   executor?: CommandExecutor;
+  /**
+   * Local MCP host (M6). When set, the daemon serves /mcp/invoke by
+   * dispatching to it. Omit on a connector with no local MCP.
+   */
+  mcpHost?: MachineMcpHost;
   /** Default cwd when an exec request omits one. Defaults to process.cwd(). */
   defaultCwd?: string;
   version?: string;
@@ -119,6 +133,10 @@ export class MachineConnectorDaemon {
       return this.handleExec(req, res);
     }
 
+    if (req.method === 'POST' && url === MACHINE_PATHS.mcpInvoke) {
+      return this.handleMcpInvoke(req, res);
+    }
+
     return writeJson(res, 404, errorPayloadSchema.parse({
       error: { code: 'not_found', message: `no route for ${req.method} ${url}` },
     }));
@@ -143,6 +161,21 @@ export class MachineConnectorDaemon {
     writeJson(res, 200, machineExecReplySchema.parse({
       output: result.output,
       isError: result.isError,
+    }));
+  }
+
+  private async handleMcpInvoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const parsed = machineMcpInvokeRequestSchema.parse(await readJson(req));
+    if (!this.options.mcpHost) {
+      return writeJson(res, 200, machineMcpInvokeReplySchema.parse({
+        content: 'this machine has no MCP host configured',
+        isError: true,
+      }));
+    }
+    const reply = await this.options.mcpHost.invoke(parsed.server, parsed.name, parsed.input);
+    writeJson(res, 200, machineMcpInvokeReplySchema.parse({
+      content: reply.content,
+      isError: reply.isError,
     }));
   }
 }

@@ -83,6 +83,7 @@ export interface Machine {
   platform?: string;
   labels?: Record<string, string>;
   mcpServers: string[];
+  mcpToolCount: number;
   registeredAt: number;
   heartbeatAt: number;
   heartbeatExpiresAt: number;

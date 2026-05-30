@@ -18,6 +18,7 @@ import {
   machineRegistrationResponseSchema,
   machineWithdrawRequestSchema,
   workerAuthHeader,
+  type MachineMcpManifest,
   type MachineRegistrationRequest,
   type MachineRegistrationResponse,
 } from '@berry-agent/cluster-protocol';
@@ -37,6 +38,8 @@ export interface MachineRegistrationClientOptions {
   labels?: Readonly<Record<string, string>>;
   /** Local MCP server ids this connector can proxy (M6). */
   mcpServers?: string[];
+  /** Full MCP tool manifest the connector reports at registration (M6). */
+  mcpManifest?: MachineMcpManifest;
   /** How often to heartbeat. Defaults to TTL/3. */
   heartbeatIntervalMs?: number;
   /** Bootstrap secret (a8s --admin-token). After register, switches to machine token. */
@@ -69,6 +72,7 @@ export class MachineRegistrationClient {
       platform: this.options.platform,
       labels: this.options.labels,
       mcpServers: this.options.mcpServers ?? [],
+      mcpManifest: this.options.mcpManifest,
     });
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.options.adminToken) {
