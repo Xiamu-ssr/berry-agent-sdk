@@ -123,7 +123,7 @@
     <tbody>
       <tr><td><code>@berry-agent/worker</code></td><td><span class="ok">已完整</span></td><td>单机 worker 类:<code>buildAgentRuntime()</code> 工厂、<code>Worker</code> 类(N 个 agent mount + 可选 supervisor)、<code>/test-utils</code> subpath 供下游测试复用。</td></tr>
       <tr><td><code>@berry-agent/worker-daemon</code></td><td><span class="ok">已完整</span></td><td>Worker HTTP 服务进程:<code>WorkerDaemon</code> 类 + <code>WorkerRegistrationClient</code> + <code>withTeamModeHostTools</code> / <code>withClusterAdminHostTools</code> / <code>withMachineHostTools</code> 助手 + <code>berry-worker</code> CLI(<code>start --config worker.json [--agents-root /var/berry/agents --machine ...]</code>)。Bearer-token 鉴权,自动注册到 a8s 并周期 heartbeat。<strong>Models 配置</strong>:worker.json 的 <code>registry</code> 设 <code>null</code>(或省略)时,worker 在 register 时从 a8s 拉集群级 models template 落到本机 — operator 配一次,每个新 worker 自动继承。数据面:session 列表、分页 events 读、SSE 实时 events 流(支持 Last-Event-ID 断线续传)。<strong>失败恢复</strong>:register 响应携带 <code>ownedAgents</code>,worker 进程重启后从机器级 <code>agentsRoot</code> 自动再 mount。<strong>标签驱动注入</strong>:<code>labels.team==='true'</code> 注入 <code>message_leader</code>;<code>labels.role==='a8s-admin'</code> 注入 cluster-admin 工具 + seed AGENTS.md/skill;<code>labels.machines==='id1,id2'</code> 注入每台机器的 <code>machine_&lt;id&gt;_exec</code> 工具。全在 <code>resolveSpec</code> 里按 label 判定,a8s-server 无耦合。</td></tr>
-      <tr><td><code>@berry-agent/machine-connector</code></td><td><span class="ok">已完整</span></td><td>机器层的机器侧:极简 HTTP daemon(<code>berry-machine</code> CLI)让 a8s 集群在一台 host 上跑命令,把它注册成<strong>提供 Hand 的 ExecutionEnvironment</strong>,但<strong>不跑 agent brain</strong>(区别于 worker)。<code>MachineConnectorDaemon</code> 服务 <code>/health</code> + <code>/exec</code>(machine-token 鉴权),命令走 <code>NodeExecutor</code>(这里裸跑是对的 —— 这个进程<em>就是</em>目标机器,与 brain 侧 fail-closed 相反)。<code>MachineRegistrationClient</code> 像 worker 一样注册(admin-token 引导 → machine token),401/404 自动重注册。这是"加一台机器"安装脚本装的东西。</td></tr>
+      <tr><td><code>@berry-agent/machine-connector</code></td><td><span class="ok">已完整</span></td><td>机器层的机器侧:极简 HTTP daemon(<code>berry-machine</code> CLI)让 a8s 集群在一台 host 上跑命令,把它注册成<strong>提供 Hand 的 ExecutionEnvironment</strong>,但<strong>不跑 agent brain</strong>(区别于 worker)。<code>MachineConnectorDaemon</code> 服务 <code>/health</code> + <code>/exec</code> + <code>/mcp/invoke</code>(machine-token 鉴权),命令走 <code>NodeExecutor</code>(这里裸跑是对的 —— 这个进程<em>就是</em>目标机器,与 brain 侧 fail-closed 相反)。<code>MachineMcpHost</code> 连本机 <code>.mcp.json</code> 的 MCP server(持久 stdio 连接只在机器本地),把它们的工具汇成 manifest 在注册时上报,并代理 <code>/mcp/invoke</code> 一问一答调用。<code>MachineRegistrationClient</code> 像 worker 一样注册(admin-token 引导 → machine token),401/404 自动重注册。这是"加一台机器"安装脚本装的东西。</td></tr>
     </tbody>
   </table>
 
@@ -219,14 +219,14 @@ curl -X POST https://a8s.example.com/v1/agents \
   <h3 id="machine-layer">机器层:机器即 Environment / Hand(已落地)</h3>
   <p>"给一台机器装 worker、运维它"不再靠复制脚本或固定命令清单的"连接器"(固定 RPC = 不灵活,正是要逃离的反模式),而是把机器变成 agent 能操作的通用执行面。设计与推导见 <code>docs/machine-layer.md</code>。核心:</p>
   <ul>
-    <li><strong>每台机器 = 一个 ExecutionEnvironment</strong>。机器侧 <code>berry-machine</code> connector(<code>@berry-agent/machine-connector</code>)主动出网注册到 a8s,服务 <code>/exec</code>。它<strong>不跑 agent brain</strong>(区别于 worker),只借出执行面。</li>
-    <li><strong>a8s 是 exec 代理</strong>:agent 的机器 Hand 调 a8s(admin-scoped,worker 本就持有),a8s 持有 machine token 转发到机器的 <code>/exec</code>。<strong>机器凭证永不离开 a8s</strong> —— 和控制面其他部分"代理连接、不发放钥匙"同一立场。</li>
-    <li><strong>"选 Hand = 选机器"</strong>:agent spec 带 <code>labels.machines='id1,id2'</code>,worker 的 <code>resolveSpec</code>(<code>withMachineHostTools</code>,与 cluster-admin 同一注入通道)给它注入每台机器的 <code>machine_&lt;id&gt;_exec</code> 工具。主环境保持单数,不把核心 <code>executionEnvironment</code> 复数化。</li>
+    <li><strong>每台机器 = 一个 ExecutionEnvironment</strong>。机器侧 <code>berry-machine</code> connector(<code>@berry-agent/machine-connector</code>)主动出网注册到 a8s,服务 <code>/exec</code> + <code>/mcp/invoke</code>。它<strong>不跑 agent brain</strong>(区别于 worker),只借出执行面 + 本机 MCP 能力。</li>
+    <li><strong>a8s 是代理,且 MCP-agnostic</strong>:agent 的机器 Hand 调 a8s(admin-scoped,worker 本就持有),a8s 持有 machine token 转发到机器的 <code>/exec</code> 或 <code>/mcp/invoke</code>。<strong>机器凭证永不离开 a8s</strong>;MCP 的持久 stdio 连接只在机器本地,a8s 只转发一问一答 —— 和控制面其他部分"代理连接、不发放钥匙"同一立场。</li>
+    <li><strong>"选 Hand = 选机器"</strong>:agent spec 带 <code>labels.machines='id1,id2'</code>,worker 的 <code>resolveSpec</code>(<code>withMachineHostTools</code>,与 cluster-admin 同一注入通道)给它注入每台机器的 <code>machine_&lt;id&gt;_exec</code> 工具,外加本机每个 MCP 工具投影成 <code>machine_&lt;id&gt;__&lt;server&gt;_&lt;tool&gt;</code>(机器 + MCP 双命名空间,对齐 Claude Code 的 <code>mcp__</code> 但加机器前缀)。主环境保持单数,不把核心 <code>executionEnvironment</code> 复数化。</li>
     <li><strong>"装 worker" 是 skill,不是端点 API</strong>:<code>install-worker</code> SKILL.md(随 berry-admin seed)教 agent 用通用 exec 自己拼命令装 worker(<code>registry:null</code> 拉 template,不落 key)。worker 退化成 agent 用机器 Hand 装出来的产物之一。<strong>这废弃了原 F6(worker-daemon 固定运维端点)。</strong></li>
     <li><strong>OS 差异自动吸收</strong>:命令在目标机真实 shell 跑,Mac/Linux 差异是命令本身的事,无需为每个 OS 写一套工具。</li>
     <li><strong>两道安全闸</strong>:<code>ManagedToolGuard</code>(允不允许这条命令,决策层)+ Environment 的 <code>isolationPolicy</code>(本机物理边界)。机器 connector 默认裸 <code>NodeExecutor</code>,生产应前置 OS sandbox 或低权用户。</li>
   </ul>
-  <p>首次接入仍需人工一次(Add machine → 在目标 host 跑安装脚本),之后 agent 永久接管,a8s 不持有 SSH key。<strong>Hand 的四层来源</strong>(谁写代码):L0 通用工具 SDK 自带(零代码);L1 现成 MCP 填 <code>.mcp.json</code>(零代码);L2 全新能力写标准 MCP server(一次性,跨平台复用);L3 产品装机预置 + UI 加 MCP。终端用户永不写代码。<strong>仍待落地</strong>:connector 盘点本地 <code>.mcp.json</code> 并把 MCP 跨网络代理成 Hand(机器侧 stdio 保持原样,connector 转发 —— 这是"云端 a8s 取代本地 Engine"的关键);Environment 池 / Hand 池 / agent 蓝图池的注册表与 UI。详见设计文档。</p>
+  <p>首次接入仍需人工一次(Add machine → 在目标 host 跑安装脚本),之后 agent 永久接管,a8s 不持有 SSH key。<strong>Hand 的四层来源</strong>(谁写代码):L0 通用工具 SDK 自带(零代码);L1 现成 MCP 填 <code>.mcp.json</code>(零代码);L2 全新能力写标准 MCP server(一次性,跨平台复用);L3 产品装机预置 + UI 加 MCP。终端用户永不写代码。<strong>本机 MCP 已落地</strong>:connector 盘点本地 <code>.mcp.json</code>、连上 MCP server(stdio 保持原样)、把工具投影成机器 Hand,a8s 只转发一问一答 —— 这是"云端 a8s 取代本地 Engine"的关键一环。<strong>仍待落地</strong>:MCP 工具过多时的二等渐进披露(SDK 投影层,对所有 Hand 通用);Environment 池 / Hand 池 / agent 蓝图池的注册表与 UI。详见设计文档。</p>
 
   <h3>三个池(Environment / Hand / 蓝图)</h3>
   <p>a8s 的"可复用市场"直觉成立,但复用粒度按类型不同:<strong>Environment 池</strong>(机器/容器配方,无状态可复用 —— 机器层是它第一个成员)、<strong>Hand 池</strong>(能力打包,无状态可复用;比 Environment 池大,含 cluster-admin / team 这种无环境 Hand)、<strong>Agent 蓝图池</strong>(system prompt + 选定 Hand + 环境配方的"起点配方",配方无状态、实例化出全新独立 session)。<strong>Session 不入池</strong>:它是有状态历史(<code>messages.json</code> + <code>events.jsonl</code>,绑机器目录),共享实例 = 身份混乱 + 抢 lease(违反 lease 单点持有)。市场卖的是<strong>配方(蓝图)</strong>,不是<strong>存档(session 实例)</strong>。今天的 <code>labels.role</code> / <code>labels.machines</code> 注入已是 Hand 池的原始版。详见 <code>docs/machine-layer.md</code>。</p>
@@ -320,7 +320,7 @@ curl -X POST https://a8s.example.com/v1/agents \
   <pre><code>npm install
 npm run build
 npm test
-# 当前 765 tests in SDK</code></pre>
+# 当前 769 tests in SDK</code></pre>
 </main>
 </body>
 </html>

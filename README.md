@@ -7,9 +7,10 @@ Berry is a **4-layer agent platform**:
 
 | Layer | Package(s) | Role |
 |---|---|---|
-| 1 — SDK runtime | `@berry-agent/core` + 12 others | Per-agent harness: session, hands, sandbox, safety, observation |
+| 1 — SDK runtime | `@berry-agent/core` + a dozen others | Per-agent harness: session, hands, sandbox, safety, observation |
 | 2 — Worker | `@berry-agent/worker` + `@berry-agent/worker-daemon` | Single-machine runtime that mounts N agents, registers with a control plane |
 | 3 — Control plane (a8s) | `@berry-agent/a8s` + `@berry-agent/a8s-server` + `@berry-agent/a8s-admin` + `@berry-agent/cluster-protocol` | Cluster-wide scheduling, lease management, operator API, built-in UI |
+| Machine layer | `@berry-agent/machine-connector` | Lend a host's shell + local MCP to the cluster as agent-operable Hands, without running a brain |
 | 4 — Products | Out of this repo | UIs / CLIs / IDE plugins that drive Berry through the SDK or a8s HTTP API |
 
 A 5-minute install gets you a single-host cluster with a web ops UI and a
@@ -36,7 +37,7 @@ it) lives in [`../docs/anthropic-managed-agents-notes.md`](../docs/anthropic-man
 ```bash
 npm install
 npm run build
-npm test          # 748 tests
+npm test          # 769 tests
 ```
 
 This is a TypeScript workspace; `npm run build` topologically builds every
