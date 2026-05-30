@@ -33,37 +33,41 @@ function applyWhere<Q extends Record<string, any>>(query: Q, where: SQL | undefi
   return where ? (query as Q & { where: (w: SQL) => Q }).where(where) : query;
 }
 
-function buildLlmWhere(filter: DimensionFilter) {
-  const conditions = [];
-  if (filter.sessionId) conditions.push(eq(llmCalls.sessionId, filter.sessionId));
-  if (filter.agentId) conditions.push(eq(llmCalls.agentId, filter.agentId));
-  if (filter.turnId) conditions.push(eq(llmCalls.turnId, filter.turnId));
+/** AND a list of optional conditions: none → undefined, one → itself, many → and(...). */
+function combineConditions(conditions: SQL[]): SQL | undefined {
   return conditions.length > 1 ? and(...conditions) : conditions[0];
 }
 
+function buildLlmWhere(filter: DimensionFilter) {
+  const conditions: SQL[] = [];
+  if (filter.sessionId) conditions.push(eq(llmCalls.sessionId, filter.sessionId));
+  if (filter.agentId) conditions.push(eq(llmCalls.agentId, filter.agentId));
+  if (filter.turnId) conditions.push(eq(llmCalls.turnId, filter.turnId));
+  return combineConditions(conditions);
+}
+
 function buildGuardWhere(filter: DimensionFilter) {
-  const conditions = [];
+  const conditions: SQL[] = [];
   if (filter.sessionId) conditions.push(eq(guardDecisions.sessionId, filter.sessionId));
   if (filter.agentId) {
-    // guard_decisions doesn't have agentId directly — join via session
-    // Use sub-select approach via SQL for simplicity
+    // guard_decisions doesn't have agentId directly — scope via session.
     conditions.push(sql`${guardDecisions.sessionId} IN (
       SELECT id FROM sessions WHERE agent_id = ${filter.agentId}
     )`);
   }
   if (filter.turnId) conditions.push(eq(guardDecisions.turnId, filter.turnId));
-  return conditions.length > 1 ? and(...conditions) : conditions[0];
+  return combineConditions(conditions);
 }
 
 function buildCompactionWhere(filter: Pick<DimensionFilter, 'sessionId' | 'agentId'>) {
-  const conditions = [];
+  const conditions: SQL[] = [];
   if (filter.sessionId) conditions.push(eq(compactionEvents.sessionId, filter.sessionId));
   if (filter.agentId) {
     conditions.push(sql`${compactionEvents.sessionId} IN (
       SELECT id FROM sessions WHERE agent_id = ${filter.agentId}
     )`);
   }
-  return conditions.length > 1 ? and(...conditions) : conditions[0];
+  return combineConditions(conditions);
 }
 
 // ===== Analyzer =====

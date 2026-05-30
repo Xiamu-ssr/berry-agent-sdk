@@ -112,8 +112,8 @@ export type WorkerWithdrawRequest = z.infer<typeof workerWithdrawRequestSchema>;
 // surface (light, no brain, no lease). Conflating them would force a
 // machine to carry capacity/lease semantics it has no use for.
 
-// ---- M6: local MCP, projected as machine capabilities (defined first
-// so the registration request can embed the manifest) ----------------
+// ---- Local MCP, projected as machine capabilities (defined first so
+// the registration request can embed the manifest) -------------------
 //
 // The connector connects to the MCP servers in the machine's local
 // .mcp.json and reports their tools as a manifest at registration. a8s
@@ -178,8 +178,8 @@ export const machineRegistrationRequestSchema = z.object({
    */
   mcpServers: z.array(z.string().min(1)).optional().default([]),
   /**
-   * Full MCP tool manifest (M6). The connector connected to each local
-   * MCP server, listed its tools, and reports them here so the brain can
+   * Full MCP tool manifest. The connector connected to each local MCP
+   * server, listed its tools, and reports them here so the brain can
    * project them into model-visible tools. a8s stores this verbatim and
    * stays MCP-agnostic. Omitted/empty when the machine has no local MCP.
    */
@@ -793,7 +793,9 @@ export const WORKER_PATHS = {
 /**
  * Endpoints a *machine connector* serves (a8s → machine). Mirrors the
  * minimal shape of WORKER_PATHS but for a host that only lends an
- * execution surface: health + exec. spawn/stream come with M6.
+ * execution surface: health + exec + mcp/invoke. Background-process
+ * spawn/streaming is intentionally not offered (a connector's job is
+ * one-shot exec + MCP proxy, not long-lived process management).
  */
 export const MACHINE_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,

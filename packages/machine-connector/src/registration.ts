@@ -36,9 +36,9 @@ export interface MachineRegistrationClientOptions {
   heartbeatTtlMs: number;
   platform?: MachineRegistrationRequest['platform'];
   labels?: Readonly<Record<string, string>>;
-  /** Local MCP server ids this connector can proxy (M6). */
+  /** Local MCP server ids this connector can proxy. */
   mcpServers?: string[];
-  /** Full MCP tool manifest the connector reports at registration (M6). */
+  /** Full MCP tool manifest the connector reports at registration. */
   mcpManifest?: MachineMcpManifest;
   /** How often to heartbeat. Defaults to TTL/3. */
   heartbeatIntervalMs?: number;

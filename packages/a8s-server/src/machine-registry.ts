@@ -27,7 +27,7 @@ export interface MachineEntry {
   labels?: Record<string, string>;
   mcpServers: string[];
   /**
-   * Flat MCP tool manifest the connector reported (M6). a8s stores it
+   * Flat MCP tool manifest the connector reported. a8s stores it
    * verbatim and hands it back to the brain for tool projection — it
    * never interprets MCP structure itself.
    */

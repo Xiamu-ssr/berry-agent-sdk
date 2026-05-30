@@ -195,34 +195,44 @@ function resolveExecutionEnvironmentSync(
   options: ManagedRuntimeBuildOptions,
   scope: AgentScope,
 ): ExecutionEnvironment | undefined {
-  if (options.executionEnvironment && options.executionEnvironmentProvider) {
-    throw new Error('Specify either executionEnvironment or executionEnvironmentProvider, not both.');
+  const direct = resolveDirectExecutionEnvironment(options);
+  if (direct.kind !== 'provider') return direct.value;
+  const environment = direct.provider.provision(createProvisionRequest(options.agentId, scope));
+  if (isPromiseLike(environment)) {
+    throw new Error('executionEnvironmentProvider returned a Promise; use createManagedRuntimeAsync instead.');
   }
-  if (options.executionEnvironment) return options.executionEnvironment;
-  if (options.executionEnvironmentProvider) {
-    const environment = options.executionEnvironmentProvider.provision(createProvisionRequest(options.agentId, scope));
-    if (isPromiseLike(environment)) {
-      throw new Error('executionEnvironmentProvider returned a Promise; use createManagedRuntimeAsync instead.');
-    }
-    return environment;
-  }
-  if (options.localWorkspace === false) return undefined;
-  return createSandboxExecutionEnvironment({ logger: options.logger ?? console });
+  return environment;
 }
 
 async function resolveExecutionEnvironmentAsync(
   options: ManagedRuntimeBuildOptions,
   scope: AgentScope,
 ): Promise<ExecutionEnvironment | undefined> {
+  const direct = resolveDirectExecutionEnvironment(options);
+  if (direct.kind !== 'provider') return direct.value;
+  return direct.provider.provision(createProvisionRequest(options.agentId, scope));
+}
+
+/**
+ * Shared head of the sync/async resolvers. Returns either a resolved
+ * environment (direct, default, or none) or a signal that the caller
+ * must invoke the provider — the only step where sync and async diverge
+ * (sync rejects a promise, async awaits it).
+ */
+type DirectEnvResolution =
+  | { kind: 'value'; value: ExecutionEnvironment | undefined }
+  | { kind: 'provider'; provider: NonNullable<ManagedRuntimeBuildOptions['executionEnvironmentProvider']> };
+
+function resolveDirectExecutionEnvironment(options: ManagedRuntimeBuildOptions): DirectEnvResolution {
   if (options.executionEnvironment && options.executionEnvironmentProvider) {
     throw new Error('Specify either executionEnvironment or executionEnvironmentProvider, not both.');
   }
-  if (options.executionEnvironment) return options.executionEnvironment;
+  if (options.executionEnvironment) return { kind: 'value', value: options.executionEnvironment };
   if (options.executionEnvironmentProvider) {
-    return await options.executionEnvironmentProvider.provision(createProvisionRequest(options.agentId, scope));
+    return { kind: 'provider', provider: options.executionEnvironmentProvider };
   }
-  if (options.localWorkspace === false) return undefined;
-  return createSandboxExecutionEnvironment({ logger: options.logger ?? console });
+  if (options.localWorkspace === false) return { kind: 'value', value: undefined };
+  return { kind: 'value', value: createSandboxExecutionEnvironment({ logger: options.logger ?? console }) };
 }
 
 function createProvisionRequest(agentId: string, scope: AgentScope) {

@@ -1,5 +1,5 @@
 // ============================================================
-// @berry-agent/machine-connector — Local MCP host (M6)
+// @berry-agent/machine-connector — Local MCP host
 // ============================================================
 // Connects to the MCP servers declared in this machine's local .mcp.json,
 // lists their tools to build the manifest reported to a8s at registration,

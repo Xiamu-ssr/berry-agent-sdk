@@ -6,7 +6,7 @@
 // resolveSpec wrapper that, when the wire spec carries
 // `labels.machines = "id1,id2,..."`, injects each listed machine's tools
 // as hostTools. The agent then sees `machine_<id>_exec` plus one tool per
-// MCP tool the machine proxies (`machine_<id>__<server>_<tool>`, M6) and
+// MCP tool the machine proxies (`machine_<id>__<server>_<tool>`) and
 // can operate those hosts — "选 Hand = 选机器" made literal.
 //
 // The tools call a8s's brokers (machineExec / machineMcpInvoke), which

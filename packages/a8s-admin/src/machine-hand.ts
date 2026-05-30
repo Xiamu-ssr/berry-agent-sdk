@@ -27,7 +27,7 @@ export interface MachineHandOptions {
   /** Default cwd for commands when the model omits one. */
   defaultCwd?: string;
   /**
-   * MCP tools this machine proxies (M6), as reported in its manifest.
+   * MCP tools this machine proxies, as reported in its manifest.
    * Each becomes a model-visible tool named
    * `machine_<id>__<server>_<tool>` that calls a8s's MCP invoke broker.
    * Omit/empty when the machine has no local MCP.
@@ -111,7 +111,7 @@ export function buildMachineTools(options: MachineHandOptions): ToolRegistration
     },
   ];
 
-  // M6: one model-visible tool per MCP tool the machine proxies. Naming
+  // One model-visible tool per MCP tool the machine proxies. Naming
   // mirrors Claude Code's `mcp__server__tool` but embeds the machine so an
   // agent driving several machines sees no ambiguity:
   //   machine_<id>__<server>_<tool>

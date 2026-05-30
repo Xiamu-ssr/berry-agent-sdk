@@ -129,7 +129,7 @@ async function main(argv: string[]): Promise<number> {
     ? parseInt(values['heartbeat-ttl'], 10)
     : (config.heartbeatTtlMs ?? 30_000);
 
-  // ---- Local MCP (M6) ----
+  // ---- Local MCP ----
   // Connect this machine's local MCP servers so the cluster can use them
   // as Hands. Default to <cwd>/.mcp.json when present; explicit flag/config
   // wins. The persistent stdio connections live here; a8s only forwards

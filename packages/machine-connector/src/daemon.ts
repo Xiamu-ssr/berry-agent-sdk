@@ -4,7 +4,7 @@
 // The machine-side server a8s calls back to. Minimal by design:
 //   /health     (unauthenticated)
 //   /exec       (machine-token auth) — run a shell command here
-//   /mcp/invoke (machine-token auth) — call a local MCP tool (M6)
+//   /mcp/invoke (machine-token auth) — call a local MCP tool
 //
 // Commands run through a CommandExecutor — NodeExecutor by default, which
 // is correct *here* because this process literally is the target machine
@@ -49,7 +49,7 @@ export interface MachineConnectorDaemonOptions {
    */
   executor?: CommandExecutor;
   /**
-   * Local MCP host (M6). When set, the daemon serves /mcp/invoke by
+   * Local MCP host. When set, the daemon serves /mcp/invoke by
    * dispatching to it. Omit on a connector with no local MCP.
    */
   mcpHost?: MachineMcpHost;
