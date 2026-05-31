@@ -17,6 +17,7 @@
     "test": "vitest run --maxWorkers=2"
   },
   "dependencies": {
+    "@berry-agent/client": "*",
     "@berry-agent/cluster-protocol": "*",
     "@berry-agent/core": "*"
   },
