@@ -37,7 +37,7 @@ it) lives in [`../docs/anthropic-managed-agents-notes.md`](../docs/anthropic-man
 ```bash
 npm install
 npm run build
-npm test          # 769 tests
+npm test          # 776 tests
 ```
 
 This is a TypeScript workspace; `npm run build` topologically builds every

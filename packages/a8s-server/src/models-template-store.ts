@@ -14,7 +14,7 @@
 // doesn't leave a half-written file that breaks parse on next boot.
 
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import {
   modelsTemplateSchema,
   type ModelsTemplate,
