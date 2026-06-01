@@ -591,6 +591,54 @@ export const modelsTemplatePutRequestSchema = z.object({
 }).strict();
 export type ModelsTemplatePutRequest = z.infer<typeof modelsTemplatePutRequestSchema>;
 
+// ---- Models probe: pull a provider's live model list ----------------
+// The UI can't call a provider's /models directly (CORS + it would leak
+// the key into the browser), so a8s proxies it: the operator types
+// baseUrl + apiKey, a8s calls the provider and returns the model ids.
+// a8s does NOT persist anything here — probing is stateless; the key is
+// only saved when the operator saves the template.
+
+export const modelsProbeRequestSchema = z.object({
+  /** Built-in preset id (anthropic / openai / moonshot / ...) or omitted for a raw/custom provider. */
+  presetId: z.string().min(1).optional(),
+  /** Override the preset's base URL, or the full base URL for a raw provider. */
+  baseUrl: z.string().url().optional(),
+  /** Provider API key. Used only for this call; never stored by the probe. */
+  apiKey: z.string().min(1),
+  /** Auth flavor when there's no preset. Defaults to 'openai' (Bearer). */
+  type: z.enum(['anthropic', 'openai']).optional(),
+}).strict();
+export type ModelsProbeRequest = z.infer<typeof modelsProbeRequestSchema>;
+
+export const modelsProbeResponseSchema = z.object({
+  /** Sorted, deduped model ids the provider reports. */
+  models: z.array(z.string()),
+  /** 'live' = fetched from the provider; 'known' = fell back to a cached list. */
+  source: z.enum(['live', 'known']),
+  /** Non-fatal note when the live fetch failed and a cached list was used. */
+  warning: z.string().optional(),
+}).strict();
+export type ModelsProbeResponse = z.infer<typeof modelsProbeResponseSchema>;
+
+/** One built-in provider preset surfaced to the UI's "add provider" form. */
+export const modelsPresetSchema = z.object({
+  id: z.string().min(1),
+  label: z.string(),
+  type: z.enum(['anthropic', 'openai']),
+  baseUrl: z.string(),
+  /** True when the provider exposes a live model-list endpoint. */
+  canList: z.boolean(),
+  /** Where the operator gets their API key, if the preset declares it. */
+  apiKeyDocsUrl: z.string().optional(),
+}).strict();
+export type ModelsPreset = z.infer<typeof modelsPresetSchema>;
+
+export const modelsPresetListResponseSchema = z.object({
+  presets: z.array(modelsPresetSchema),
+}).strict();
+export type ModelsPresetListResponse = z.infer<typeof modelsPresetListResponseSchema>;
+
+
 // ============================================================
 // Operator: admin agent (berry-admin) bootstrap
 // ============================================================
@@ -764,6 +812,8 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes/${encodeURIComponent(wakeId)}`,
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
   operatorModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/operator/models-template`,
+  operatorModelsProbe: `/${CLUSTER_PROTOCOL_VERSION}/operator/models/probe`,
+  operatorModelsPresets: `/${CLUSTER_PROTOCOL_VERSION}/operator/models/presets`,
   operatorAdminAgent: `/${CLUSTER_PROTOCOL_VERSION}/operator/admin-agent`,
   operatorMachines: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines`,
   operatorMachineJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/join-script`,

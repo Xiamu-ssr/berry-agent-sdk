@@ -277,6 +277,45 @@ export function usePutModelsTemplate() {
   });
 }
 
+// ---- Models: presets + live probe (human-friendly provider setup) ----
+
+export interface ModelsPreset {
+  id: string;
+  label: string;
+  type: 'anthropic' | 'openai';
+  baseUrl: string;
+  canList: boolean;
+  apiKeyDocsUrl?: string;
+}
+export function useModelsPresets() {
+  return useQuery({
+    queryKey: ['models-presets'],
+    queryFn: () => api<{ presets: ModelsPreset[] }>('/v1/operator/models/presets').then((r) => r.presets),
+    staleTime: Infinity, // built-in, never changes within a session
+  });
+}
+
+export interface ModelsProbeInput {
+  presetId?: string;
+  baseUrl?: string;
+  apiKey: string;
+  type?: 'anthropic' | 'openai';
+}
+export interface ModelsProbeResult {
+  models: string[];
+  source: 'live' | 'known';
+  warning?: string;
+}
+export function useProbeModels() {
+  return useMutation({
+    mutationFn: (input: ModelsProbeInput) =>
+      api<ModelsProbeResult>('/v1/operator/models/probe', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+  });
+}
+
 // ---- Admin agent (berry-admin) ----
 
 export interface AdminAgentStatus {
