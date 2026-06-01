@@ -9,10 +9,10 @@
 //     AGENTS.md only if absent (so an operator who has customized
 //     it doesn't get clobbered on restart).
 //
-// Both bootstrap paths import from here:
-//
-//   - `a8s-server` ensureLocalWorker → in-process worker mount.
-//   - `worker-daemon` cluster-admin-mode → HTTP-attached worker mount.
+// The worker that mounts a `labels.role === 'a8s-admin'` agent calls
+// seedAdminAgentHome() from its cluster-admin-mode resolveSpec
+// (worker-daemon). a8s itself runs no worker, so this only ever fires on
+// a real worker's host — exactly where the agent's files should live.
 //
 // Keeping the prompt + the seed call here is what removes the second
 // fact source we used to have in `bootstrap.ts`.

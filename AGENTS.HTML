@@ -134,7 +134,7 @@
       <tr><td><code>@berry-agent/a8s</code></td><td><span class="ok">已完整</span></td><td>集群调度类:<code>ControlPlane</code> (createAgent/deleteAgent/migrateAgent/openAgent/hydrateAssignments/capacityReport)、<code>WorkerNode</code> 契约 (<code>InProcessWorkerNode</code> + <code>HttpWorkerNode</code> 都已实现)、<code>AgentSession</code> 数据面句柄、可插拔 <code>Scheduler</code>(least-loaded / round-robin)。</td></tr>
       <tr><td><code>@berry-agent/cluster-protocol</code></td><td><span class="ok">已完整</span></td><td>HTTP wire 协议唯一事实源:所有 a8s ↔ worker ↔ product 的 request/response zod schema、path 常量(<code>A8S_PATHS</code>、<code>WORKER_PATHS</code>)、Bearer-token 鉴权 helpers。</td></tr>
       <tr><td><code>@berry-agent/client</code></td><td><span class="ok">已完整</span></td><td>产品接入 a8s 的唯一标准客户端:<code>A8sClient</code>(类型化 HTTP 客户端,覆盖 operator + agent 生命周期 + 机器层全部调用,响应过 zod schema;token 可为字符串或 sync/async provider,为未来产品 BFF 注入 per-user token 预留;非 2xx 抛 <code>A8sRequestError</code>)+ <code>AgentHandle</code>(产品数据面:send / listSessions / listSessionEvents + <code>subscribe()</code> SSE 事件流 async iterable,带 Last-Event-ID 续传)。<strong>所有 Berry 产品都用它连 a8s,不各写一套。</strong> <code>a8s-admin</code> 的 <code>A8sOperatorClient</code> 现在是它的 re-export(单一事实源,不是两份)。</td></tr>
-      <tr><td><code>@berry-agent/a8s-server</code></td><td><span class="ok">已完整</span></td><td>Control plane HTTP 服务进程:<code>A8sServer</code> 类 + <code>berry-a8s</code> CLI(<code>start --port 8080 --store sqlite:///path/to.db --admin-token ... [--local-worker --admin-agent --models-config ...]</code>)。接收 worker 注册、签发 token、proxy data-plane(含 SSE 流式透传)、写 lease 到 orchestration store、operator API(<code>/v1/operator/workers|leases|cluster|workers/:id/{drain,undrain,evict}|workers/join-script|models-template|admin-agent|machines|machines/join-script</code>)、机器层(<code>/v1/machines/register|:id/{heartbeat,withdraw,exec}</code> + in-memory <code>MachineRegistry</code>,a8s 持 machine token 代理 exec)、wake 调度器(到点自动 send 到 agent)、可选的启动自举(本地 worker + <code>berry-admin</code> agent)、内嵌运维 UI(<code>GET /ui</code>)。<strong>不持有任何机密</strong>:models-template 只存 provider/model/tier 配置(含 key,但定位是"配一次发给 worker",不是运行时网关);agent 的 AGENTS.md / session 数据全在 worker 机器上,a8s-server 从不读写。</td></tr>
+      <tr><td><code>@berry-agent/a8s-server</code></td><td><span class="ok">已完整</span></td><td><strong>纯</strong> control plane HTTP 服务进程:<code>A8sServer</code> 类 + <code>berry-a8s</code> CLI(<code>start --port 8080 --store sqlite:///path/to.db --admin-token ...</code>)。<strong>自身不跑任何 worker、不跑任何 agent</strong> —— 要算力就部署 <code>berry-worker</code>(哪怕同机),要 berry-admin 就在 UI/API 走通用 createAgent。接收 worker 注册、签发 token、proxy data-plane(含 SSE 流式透传)、写 lease 到 orchestration store、operator API(<code>/v1/operator/workers|leases|cluster|workers/:id/{drain,undrain,evict}|workers/join-script|models-template|models/{presets,probe}|admin-agent|machines|machines/join-script</code>)、机器层(<code>/v1/machines/register|:id/{heartbeat,withdraw,exec,mcp/invoke}</code> + in-memory <code>MachineRegistry</code>,a8s 持 machine token 代理)、wake 调度器(到点自动 send 到 agent)、内嵌运维 UI(<code>GET /ui</code>)。<strong>不持有任何机密</strong>:models-template 只存 provider/model/tier 配置(含 key,但定位是"配一次发给 worker",不是运行时网关);agent 的 AGENTS.md / session 数据全在 worker 机器上,a8s-server 从不读写。</td></tr>
       <tr><td><code>@berry-agent/a8s-admin</code></td><td><span class="ok">已完整</span></td><td>a8s 客户端工具集 + <code>berry-admin</code> 的定义:<code>A8sOperatorClient</code>(<code>@berry-agent/client</code> 的 <code>A8sClient</code> re-export,向后兼容 <code>adminToken</code> 选项)、<code>buildClusterAdminTools</code>(10 个 operator 工具的唯一事实源,含 list_machines / machine_join_script)、<code>buildMachineTools</code> / <code>createMachineHand</code>(把一台机器投影成 <code>machine_&lt;id&gt;_exec</code> 工具,经 a8s 代理执行)、<code>createClusterAdminHand</code>、<code>seedAdminAgentHome</code> + <code>DEFAULT_ADMIN_SYSTEM_PROMPT</code> + <code>INSTALL_WORKER_SKILL</code>(<code>berry-admin</code> 默认提示/skill 的唯一事实源,被 in-process 和 HTTP 两条 mount 路径共用)、<code>createRemoteTeammateRuntimeFactory</code>。</td></tr>
     </tbody>
   </table>
@@ -152,16 +152,15 @@ berry-claw start
 
   <h3>形态 B — 单机或多机集群(已可用)</h3>
   <p>1 个 <code>berry-a8s</code> 进程 + N 个 <code>berry-worker</code> 进程(可以在同机也可以跨机) + 共享 SQLite(单机)或 Postgres(跨机)。Worker 主动出网注册到 a8s,周期 heartbeat,接收 a8s 派来的任务。<strong>Worker 进程崩了 → systemd 拉起同 workerId → a8s 在 register 响应里告诉它要再 mount 哪些 agent → 从机器级 <code>/var/berry/agents/&lt;id&gt;</code> 自动 mount,数据零移动</strong>(参见"失效模式与恢复")。</p>
-  <pre><code># 服务器 A:启动 a8s,带 admin token + 可选的 local worker + admin agent
+  <pre><code># 服务器 A:启动 a8s(纯 control plane,不自带 worker/agent)
 sudo mkdir -p /var/berry/a8s
 berry-a8s start --port 8080 \
   --store sqlite:///var/berry/a8s/orch.db \
   --admin-token "$ADMIN_TOKEN" \
-  --advertise-url https://a8s.example.com \
-  --local-worker --admin-agent \
-  --models-config /etc/berry/models.json
-
-# 服务器 B:写 worker 配置(指定 a8s URL + admin token + 数据布局)
+  --advertise-url https://a8s.example.com
+# 然后浏览器打开 /ui:Settings 里填供应商 key + 拉模型列表配好 models,
+# 再起至少一个 worker(下面),最后一键 Bootstrap admin agent。</code></pre>
+  <pre><code># 服务器 B:写 worker 配置(指定 a8s URL + admin token + 数据布局)
 sudo mkdir -p /var/berry/workers/worker-b /var/berry/agents
 cat &gt; /var/berry/workers/worker-b/worker.json &lt;&lt;EOF
 {
@@ -213,7 +212,7 @@ curl -X POST https://a8s.example.com/v1/agents \
     <li><strong>Workers</strong>:列表 + drain/undrain/evict 按钮 + 生成 worker join 脚本(弹窗供操作员复制粘贴,内嵌 admin token)。</li>
     <li><strong>Agents</strong>:列表 + <strong>Create agent 表单</strong>(model 选项来自 models template 的 tier/model;<strong>Grant machines</strong> 多选 → 写 <code>labels.machines</code>,给 agent 注入对应机器的 exec 工具)→ 点 agent 看 sessions → 点 session 看 SSE 实时事件流。</li>
     <li><strong>Machines</strong>:注册的机器列表(state / platform / 可代理的 MCP / heartbeat)+ <strong>Add machine</strong> 按钮(弹出 connector 安装脚本,内嵌 admin token)。</li>
-    <li><strong>Settings</strong>:<strong>Models template 编辑器</strong>(JSON,客户端校验;就是 worker register 时拉的那份)+ <strong>admin-agent 自举卡片</strong>(一个按钮把 <code>berry-admin</code> 调度到 active worker,替代 <code>--admin-agent</code> CLI flag 作为主路径)。</li>
+    <li><strong>Settings</strong>:<strong>Models 配置表单</strong>(选供应商 preset → 填 key → "拉模型列表"经 a8s 代理供应商 <code>/models</code> → 勾选模型 → 配 tier;JSON 退为 Advanced 模式)+ <strong>admin-agent 自举卡片</strong>(一个按钮把 <code>berry-admin</code> 通过通用 createAgent 调度到 active worker —— a8s 已无 <code>--admin-agent</code> flag,这是唯一路径)。</li>
     <li><strong>Admin Chat</strong>:跟 <code>berry-admin</code> 聊。"how is the cluster?" / "drain worker X" / "how do I add a worker?" / "what machines do I have?" / "add a machine" 都能说出来,admin 调对应 cluster-admin 工具完成。</li>
   </ul>
 

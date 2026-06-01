@@ -34,13 +34,15 @@ import { makeTestWorkerEnv } from '@berry-agent/worker/test-utils';
 import {
   WorkerDaemon,
   WorkerRegistrationClient,
+  withClusterAdminHostTools,
+  withMachineHostTools,
 } from '@berry-agent/worker-daemon';
 import {
   MachineConnectorDaemon,
   MachineRegistrationClient,
 } from '@berry-agent/machine-connector';
 import { A8sServer } from '../server.js';
-import { ensureAdminAgent, ensureLocalWorker } from '../bootstrap.js';
+import { ensureAdminAgent } from '../bootstrap.js';
 
 interface TestEntry { tag: string }
 
@@ -57,6 +59,63 @@ async function pickPort(): Promise<number> {
       s.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * Spin up a real in-test worker daemon and register it with a8s, with the
+ * SAME label-driven tool injection the production berry-worker CLI applies
+ * (cluster-admin + machine + base resolveSpec). This replaces the removed
+ * a8s-server `ensureLocalWorker` shortcut — a8s no longer runs a worker
+ * itself, so even tests go through a genuine worker over HTTP. The daemon
+ * shares the test process, so `result.worker.get(agentId)` still lets a
+ * test introspect a mounted runtime.
+ */
+async function startTestWorker(opts: {
+  a8sUrl: string;
+  adminToken: string;
+  workerId?: string;
+  root: string;
+  capacity?: number;
+}): Promise<{ worker: Worker<TestEntry>; stop: () => Promise<void> }> {
+  const workerId = opts.workerId ?? 'test-worker';
+  const agentsRoot = join(opts.root, 'agents');
+  const worker = new Worker<TestEntry>({ env: makeTestWorkerEnv(opts.root) });
+  const base = (wire: import('@berry-agent/worker-daemon').WireResolveInput) => {
+    const workspace = wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace);
+    return {
+      agentId: wire.agentId,
+      workspace,
+      home: new AgentHome(workspace),
+      projectRoot: wire.projectRoot,
+      model: wire.model,
+      ensureDefaultMcpConfig: false,
+    };
+  };
+  // Layer the production resolveSpec wrappers, exactly like the CLI.
+  let resolveSpec = base;
+  resolveSpec = withClusterAdminHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
+  resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
+
+  const wPort = await pickPort();
+  const daemon = new WorkerDaemon<TestEntry>({ worker, workerId, port: wPort, bindHost: '127.0.0.1', resolveSpec });
+  const dInfo = await daemon.start();
+  const reg = new WorkerRegistrationClient({
+    a8sUrl: opts.a8sUrl,
+    workerId,
+    callbackUrl: dInfo.callbackUrl,
+    capacity: opts.capacity ?? 4,
+    heartbeatTtlMs: 30_000,
+    adminToken: opts.adminToken,
+  });
+  daemon.setAuthToken((await reg.register()).workerToken);
+  return {
+    worker,
+    stop: async () => {
+      await reg.withdraw(true).catch(() => {});
+      await daemon.stop();
+      await worker.dispose();
+    },
+  };
 }
 
 describe('a8s-server + worker-daemon E2E', () => {
@@ -773,7 +832,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
-  it('bootstrap: local worker + admin agent appear in operator view', async () => {
+  it('admin agent: scheduled onto a real worker, gets cluster-admin tools + skill by label', async () => {
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
@@ -788,43 +847,22 @@ describe('a8s-server + worker-daemon E2E', () => {
 
     const root = mkdtempSync(join(tmpdir(), 'a8s-boot-'));
     const agentsRoot = join(root, 'agents');
-    const env = makeTestWorkerEnv(root);
-    const worker = await ensureLocalWorker(a8s, {
-      env,
-      dataRoot: root,
-      agentsRoot,
-      capacity: 4,
-      workerId: 'a8s-local',
-      adminToken: 'boot-secret',
-      a8sPort,
-    });
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'boot-secret', workerId: 'w-admin', root });
+
     const agentId = await ensureAdminAgent(a8s.plane);
     expect(agentId).toBe('berry-admin');
 
-    // ---- Local worker appears in operator list ----
-    const wlResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorWorkers}`, { headers: adminHeaders });
-    const wl = operatorWorkerListResponseSchema.parse(await wlResp.json());
-    const localEntry = wl.workers.find((w) => w.workerId === 'a8s-local');
-    expect(localEntry).toBeDefined();
-    // machine label is always stamped, default = os.hostname()
-    expect(localEntry!.labels?.machine).toBeTypeOf('string');
-    expect(localEntry!.labels?.machine?.length).toBeGreaterThan(0);
-
-    // ---- Admin agent shows up as an active assignment ----
+    // ---- Admin agent shows up as an active assignment on the worker ----
     const agentsResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: adminHeaders });
     const agents = listAgentsResponseSchema.parse(await agentsResp.json());
     const admin = agents.agents.find((a) => a.agentId === 'berry-admin');
     expect(admin).toBeDefined();
-    expect(admin!.workerId).toBe('a8s-local');
+    expect(admin!.workerId).toBe('w-admin');
 
-    // ---- Admin agent has the cluster-admin tools mounted via hostHand ----
-    // F3 design: a8s-server no longer addHand()s a cluster-admin Hand
-    // directly. Instead the local-worker resolveSpec sees `labels.role ===
-    // 'a8s-admin'` and injects the cluster-admin ToolRegistrations into
-    // hostTools. The worker builder then mounts them as the
-    // `worker-host` system hand. Same surface to the model, no coupling
-    // between a8s-server and a8s-admin.
-    const mount = worker.get('berry-admin');
+    // ---- The worker injected the cluster-admin tools by label (labels.role
+    // === 'a8s-admin'), via the same withClusterAdminHostTools path the CLI
+    // uses. a8s-server itself never touches cluster-admin code. ----
+    const mount = w.worker.get('berry-admin');
     expect(mount).toBeDefined();
     expect(mount!.runtime.hasHand?.('worker-host')).toBe(true);
     const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));
@@ -844,7 +882,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     const agents2 = listAgentsResponseSchema.parse(await agentsResp2.json());
     expect(agents2.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
 
-    await worker.dispose();
+    await w.stop();
     await a8s.stop();
   });
 
@@ -861,15 +899,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     const adminUrl = `${a8sInfo.url}${A8S_PATHS.operatorAdminAgent}`;
 
     const root = mkdtempSync(join(tmpdir(), 'a8s-adminep-'));
-    await ensureLocalWorker(a8s, {
-      env: makeTestWorkerEnv(root),
-      dataRoot: root,
-      agentsRoot: join(root, 'agents'),
-      capacity: 4,
-      workerId: 'a8s-local',
-      adminToken: 'op-secret',
-      a8sPort,
-    });
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'op-secret', workerId: 'w-op', root });
 
     // ---- GET before bootstrap: absent ----
     const before = adminAgentStatusResponseSchema.parse(
@@ -878,12 +908,12 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(before.present).toBe(false);
     expect(before.workerId).toBeNull();
 
-    // ---- POST: schedules berry-admin onto the local worker ----
+    // ---- POST: schedules berry-admin onto the worker ----
     const created = adminAgentStatusResponseSchema.parse(
       await fetch(adminUrl, { method: 'POST', headers, body: '{}' }).then((r) => r.json()),
     );
     expect(created.present).toBe(true);
-    expect(created.workerId).toBe('a8s-local');
+    expect(created.workerId).toBe('w-op');
 
     // ---- POST again: idempotent, still one berry-admin ----
     await fetch(adminUrl, { method: 'POST', headers, body: '{}' });
@@ -896,6 +926,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     const unauth = await fetch(adminUrl, { headers: { 'content-type': 'application/json' } });
     expect(unauth.status).toBe(401);
 
+    await w.stop();
     await a8s.stop();
   });
 
@@ -1404,17 +1435,10 @@ describe('a8s-server + worker-daemon E2E', () => {
     });
     const a8sInfo = await a8s.start();
 
-    // Local worker whose resolveSpec injects machine tools by label.
+    // Real worker whose resolveSpec injects machine tools by label
+    // (withMachineHostTools — the same wrapper the berry-worker CLI uses).
     const root = mkdtempSync(join(tmpdir(), 'a8s-mix-'));
-    const worker = await ensureLocalWorker(a8s, {
-      env: makeTestWorkerEnv(root),
-      dataRoot: root,
-      agentsRoot: join(root, 'agents'),
-      capacity: 4,
-      workerId: 'a8s-local',
-      adminToken: 'mix-secret',
-      a8sPort,
-    });
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'mix-secret', workerId: 'w-mix', root });
 
     // A real connector for machine "mac-1".
     const machinePort = await pickPort();
@@ -1445,14 +1469,14 @@ describe('a8s-server + worker-daemon E2E', () => {
     // tool actually reaches the connector through the a8s broker is
     // covered by the broker e2e above + the a8s-admin unit test; here we
     // assert the label-driven injection wiring end-to-end.)
-    const mount = worker.get('operator-agent');
+    const mount = w.worker.get('operator-agent');
     expect(mount).toBeDefined();
     const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));
     expect(toolNames.has('machine_mac-1_exec')).toBe(true);
 
     await reg.withdraw();
     await connector.stop();
-    await worker.dispose();
+    await w.stop();
     await a8s.stop();
   });
 

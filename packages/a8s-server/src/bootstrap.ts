@@ -1,190 +1,27 @@
 // ============================================================
-// @berry-agent/a8s-server — startup bootstrap helpers
+// @berry-agent/a8s-server — admin-agent bootstrap helper
 // ============================================================
 //
-// Two opt-in helpers that make a fresh `berry-a8s start` usable
-// without a separate worker deployment:
+// ensureAdminAgent — make sure a 'berry-admin' agent is scheduled onto
+// *some* active worker, carrying `labels.role = 'a8s-admin'`. The worker
+// that mounts it injects the cluster-admin tools and seeds the default
+// AGENTS.md (both via its resolveSpec). a8s-server never touches the
+// agent's on-disk home — that lives on the worker's machine. The human
+// operator (or the UI's "Bootstrap admin agent" button) drives the
+// cluster through this agent instead of curl-ing /v1/operator/* by hand.
 //
-//   - ensureLocalWorker  — boot an in-process Worker on the same host as
-//     a8s, register it with the orchestrator + plane. Co-located failure
-//     domain: when a8s dies, this worker dies too. That's fine for the
-//     berry-admin agent (which is what this is mostly for) — production
-//     agents should live on workers deployed on other machines.
-//
-//   - ensureAdminAgent   — make sure a 'berry-admin' agent is scheduled
-//     onto *some* active worker, carrying `labels.role = 'a8s-admin'`.
-//     The worker that mounts it injects the cluster-admin tools and
-//     seeds the default AGENTS.md (both via its resolveSpec). a8s-server
-//     never touches the agent's on-disk home — that lives on the worker's
-//     machine. The human operator (or the UI) then chats with this agent
-//     to drive the cluster instead of curl-ing /v1/operator/* by hand.
-//
-// Both are idempotent on restart — registerWorker uses a stable id and
-// ensureAdminAgent short-circuits when the agent is already assigned.
+// This is a pure control-plane operation: it's just createAgent with a
+// label. a8s itself runs no worker and no agent — berry-admin is an
+// ordinary agent that the scheduler places on whatever worker exists.
+// Idempotent: short-circuits when the agent is already assigned.
 
-import { mkdirSync } from 'node:fs';
-import { hostname } from 'node:os';
-import { AgentHome } from '@berry-agent/core';
-import { InProcessWorkerNode, type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
-import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { A8sOperatorClient, buildClusterAdminTools, buildMachineTools, seedAdminAgentHome } from '@berry-agent/a8s-admin';
-import type { A8sServer } from './server.js';
-
-export interface LocalWorkerConfig {
-  /** Stable id; default 'a8s-local'. Survives a8s restarts. */
-  workerId?: string;
-  /** Concurrent agent slots; default 4. */
-  capacity?: number;
-  /**
-   * Root for the worker's *private* data (observe.db, logs). Does NOT
-   * hold agent homes — those live under agentsRoot, machine-scoped.
-   * Default `/var/berry/a8s/local-worker`.
-   */
-  dataRoot?: string;
-  /**
-   * Root for agent home directories, machine-scoped. Default
-   * `/var/berry/agents`. Sharing this with other workers on the same
-   * machine is intentional: it lets agents survive worker process
-   * crashes without data movement.
-   */
-  agentsRoot?: string;
-  /**
-   * Machine identifier stamped into the worker's labels.machine. The
-   * a8s scheduler treats workers sharing a machine value as failover
-   * peers (an agent stranded by a dead worker is preferentially
-   * re-mounted on another worker with the same machine label).
-   * Default os.hostname().
-   */
-  machine?: string;
-  /** Heartbeat TTL in ms. Default 30 000. */
-  heartbeatTtlMs?: number;
-  /** Additional labels. `machine` and `role` are stamped automatically. */
-  labels?: Readonly<Record<string, string>>;
-  /** SDK runtime environment — registry / credentials / observer. Required. */
-  env: WorkerEnvironment;
-}
+import { type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
 
 export interface AdminAgentConfig {
   /** Stable agent id; default 'berry-admin'. */
   agentId?: string;
   /** Model ref; default 'tier:strong'. */
   model?: string;
-}
-
-/**
- * Spin up an in-process worker and register it with this a8s server.
- * Returns the Worker (the caller rarely needs it now — scheduling goes
- * through the plane, not the worker handle).
- *
- * `adminToken` enables the same cluster-admin label-injection that
- * external worker daemons get — agents created with
- * `labels.role === 'a8s-admin'` get the cluster-admin Hand tools
- * auto-mounted via the worker node's resolveSpec hook. Passing it is
- * required if this local worker is to host the berry-admin agent.
- */
-export async function ensureLocalWorker(
-  server: A8sServer,
-  config: LocalWorkerConfig & { adminToken?: string; a8sUrl?: string; a8sPort?: number },
-): Promise<Worker> {
-  const workerId = config.workerId ?? 'a8s-local';
-  const capacity = config.capacity ?? 4;
-  const heartbeatTtlMs = config.heartbeatTtlMs ?? 30_000;
-  const dataRoot = config.dataRoot ?? '/var/berry/a8s/local-worker';
-  const agentsRoot = config.agentsRoot ?? '/var/berry/agents';
-  const machine = config.machine ?? hostname();
-
-  mkdirSync(dataRoot, { recursive: true });
-  mkdirSync(agentsRoot, { recursive: true });
-
-  const worker = new Worker({ env: config.env });
-
-  // 1. Durable side: insert into orchestrator so cluster reports + lease
-  //    acquisition see this worker. Always stamp the machine + role
-  //    labels so same-machine failover affinity has data to work with.
-  await server.plane.orchestrator.registerWorker({
-    workerId,
-    holderId: workerId,
-    capacity,
-    heartbeatTtlMs,
-    labels: { ...(config.labels ?? {}), role: 'a8s-local', machine },
-  });
-
-  // 2. In-memory side: add a WorkerNode so the plane's data-plane
-  //    routing can reach it without HTTP. The resolveSpec hook applies
-  //    label conventions identical to the worker daemon — agents
-  //    arriving with `labels.role === 'a8s-admin'` get the cluster-
-  //    admin Hand auto-mounted (no a8s-server → a8s-admin coupling).
-  const a8sUrl = config.a8sUrl ?? `http://localhost:${config.a8sPort ?? server.port}`;
-  const resolveSpec = config.adminToken
-    ? makeAdminAwareResolveSpec({
-        a8sUrl,
-        adminToken: config.adminToken,
-        agentsRoot,
-      })
-    : undefined;
-  server.plane.addWorker(new InProcessWorkerNode(workerId, worker, { resolveSpec }));
-
-  return worker;
-}
-
-/**
- * Build a resolveSpec for the in-process local worker that mirrors the
- * worker daemon's label-driven injection:
- *   - `labels.role === 'a8s-admin'` → cluster-admin tools + seed AGENTS.md
- *   - `labels.machines = "id1,id2"` → per-machine exec tools
- * Defined here (not reused from worker-daemon) because a8s-server cannot
- * depend on worker-daemon; it shares the single-source tool *builders*
- * from a8s-admin, so the tool surface stays identical to the daemon path.
- */
-function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; agentsRoot: string }) {
-  const baseResolve = (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
-    const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
-      ? wire.workspace
-      : `${opts.agentsRoot}/${wire.workspace}`;
-    return {
-      agentId: wire.agentId,
-      workspace,
-      home: new AgentHome(workspace),
-      projectRoot: wire.projectRoot,
-      model: wire.model,
-      reasoningEffort: wire.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
-      toolDenylist: wire.toolDenylist,
-      ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
-    };
-  };
-  const client = new A8sOperatorClient({ a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
-  const adminTools = buildClusterAdminTools(client);
-  return (wire: WireWorkerAgentSpec): WorkerAgentSpec => {
-    const base = baseResolve(wire);
-    const isAdmin = wire.labels?.role === 'a8s-admin';
-    const machineIds = (wire.labels?.machines ?? '')
-      .split(',').map((s) => s.trim()).filter(Boolean);
-    if (!isAdmin && machineIds.length === 0) return base;
-
-    const additions: ReturnType<typeof buildClusterAdminTools> = [];
-    let displayName = base.hostHandDisplayName;
-    if (isAdmin) {
-      // First-boot: seed default AGENTS.md if absent. Same single-source
-      // helper the worker daemon uses; runs here because the in-process
-      // worker shares this host's filesystem.
-      seedAdminAgentHome(base.workspace);
-      additions.push(...adminTools);
-      displayName = displayName ?? 'a8s cluster administration';
-    }
-    for (const machineId of machineIds) {
-      additions.push(...buildMachineTools({ client, machineId }));
-      displayName = displayName ?? 'Machine access';
-    }
-
-    const existing = Array.from(base.hostTools ?? []);
-    const existingNames = new Set(existing.map((t) => t.definition.name));
-    const merged = additions.filter((t) => !existingNames.has(t.definition.name));
-    return {
-      ...base,
-      hostTools: [...existing, ...merged],
-      hostHandDisplayName: displayName,
-    };
-  };
 }
 
 /**
@@ -199,6 +36,9 @@ function makeAdminAwareResolveSpec(opts: { a8sUrl: string; adminToken: string; a
  *
  * `workspace` is intentionally the bare agentId — each worker resolves
  * it against its own machine-scoped agentsRoot. Returns the agentId.
+ *
+ * Throws (via createAgent) when no worker has capacity — surfaced to the
+ * UI as "deploy a worker first".
  */
 export async function ensureAdminAgent(
   plane: ControlPlane,
@@ -206,7 +46,6 @@ export async function ensureAdminAgent(
 ): Promise<string> {
   const agentId = config.agentId ?? 'berry-admin';
 
-  // Already scheduled? Nothing to do. Runs on every a8s start.
   if (plane.getAgentLocation(agentId).workerId != null) {
     return agentId;
   }
