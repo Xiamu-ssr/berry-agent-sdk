@@ -394,6 +394,105 @@ export const sessionEventsResponseSchema = z.object({
 export type SessionEventsResponse = z.infer<typeof sessionEventsResponseSchema>;
 
 // ============================================================
+// Agent configuration & introspection (product → a8s → worker)
+// ============================================================
+// All of these already exist on the SDK's AgentSession / ManagedAgentRuntime
+// in-process; these wire shapes expose them over HTTP so a remote product
+// (a BFF with no engine of its own) can configure and inspect an agent
+// whose runtime + on-disk home live on a worker's machine. a8s proxies to
+// the owning worker exactly like /send.
+
+/**
+ * Agent "home" documents the product may read/write. Each maps to an
+ * AgentSession method pair. Kept as a small enum (not arbitrary paths) so
+ * the worker never has to sandbox a free-form path: the SDK owns where
+ * each doc physically lives in the agent home.
+ */
+export const agentHomeDocSchema = z.enum(['memory', 'instructions', 'project-knowledge']);
+export type AgentHomeDoc = z.infer<typeof agentHomeDocSchema>;
+
+export const agentHomeReadResponseSchema = z.object({
+  doc: agentHomeDocSchema,
+  /** File path on the worker (informational) — null for project-knowledge aggregate. */
+  path: z.string().nullable(),
+  content: z.string(),
+  /** project-knowledge returns multiple files; present only for that doc. */
+  files: z.array(z.object({ path: z.string(), content: z.string() }).strict()).optional(),
+  /** project root, present only for project-knowledge. */
+  project: z.string().nullable().optional(),
+}).strict();
+export type AgentHomeReadResponse = z.infer<typeof agentHomeReadResponseSchema>;
+
+export const agentHomeWriteRequestSchema = z.object({
+  content: z.string(),
+}).strict();
+export type AgentHomeWriteRequest = z.infer<typeof agentHomeWriteRequestSchema>;
+
+export const agentHomeWriteResponseSchema = z.object({
+  path: z.string(),
+  bytes: z.number().int().nonnegative(),
+}).strict();
+export type AgentHomeWriteResponse = z.infer<typeof agentHomeWriteResponseSchema>;
+
+/**
+ * Mutate live agent spec fields. Every field optional; only the present
+ * ones are applied. These map to runtime setters that take effect on the
+ * next turn without dropping in-memory session state.
+ */
+export const agentSpecPatchRequestSchema = z.object({
+  /** tier:X / model:X / bare model id — resolved by the worker's registry. */
+  model: z.string().min(1).optional(),
+  reasoningEffort: z.string().optional(),
+  /** Tool names refused regardless of safety guard. Empty array clears. */
+  toolDenylist: z.array(z.string()).optional(),
+}).strict();
+export type AgentSpecPatchRequest = z.infer<typeof agentSpecPatchRequestSchema>;
+
+export const agentSpecPatchResponseSchema = z.object({
+  ok: z.literal(true),
+}).strict();
+export type AgentSpecPatchResponse = z.infer<typeof agentSpecPatchResponseSchema>;
+
+/** Live status snapshot (maps to AgentSession.getStatus). */
+export const agentStatusResponseSchema = z.object({
+  status: z.string(),
+  detail: z.string().optional(),
+}).strict();
+export type AgentStatusResponse = z.infer<typeof agentStatusResponseSchema>;
+
+/** Context-window usage (maps to AgentSession.contextSize). */
+export const agentContextSizeResponseSchema = z.object({
+  current: z.number().int().nonnegative(),
+  window: z.number().int().nonnegative(),
+}).strict();
+export type AgentContextSizeResponse = z.infer<typeof agentContextSizeResponseSchema>;
+
+/** Pause the current turn. */
+export const agentPauseRequestSchema = z.object({
+  reason: z.string().optional(),
+}).strict();
+export type AgentPauseRequest = z.infer<typeof agentPauseRequestSchema>;
+
+export const agentPauseResponseSchema = z.object({
+  paused: z.boolean(),
+  status: z.string(),
+  detail: z.string().optional(),
+}).strict();
+export type AgentPauseResponse = z.infer<typeof agentPauseResponseSchema>;
+
+/** Queue a human interjection for the running turn. */
+export const agentInterjectRequestSchema = z.object({
+  text: z.string().min(1),
+}).strict();
+export type AgentInterjectRequest = z.infer<typeof agentInterjectRequestSchema>;
+
+export const agentInterjectResponseSchema = z.object({
+  status: z.string(),
+  detail: z.string().optional(),
+}).strict();
+export type AgentInterjectResponse = z.infer<typeof agentInterjectResponseSchema>;
+
+// ============================================================
 // Worker-side endpoints (a8s → worker)
 // ============================================================
 // These are the methods a8s calls on a worker daemon. Roughly mirror
@@ -796,6 +895,18 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
   agentEventsStream: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
+  agentHomeDoc: (agentId: string, doc: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/home/${encodeURIComponent(doc)}`,
+  agentSpec: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/spec`,
+  agentStatus: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
+  agentContextSize: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
+  agentPause: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
+  agentInterject: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/interject`,
   wakesSchedule: `/${CLUSTER_PROTOCOL_VERSION}/wakes/schedule`,
 
   operatorCluster: `/${CLUSTER_PROTOCOL_VERSION}/operator/cluster`,
@@ -838,6 +949,18 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   hasAgent: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/has`,
+  agentHomeDoc: (agentId: string, doc: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/home/${encodeURIComponent(doc)}`,
+  agentSpec: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/spec`,
+  agentStatus: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
+  agentContextSize: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
+  agentPause: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
+  agentInterject: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/interject`,
 } as const;
 
 /**

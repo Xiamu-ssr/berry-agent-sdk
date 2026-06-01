@@ -106,7 +106,65 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
         res.end(text);
       },
     },
+
+    // ---- Agent config & introspection (D1): transparent proxies ----
+    // a8s and the worker share the exact agent sub-path, so each of these
+    // just forwards the request (method + body) to the owning worker and
+    // pipes the reply back. One helper, registered for each verb/path.
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/home/:doc'),
+    proxyRoute(deps, 'PUT', '/v1/agents/:agentId/home/:doc'),
+    proxyRoute(deps, 'PATCH', '/v1/agents/:agentId/spec'),
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/status'),
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/context-size'),
+    proxyRoute(deps, 'POST', '/v1/agents/:agentId/pause'),
+    proxyRoute(deps, 'POST', '/v1/agents/:agentId/interject'),
   ];
+}
+
+/**
+ * Build a RouteDefinition that transparently forwards a per-agent request
+ * to the worker that owns the agent. Because a8s and the worker daemon
+ * expose the identical agent sub-path, we forward `req.url` verbatim
+ * (preserving query string) with the method + body, and pipe the reply.
+ */
+function proxyRoute<TEntry>(
+  deps: ServerDeps<TEntry>,
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST' | 'DELETE',
+  pattern: string,
+): RouteDefinition {
+  return {
+    method,
+    pattern,
+    name: `${method} ${pattern}`,
+    middleware: [requireAdminToken(deps)],
+    handler: async ({ params, req, res }) => {
+      const entry = resolveAgentWorker(deps, params.agentId);
+      const hasBody = method === 'PUT' || method === 'PATCH' || method === 'POST';
+      const body = hasBody ? await readRawBody(req) : undefined;
+      const response = await fetch(`${entry.callbackUrl}${req.url}`, {
+        method,
+        headers: {
+          ...(hasBody ? { 'content-type': 'application/json' } : {}),
+          [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+        },
+        body,
+      });
+      const text = await response.text();
+      res.statusCode = response.status;
+      res.setHeader('content-type', response.headers.get('content-type') ?? 'application/json');
+      res.end(text);
+    },
+  };
+}
+
+/** Read the raw request body as a string (proxies forward bytes verbatim). */
+async function readRawBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    req.on('data', (c) => { buf += c; });
+    req.on('end', () => resolve(buf));
+    req.on('error', reject);
+  });
 }
 
 /**

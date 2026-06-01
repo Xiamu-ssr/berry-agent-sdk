@@ -32,6 +32,18 @@ import {
   workerRunAgentResponseSchema,
   workerStopAgentResponseSchema,
   healthResponseSchema,
+  agentHomeDocSchema,
+  agentHomeReadResponseSchema,
+  agentHomeWriteRequestSchema,
+  agentHomeWriteResponseSchema,
+  agentSpecPatchRequestSchema,
+  agentSpecPatchResponseSchema,
+  agentStatusResponseSchema,
+  agentContextSizeResponseSchema,
+  agentPauseRequestSchema,
+  agentPauseResponseSchema,
+  agentInterjectRequestSchema,
+  agentInterjectResponseSchema,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
 import type { Worker, WorkerAgentSpec } from '@berry-agent/worker';
@@ -187,6 +199,27 @@ export class WorkerDaemon<TEntry = unknown> {
       if (action === 'active-session' && req.method === 'GET') return this.handleActiveSession(agentId, res);
     }
 
+    // /agents/:id/home/:doc  (GET read, PUT write)
+    const homeMatch = url.match(/^\/v1\/agents\/([^/]+)\/home\/([^/]+)$/);
+    if (homeMatch) {
+      const agentId = decodeURIComponent(homeMatch[1]);
+      const doc = decodeURIComponent(homeMatch[2]);
+      if (req.method === 'GET') return this.handleHomeRead(agentId, doc, res);
+      if (req.method === 'PUT') return this.handleHomeWrite(agentId, doc, req, res);
+    }
+
+    // /agents/:id/{spec,status,context-size,pause,interject}
+    const configMatch = url.match(/^\/v1\/agents\/([^/]+)\/(spec|status|context-size|pause|interject)$/);
+    if (configMatch) {
+      const agentId = decodeURIComponent(configMatch[1]);
+      const action = configMatch[2];
+      if (action === 'spec' && req.method === 'PATCH') return this.handleSpecPatch(agentId, req, res);
+      if (action === 'status' && req.method === 'GET') return this.handleStatus(agentId, res);
+      if (action === 'context-size' && req.method === 'GET') return this.handleContextSize(agentId, req, res);
+      if (action === 'pause' && req.method === 'POST') return this.handlePause(agentId, req, res);
+      if (action === 'interject' && req.method === 'POST') return this.handleInterject(agentId, req, res);
+    }
+
     return writeJson(res, 404, errorPayloadSchema.parse({
       error: { code: 'not_found', message: `no route for ${req.method} ${url}` },
     }));
@@ -261,6 +294,102 @@ export class WorkerDaemon<TEntry = unknown> {
       return;
     }
     writeJson(res, 200, { sessionId: mount.runtime.getActiveSessionId() ?? null });
+  }
+
+  // ----- Agent configuration & introspection (D1) -----
+  // Each delegates to the live ManagedAgentRuntime (same object AgentSession
+  // wraps in-process). a8s proxies these verbatim; the BFF never sees the
+  // runtime, only these HTTP shapes.
+
+  /** Resolve a mount or write a 404 and return undefined. */
+  private mountOr404(agentId: string, res: ServerResponse): ReturnType<Worker<TEntry>['get']> | undefined {
+    const mount = this.worker.get(agentId);
+    if (!mount) {
+      writeJson(res, 404, errorPayloadSchema.parse({
+        error: { code: 'agent_not_mounted', message: `agent "${agentId}" is not running on this worker` },
+      }));
+      return undefined;
+    }
+    return mount;
+  }
+
+  private async handleHomeRead(agentId: string, docRaw: string, res: ServerResponse): Promise<void> {
+    const doc = agentHomeDocSchema.parse(docRaw);
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    if (doc === 'memory') {
+      const r = await mount.runtime.readMemory();
+      writeJson(res, 200, agentHomeReadResponseSchema.parse({ doc, path: r.path, content: r.content }));
+    } else if (doc === 'instructions') {
+      const r = await mount.runtime.readInstructions();
+      writeJson(res, 200, agentHomeReadResponseSchema.parse({ doc, path: r.path, content: r.content }));
+    } else {
+      const r = await mount.runtime.readProjectKnowledge();
+      const content = r.files.map((f) => `# ${f.path}\n${f.content}`).join('\n\n');
+      writeJson(res, 200, agentHomeReadResponseSchema.parse({
+        doc, path: null, content, files: r.files, project: r.project,
+      }));
+    }
+  }
+
+  private async handleHomeWrite(agentId: string, docRaw: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const doc = agentHomeDocSchema.parse(docRaw);
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const { content } = agentHomeWriteRequestSchema.parse(await readJson(req));
+    let result: { path: string; bytes: number };
+    if (doc === 'memory') result = await mount.runtime.writeMemory(content);
+    else if (doc === 'instructions') result = await mount.runtime.writeInstructions(content);
+    else {
+      const r = await mount.runtime.writeProjectKnowledge(content);
+      result = { path: r.path, bytes: r.bytes };
+    }
+    writeJson(res, 200, agentHomeWriteResponseSchema.parse(result));
+  }
+
+  private async handleSpecPatch(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const patch = agentSpecPatchRequestSchema.parse(await readJson(req));
+    if (patch.model !== undefined) await mount.runtime.switchModel(patch.model);
+    if (patch.reasoningEffort !== undefined) {
+      mount.runtime.setReasoningEffort(patch.reasoningEffort as Parameters<typeof mount.runtime.setReasoningEffort>[0]);
+    }
+    if (patch.toolDenylist !== undefined) mount.runtime.setToolDenylist(patch.toolDenylist);
+    writeJson(res, 200, agentSpecPatchResponseSchema.parse({ ok: true }));
+  }
+
+  private async handleStatus(agentId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const s = mount.runtime.getStatus();
+    writeJson(res, 200, agentStatusResponseSchema.parse({ status: s.status, detail: s.detail }));
+  }
+
+  private async handleContextSize(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const sessionId = parseQuery(req.url ?? '').session || undefined;
+    const c = await mount.runtime.contextSize(sessionId);
+    writeJson(res, 200, agentContextSizeResponseSchema.parse({ current: c.current, window: c.window }));
+  }
+
+  private async handlePause(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const { reason } = agentPauseRequestSchema.parse(await readJson(req));
+    const paused = mount.runtime.pause(reason);
+    const s = mount.runtime.getStatus();
+    writeJson(res, 200, agentPauseResponseSchema.parse({ paused, status: s.status, detail: s.detail }));
+  }
+
+  private async handleInterject(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const { text } = agentInterjectRequestSchema.parse(await readJson(req));
+    mount.runtime.interject(text);
+    const s = mount.runtime.getStatus();
+    writeJson(res, 200, agentInterjectResponseSchema.parse({ status: s.status, detail: s.detail }));
   }
 
   private async handleSessionList(agentId: string, res: ServerResponse): Promise<void> {

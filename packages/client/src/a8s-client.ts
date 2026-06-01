@@ -40,6 +40,22 @@ import {
   sendResponseSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
+  agentHomeReadResponseSchema,
+  agentHomeWriteResponseSchema,
+  agentSpecPatchResponseSchema,
+  agentStatusResponseSchema,
+  agentContextSizeResponseSchema,
+  agentPauseResponseSchema,
+  agentInterjectResponseSchema,
+  type AgentHomeDoc,
+  type AgentHomeReadResponse,
+  type AgentHomeWriteResponse,
+  type AgentSpecPatchRequest,
+  type AgentSpecPatchResponse,
+  type AgentStatusResponse,
+  type AgentContextSizeResponse,
+  type AgentPauseResponse,
+  type AgentInterjectResponse,
   type AgentLocation,
   type CreateAgentRequest,
   type CreateAgentResponse,
@@ -210,6 +226,40 @@ export class A8sClient {
     const qs = q.toString();
     const path = A8S_PATHS.agentSessionEvents(agentId, sessionId) + (qs ? `?${qs}` : '');
     return this.request('GET', path, sessionEventsResponseSchema);
+  }
+
+  // ----- Agent configuration & introspection (proxied to the worker) -----
+
+  /** Read an agent home doc (memory / instructions / project-knowledge). */
+  readAgentHome(agentId: string, doc: AgentHomeDoc): Promise<AgentHomeReadResponse> {
+    return this.request('GET', A8S_PATHS.agentHomeDoc(agentId, doc), agentHomeReadResponseSchema);
+  }
+
+  /** Write an agent home doc. */
+  writeAgentHome(agentId: string, doc: AgentHomeDoc, content: string): Promise<AgentHomeWriteResponse> {
+    return this.request('PUT', A8S_PATHS.agentHomeDoc(agentId, doc), agentHomeWriteResponseSchema, { content });
+  }
+
+  /** Patch live spec fields (model / reasoning / toolDenylist). */
+  patchAgentSpec(agentId: string, patch: AgentSpecPatchRequest): Promise<AgentSpecPatchResponse> {
+    return this.request('PATCH', A8S_PATHS.agentSpec(agentId), agentSpecPatchResponseSchema, patch);
+  }
+
+  agentStatus(agentId: string): Promise<AgentStatusResponse> {
+    return this.request('GET', A8S_PATHS.agentStatus(agentId), agentStatusResponseSchema);
+  }
+
+  agentContextSize(agentId: string, sessionId?: string): Promise<AgentContextSizeResponse> {
+    const path = A8S_PATHS.agentContextSize(agentId) + (sessionId ? `?session=${encodeURIComponent(sessionId)}` : '');
+    return this.request('GET', path, agentContextSizeResponseSchema);
+  }
+
+  pauseAgent(agentId: string, reason?: string): Promise<AgentPauseResponse> {
+    return this.request('POST', A8S_PATHS.agentPause(agentId), agentPauseResponseSchema, { reason });
+  }
+
+  interjectAgent(agentId: string, text: string): Promise<AgentInterjectResponse> {
+    return this.request('POST', A8S_PATHS.agentInterject(agentId), agentInterjectResponseSchema, { text });
   }
 
   // ----- Models template -----

@@ -13,6 +13,8 @@ import {
   A8S_PATHS,
   ADMIN_AUTH_HEADER,
   SSE_LAST_EVENT_ID_HEADER,
+  type AgentHomeDoc,
+  type AgentSpecPatchRequest,
   type SendRequest,
   type SendResponse,
   type SessionEventsResponse,
@@ -59,6 +61,16 @@ export class AgentHandle {
   ): Promise<SessionEventsResponse> {
     return this.client.listSessionEvents(this.agentId, sessionId, opts);
   }
+
+  // ----- Config & introspection (delegate to the client, agentId bound) -----
+
+  readHome(doc: AgentHomeDoc) { return this.client.readAgentHome(this.agentId, doc); }
+  writeHome(doc: AgentHomeDoc, content: string) { return this.client.writeAgentHome(this.agentId, doc, content); }
+  patchSpec(patch: AgentSpecPatchRequest) { return this.client.patchAgentSpec(this.agentId, patch); }
+  status() { return this.client.agentStatus(this.agentId); }
+  contextSize(sessionId?: string) { return this.client.agentContextSize(this.agentId, sessionId); }
+  pause(reason?: string) { return this.client.pauseAgent(this.agentId, reason); }
+  interject(text: string) { return this.client.interjectAgent(this.agentId, text); }
 
   /**
    * Subscribe to the agent's live event stream over SSE, as an async

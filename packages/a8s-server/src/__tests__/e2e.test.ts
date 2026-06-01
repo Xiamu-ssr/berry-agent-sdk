@@ -930,6 +930,54 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
+  it('agent config plane: home read/write + spec patch + status proxy through a8s to the worker', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({ port: a8sPort, controlPlane: { orchestrator }, adminToken: 'cfg-secret' });
+    const a8sInfo = await a8s.start();
+    const headers = { authorization: 'Bearer cfg-secret', 'content-type': 'application/json' };
+
+    const root = mkdtempSync(join(tmpdir(), 'a8s-cfg-'));
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'cfg-secret', workerId: 'w-cfg', root });
+
+    // Create an agent on the worker.
+    await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ spec: { agentId: 'cfg-agent', workspace: 'cfg-agent', model: 'tier:strong', ensureDefaultMcpConfig: false } }),
+    }).then((r) => { expect(r.status).toBe(200); });
+
+    const base = `${a8sInfo.url}/v1/agents/cfg-agent`;
+
+    // ---- write + read memory (a home doc) ----
+    const wrote = await fetch(`${base}/home/memory`, {
+      method: 'PUT', headers, body: JSON.stringify({ content: 'remember: berry' }),
+    });
+    expect(wrote.status).toBe(200);
+    expect((await wrote.json()).bytes).toBeGreaterThan(0);
+
+    const readBack = await fetch(`${base}/home/memory`, { headers }).then((r) => r.json());
+    expect(readBack.doc).toBe('memory');
+    expect(readBack.content).toContain('remember: berry');
+
+    // ---- status proxies the live runtime ----
+    const status = await fetch(`${base}/status`, { headers }).then((r) => r.json());
+    expect(typeof status.status).toBe('string');
+
+    // ---- spec patch (toolDenylist) returns ok ----
+    const patched = await fetch(`${base}/spec`, {
+      method: 'PATCH', headers, body: JSON.stringify({ toolDenylist: ['shell'] }),
+    });
+    expect(patched.status).toBe(200);
+    expect((await patched.json()).ok).toBe(true);
+
+    // ---- unknown home doc → 4xx (zod enum reject) ----
+    const bad = await fetch(`${base}/home/bogus`, { headers });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+
+    await w.stop();
+    await a8s.stop();
+  });
+
   it('operator join-script generator: refuses in dev mode, otherwise embeds admin token', async () => {
     // ---- Dev mode: refuse ----
     const orchA = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
