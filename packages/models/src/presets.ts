@@ -102,6 +102,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
     name: 'ZenMux (Anthropic-compatible)',
     type: 'anthropic',
     baseUrl: 'https://zenmux.ai/api/anthropic',
+    listModelsPath: '/v1/models',
     apiKeyDocsUrl: 'https://zenmux.ai/dashboard',
     knownModels: [
       'anthropic/claude-opus-4.7',

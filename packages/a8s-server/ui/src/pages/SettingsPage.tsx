@@ -219,6 +219,7 @@ function ProviderEditor({
 }) {
   const probe = useProbeModels();
   const [available, setAvailable] = useState<string[]>(prov.models);
+  const [manual, setManual] = useState('');
   const preset = presets.find((p) => p.id === prov.presetId);
 
   const runProbe = () => {
@@ -227,6 +228,19 @@ function ProviderEditor({
       { onSuccess: (r) => setAvailable(Array.from(new Set([...r.models, ...prov.models])).sort()) },
     );
   };
+
+  const addManual = () => {
+    const id = manual.trim();
+    if (!id) return;
+    setAvailable((a) => Array.from(new Set([...a, id])).sort());
+    if (!prov.models.includes(id)) onChange({ ...prov, models: [...prov.models, id] });
+    setManual('');
+  };
+
+  // The probe fell back to a hardcoded list (live fetch failed or the
+  // provider has no /models endpoint). Showing that as if "pulled" is
+  // worse than nothing — flag it and steer to manual entry.
+  const isCached = probe.data?.source === 'known';
 
   return (
     <div className="rounded-md border border-ink-200 dark:border-ink-800 p-3 space-y-2">
@@ -254,7 +268,7 @@ function ProviderEditor({
         </a>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <button
           className="btn btn-default text-xs"
           disabled={!prov.apiKey || probe.isPending}
@@ -262,14 +276,32 @@ function ProviderEditor({
         >
           {probe.isPending ? 'Pulling…' : 'Pull model list'}
         </button>
-        {probe.data?.source === 'known' && (
-          <span className="text-xs text-amber-600">cached list{probe.data.warning ? ` — ${probe.data.warning}` : ''}</span>
-        )}
         {probe.data?.source === 'live' && (
-          <span className="text-xs text-emerald-600">✓ {available.length} models</span>
+          <span className="text-xs text-emerald-600">✓ {available.length} live models</span>
+        )}
+        {isCached && (
+          <span className="text-xs text-amber-600">
+            ⚠ couldn't pull a live list{probe.data?.warning ? ` (${probe.data.warning})` : ''} — type model ids below
+          </span>
         )}
       </div>
       {probe.error && <FieldError>{probe.error instanceof Error ? probe.error.message : String(probe.error)}</FieldError>}
+
+      {/* Manual model-id entry — always available, the reliable path when a
+          provider has no catalog endpoint or returns the wrong shape. */}
+      <div className="flex items-end gap-2">
+        <label className="text-sm flex-1">
+          <span className="block text-xs text-ink-500 mb-1">Add model id manually</span>
+          <input
+            className="input"
+            value={manual}
+            placeholder="e.g. anthropic/claude-opus-4.7"
+            onChange={(e) => setManual(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManual(); } }}
+          />
+        </label>
+        <button className="btn btn-default" disabled={!manual.trim()} onClick={addManual}>Add</button>
+      </div>
 
       {available.length > 0 && (
         <div className="max-h-44 overflow-auto rounded border border-ink-200 dark:border-ink-800 p-2">
