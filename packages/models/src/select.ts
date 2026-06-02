@@ -35,7 +35,14 @@ export function selectProvider(
           `Model "${ref.modelId}" is not configured. Check your registry.models.`,
         );
       }
-      return createModelResolver(binding, registry, options) satisfies ProviderResolver;
+      // The registry keys models by id; the binding value may omit `id`
+      // (e.g. a template authored as `{ "model-x": { providers: [...] } }`).
+      // Backfill from the key so downstream model resolution isn't undefined.
+      return createModelResolver(
+        { ...binding, id: binding.id ?? ref.modelId },
+        registry,
+        options,
+      ) satisfies ProviderResolver;
     }
 
     case 'tier':

@@ -209,7 +209,14 @@ export function createTierResolver(
       'tier_dangling',
     );
   }
-  const inner = createModelResolver(binding, registry, options);
+  // Registry keys models by id; the binding value may omit `id` (templates
+  // authored as `{ "model-x": { providers: [...] } }`). Backfill from the
+  // key so the resolved ProviderConfig.model isn't undefined.
+  const inner = createModelResolver(
+    { ...binding, id: binding.id ?? modelId },
+    registry,
+    options,
+  );
   const id = `tier:${tier}:${modelId}`;
   // Spread preserves reference equality for snapshot-backing closures inside
   // `inner`, while rebinding `id` so observers see the tier label.

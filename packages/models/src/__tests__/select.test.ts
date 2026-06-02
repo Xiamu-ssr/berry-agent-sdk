@@ -42,4 +42,23 @@ describe('selectProvider', () => {
     const reg = mkRegistry();
     expect(() => selectProvider('model:nonexistent', reg)).toThrow(/not configured/);
   });
+
+  it('resolves model id from the registry key when the binding omits `id`', () => {
+    // Templates authored/stored as `{ "model-x": { providers: [...] } }`
+    // carry no `id` inside the binding value. The resolved ProviderConfig
+    // must still get model = the key, not undefined. (Regression: an admin
+    // agent on tier:strong failed at send with "model: Required" because
+    // the resolved config.model was undefined.)
+    const reg: ModelsRegistry = {
+      providers: { zen: { id: 'zen', presetId: 'zenmux-openai', apiKey: 'sk-x' } },
+      models: {
+        'anthropic/claude-opus-4.8': { providers: [{ providerId: 'zen' }] }, // no `id`
+      },
+      tiers: { strong: 'anthropic/claude-opus-4.8' },
+    };
+    const viaTier = (selectProvider('tier:strong', reg) as any).resolve();
+    expect(viaTier.model).toBe('anthropic/claude-opus-4.8');
+    const viaModel = (selectProvider('model:anthropic/claude-opus-4.8', reg) as any).resolve();
+    expect(viaModel.model).toBe('anthropic/claude-opus-4.8');
+  });
 });
