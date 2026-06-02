@@ -37,7 +37,7 @@ import {
   machineMcpInvokeRequestSchema,
   machineMcpManifestSchema,
   sendRequestSchema,
-  sendResponseSchema,
+  sendStreamFrameSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
   sessionCreateResponseSchema,
@@ -210,12 +210,40 @@ export class A8sClient {
     await this.request('DELETE', A8S_PATHS.agent(agentId), operatorOkResponseSchema);
   }
 
-  /** Send a turn to an agent and await its full turn result. */
-  sendToAgent(agentId: string, input: SendRequest): Promise<SendResponse> {
-    return this.request(
-      'POST', A8S_PATHS.agentSend(agentId), sendResponseSchema,
-      sendRequestSchema.parse(input),
-    );
+  /**
+   * Send a turn to an agent. The turn streams back as SSE: live AgentEvents
+   * (text_delta, tool_call, …) are delivered to `onEvent` as they happen,
+   * and the promise resolves with the final SendResponse. This is the only
+   * path for token-level increments (the durable event stream stays
+   * replayable and never carries ephemeral deltas).
+   */
+  async sendToAgent(
+    agentId: string,
+    input: SendRequest,
+    onEvent?: (event: Record<string, unknown>) => void,
+  ): Promise<SendResponse> {
+    const headers: Record<string, string> = {
+      [ADMIN_AUTH_HEADER]: await this.authHeader(),
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+    };
+    const resp = await this.fetchImpl(`${this.baseUrl}${A8S_PATHS.agentSend(agentId)}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(sendRequestSchema.parse(input)),
+    });
+    if (!resp.ok || !resp.body) {
+      throw new A8sRequestError('POST', A8S_PATHS.agentSend(agentId), resp.status, await resp.text().catch(() => ''));
+    }
+    let final: SendResponse | undefined;
+    for await (const frame of streamSseFrames(resp.body)) {
+      const parsed = sendStreamFrameSchema.parse(frame.data);
+      if (parsed.type === 'event') onEvent?.(parsed.event);
+      else if (parsed.type === 'done') final = parsed.response;
+      else throw new Error(`agent turn failed: ${parsed.message}`);
+    }
+    if (!final) throw new Error('agent turn stream ended without a result');
+    return final;
   }
 
   // ----- Session reads (product data plane) -----
@@ -378,4 +406,4 @@ export class A8sClient {
 }
 
 // Imported at the bottom to avoid a forward-reference in the class body.
-import { AgentHandle } from './agent-handle.js';
+import { AgentHandle, streamSseFrames } from './agent-handle.js';

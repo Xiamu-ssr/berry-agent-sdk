@@ -341,6 +341,28 @@ export const sendResponseSchema = z.object({
 }).strict();
 export type SendResponse = z.infer<typeof sendResponseSchema>;
 
+// ----- Turn streaming (send as an SSE response) -----
+// `/send` streams the turn instead of blocking: while the turn runs it emits
+// the live AgentEvents (text_delta, tool_call, …) as SSE frames, then a
+// single terminal frame — `done` carrying the final SendResponse, or
+// `error`. This is the ONLY output path for live token-level increments
+// (the durable /events/stream only carries persisted, replayable
+// SessionEvents — it must stay replayable, so ephemeral deltas never go
+// there). One turn = one stream = one source of truth.
+//
+// Frame `type` values:
+//   - 'event' : data = an opaque SDK AgentEvent (text_delta/tool_call/…).
+//   - 'done'  : data = SendResponse (sessionId + final turn result).
+//   - 'error' : data = { message }.
+// The SSE `event:` field carries the same `type`; `data:` is the JSON below.
+
+export const sendStreamFrameSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('event'), event: z.record(z.unknown()) }).strict(),
+  z.object({ type: z.literal('done'), response: sendResponseSchema }).strict(),
+  z.object({ type: z.literal('error'), message: z.string() }).strict(),
+]);
+export type SendStreamFrame = z.infer<typeof sendStreamFrameSchema>;
+
 export const getActiveSessionResponseSchema = z.object({
   sessionId: z.string().nullable(),
 }).strict();

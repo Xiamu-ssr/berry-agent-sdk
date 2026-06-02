@@ -17,6 +17,12 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
+/** An SSE turn-stream response: optional live frames + a terminal done frame. */
+function sseResponse(frames: Array<Record<string, unknown>>): Response {
+  const body = frames.map((f) => `event: ${f.type as string}\ndata: ${JSON.stringify(f)}\n\n`).join('');
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
 describe('createRemoteTeammateRuntimeFactory', () => {
   it('factory calls a8s.createAgent and returns a runtime that proxies send()', async () => {
     const seen: Array<{ url: string; body?: string }> = [];
@@ -30,18 +36,23 @@ describe('createRemoteTeammateRuntimeFactory', () => {
         });
       }
       if (url.endsWith('/v1/agents/reviewer/send')) {
-        return jsonResponse(200, {
-          sessionId: 'sess-1',
-          // Opaque turn-result; we just need *something* shaped vaguely
-          // like ManagedAgentTurnResult for the call to round-trip.
-          result: {
-            sessionId: 'sess-1',
-            userMessage: { id: 'u', role: 'user', content: 'review this' },
-            result: { text: 'looks good', tokens: 7 },
-            assistantMessage: { id: 'a', role: 'assistant', content: 'looks good' },
-            view: null,
+        return sseResponse([
+          {
+            type: 'done',
+            response: {
+              sessionId: 'sess-1',
+              // Opaque turn-result; we just need *something* shaped vaguely
+              // like ManagedAgentTurnResult for the call to round-trip.
+              result: {
+                sessionId: 'sess-1',
+                userMessage: { id: 'u', role: 'user', content: 'review this' },
+                result: { text: 'looks good', tokens: 7 },
+                assistantMessage: { id: 'a', role: 'assistant', content: 'looks good' },
+                view: null,
+              },
+            },
           },
-        });
+        ]);
       }
       return jsonResponse(404, { error: { code: 'no_route', message: url } });
     });

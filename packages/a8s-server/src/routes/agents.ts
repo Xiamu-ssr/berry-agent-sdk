@@ -89,10 +89,13 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       name: 'POST /v1/agents/:id/send',
       middleware: [requireAdminToken(deps)],
       handler: async ({ params, req, res }) => {
+        // /send streams the turn back (SSE): validate the body, then pipe
+        // the worker's event-stream response straight through. a8s holds no
+        // turn state — it's a transparent streaming forward.
         const body = await readJsonBody(req);
         const parsed = sendRequestSchema.parse(body);
         const entry = resolveAgentWorker(deps, params.agentId);
-        const response = await fetch(`${entry.callbackUrl}${WORKER_PATHS.agentSend(params.agentId)}`, {
+        const upstream = await fetch(`${entry.callbackUrl}${WORKER_PATHS.agentSend(params.agentId)}`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -100,10 +103,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
           },
           body: JSON.stringify(parsed),
         });
-        const text = await response.text();
-        res.statusCode = response.status;
-        res.setHeader('content-type', 'application/json');
-        res.end(text);
+        await pipeStreamingResponse(upstream, req, res, deps);
       },
     },
 
@@ -173,6 +173,51 @@ async function readRawBody(req: IncomingMessage): Promise<string> {
     req.on('end', () => resolve(buf));
     req.on('error', reject);
   });
+}
+
+/**
+ * Pipe a streaming upstream response (e.g. the worker's SSE turn stream)
+ * straight through to the client, cancelling the upstream read if the
+ * client disconnects. Non-200 / bodyless responses fall back to buffering
+ * the text so error payloads still reach the client. a8s holds no state —
+ * this is a transparent streaming forward.
+ */
+async function pipeStreamingResponse<TEntry>(
+  upstream: Response,
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ServerDeps<TEntry>,
+): Promise<void> {
+  res.statusCode = upstream.status;
+  if (upstream.status !== 200 || !upstream.body) {
+    const text = await upstream.text();
+    res.setHeader('content-type', upstream.headers.get('content-type') ?? 'application/json');
+    res.end(text);
+    return;
+  }
+  res.setHeader('content-type', upstream.headers.get('content-type') ?? 'text/event-stream');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('connection', 'keep-alive');
+  res.setHeader('x-accel-buffering', 'no');
+  res.flushHeaders?.();
+
+  const reader = upstream.body.getReader();
+  const cancel = (): void => { try { void reader.cancel(); } catch { /* swallow */ } };
+  req.on('close', cancel);
+  req.on('aborted', cancel);
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value && !res.writableEnded) res.write(value);
+      if (res.writableEnded) { cancel(); break; }
+    }
+  } catch (error) {
+    deps.logger.warn?.('[a8s-server] streaming upstream read failed:', error);
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
 }
 
 /**

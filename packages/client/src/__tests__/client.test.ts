@@ -88,6 +88,50 @@ describe('A8sClient', () => {
   });
 });
 
+describe('A8sClient.sendToAgent (streaming turn)', () => {
+  it('streams live events to onEvent and resolves with the done result', async () => {
+    const sse =
+      'event: event\ndata: {"type":"event","event":{"type":"text_delta","text":"hel"}}\n\n'
+      + 'event: event\ndata: {"type":"event","event":{"type":"text_delta","text":"lo"}}\n\n'
+      + 'event: done\ndata: {"type":"done","response":{"sessionId":"s1","result":{"ok":true}}}\n\n';
+    let seenMethod = '';
+    const client = new A8sClient({
+      a8sUrl: 'http://a8s',
+      token: 'x',
+      fetch: stubFetch((_url, init) => {
+        seenMethod = init?.method ?? '';
+        return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      }),
+    });
+    const events: Record<string, unknown>[] = [];
+    const res = await client.sendToAgent('a1', { prompt: 'hi' }, (ev) => events.push(ev));
+    expect(seenMethod).toBe('POST');
+    expect(events.map((e) => e.text)).toEqual(['hel', 'lo']);
+    expect(res.sessionId).toBe('s1');
+    expect(res.result).toEqual({ ok: true });
+  });
+
+  it('throws when the turn stream emits an error frame', async () => {
+    const sse = 'event: error\ndata: {"type":"error","message":"boom"}\n\n';
+    const client = new A8sClient({
+      a8sUrl: 'http://a8s',
+      token: 'x',
+      fetch: stubFetch(() => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })),
+    });
+    await expect(client.sendToAgent('a1', { prompt: 'hi' })).rejects.toThrow(/boom/);
+  });
+
+  it('throws when the stream ends without a done frame', async () => {
+    const sse = 'event: event\ndata: {"type":"event","event":{"type":"text_delta","text":"x"}}\n\n';
+    const client = new A8sClient({
+      a8sUrl: 'http://a8s',
+      token: 'x',
+      fetch: stubFetch(() => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })),
+    });
+    await expect(client.sendToAgent('a1', { prompt: 'hi' })).rejects.toThrow(/without a result/);
+  });
+});
+
 describe('AgentHandle.subscribe (SSE)', () => {
   it('parses id/event/data frames and yields events, skipping keepalives', async () => {
     const sse =

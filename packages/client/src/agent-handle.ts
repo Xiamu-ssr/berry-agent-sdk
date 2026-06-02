@@ -47,8 +47,9 @@ export class AgentHandle {
     readonly agentId: string,
   ) {}
 
-  send(input: SendRequest): Promise<SendResponse> {
-    return this.client.sendToAgent(this.agentId, input);
+  /** Send a turn; live events stream to `onEvent`, resolves with the result. */
+  send(input: SendRequest, onEvent?: (event: Record<string, unknown>) => void): Promise<SendResponse> {
+    return this.client.sendToAgent(this.agentId, input, onEvent);
   }
 
   listSessions(): Promise<SessionListResponse> {
@@ -106,27 +107,37 @@ export class AgentHandle {
     if (!resp.ok || !resp.body) {
       throw new Error(`a8s SSE subscribe failed: HTTP ${resp.status}`);
     }
+    yield* streamSseFrames(resp.body);
+  }
+}
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE frames are separated by a blank line.
-        let sep: number;
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          const ev = parseSseFrame(frame);
-          if (ev) yield ev;
-        }
+/**
+ * Parse a fetch Response body stream into SSE frames. Shared by every SSE
+ * consumer in the client (event subscribe + the streaming send turn) so
+ * there is one SSE parser, not several. Yields `{id,type,data}` per frame.
+ */
+export async function* streamSseFrames(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<AgentStreamEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line.
+      let sep: number;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const ev = parseSseFrame(frame);
+        if (ev) yield ev;
       }
-    } finally {
-      reader.cancel().catch(() => {});
     }
+  } finally {
+    reader.cancel().catch(() => {});
   }
 }
 

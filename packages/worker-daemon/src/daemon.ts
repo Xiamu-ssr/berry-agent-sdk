@@ -22,6 +22,7 @@ import {
   errorPayloadSchema,
   parseWorkerAuthHeader,
   sendRequestSchema,
+  type SendStreamFrame,
   sessionEventsRequestSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
@@ -298,16 +299,54 @@ export class WorkerDaemon<TEntry = unknown> {
         error: { code: 'agent_not_mounted', message: `agent "${agentId}" is not running on this worker` },
       }));
     }
-    // Forward to the live runtime. Casting prompt because the protocol
-    // accepts opaque content blocks — SDK validates them downstream.
-    const result = await mount.runtime.send(
-      parsed.prompt as Parameters<typeof mount.runtime.send>[0],
-      parsed.sessionId ? { sessionId: parsed.sessionId, requestId: parsed.requestId } : { requestId: parsed.requestId },
-    );
-    return writeJson(res, 200, {
-      sessionId: result.sessionId,
-      result: result as unknown as Record<string, unknown>,
-    });
+
+    // Stream the turn as SSE: live AgentEvents during the turn, then a
+    // terminal `done` (final result) or `error` frame. This is the single
+    // output path for token-level increments — the durable /events/stream
+    // only carries replayable SessionEvents and must not see ephemeral
+    // deltas. One turn = one stream = one source of truth.
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/event-stream');
+    res.setHeader('cache-control', 'no-cache, no-transform');
+    res.setHeader('connection', 'keep-alive');
+    res.setHeader('x-accel-buffering', 'no');
+    res.flushHeaders?.();
+
+    const writeFrame = (frame: SendStreamFrame): void => {
+      if (res.writableEnded) return;
+      res.write(`event: ${frame.type}\n`);
+      res.write(`data: ${JSON.stringify(frame)}\n\n`);
+    };
+
+    let aborted = false;
+    const onAbort = (): void => { aborted = true; };
+    req.on('close', onAbort);
+    req.on('aborted', onAbort);
+
+    try {
+      const result = await mount.runtime.send(
+        parsed.prompt as Parameters<typeof mount.runtime.send>[0],
+        {
+          ...(parsed.sessionId ? { sessionId: parsed.sessionId } : {}),
+          requestId: parsed.requestId,
+          onEvent: (event: unknown) => {
+            if (aborted) return;
+            writeFrame({ type: 'event', event: event as Record<string, unknown> });
+          },
+        },
+      );
+      writeFrame({
+        type: 'done',
+        response: {
+          sessionId: result.sessionId,
+          result: result as unknown as Record<string, unknown>,
+        },
+      });
+    } catch (err) {
+      writeFrame({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
   }
 
   private handleActiveSession(agentId: string, res: ServerResponse): void {
