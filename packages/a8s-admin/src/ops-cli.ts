@@ -51,9 +51,24 @@ Examples:
   berry-a8s-ops join-script
 `;
 
-async function main(argv: string[]): Promise<number> {
+/** Injectable side-effects so the CLI is testable without real env / network / process. */
+export interface OpsCliDeps {
+  /** Build the client from resolved url+token. Default: real A8sClient. */
+  makeClient?: (a8sUrl: string, token: string) => Pick<A8sClient,
+    'clusterReport' | 'listWorkers' | 'listAgents' | 'listLeases' | 'listMachines'
+    | 'drainWorker' | 'undrainWorker' | 'evictWorker' | 'joinScript' | 'machineJoinScript'>;
+  stdout?: (s: string) => void;
+  stderr?: (s: string) => void;
+  env?: NodeJS.ProcessEnv;
+}
+
+export async function main(argv: string[], deps: OpsCliDeps = {}): Promise<number> {
+  const writeOut = deps.stdout ?? ((s: string) => process.stdout.write(s));
+  const writeErr = deps.stderr ?? ((s: string) => process.stderr.write(s));
+  const env = deps.env ?? process.env;
+
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
-    process.stdout.write(USAGE);
+    writeOut(USAGE);
     return argv.length === 0 ? 2 : 0;
   }
 
@@ -67,18 +82,20 @@ async function main(argv: string[]): Promise<number> {
     allowPositionals: true,
   });
 
-  const a8sUrl = values.a8s ?? process.env.BERRY_A8S_URL ?? 'http://localhost:8080';
-  const token = values.token ?? process.env.BERRY_A8S_ADMIN_TOKEN;
+  const a8sUrl = values.a8s ?? env.BERRY_A8S_URL ?? 'http://localhost:8080';
+  const token = values.token ?? env.BERRY_A8S_ADMIN_TOKEN;
   if (!token) {
-    process.stderr.write('no admin token: pass --token or set BERRY_A8S_ADMIN_TOKEN\n');
+    writeErr('no admin token: pass --token or set BERRY_A8S_ADMIN_TOKEN\n');
     return 2;
   }
-  const client = new A8sClient({ a8sUrl, token });
+  const client = deps.makeClient
+    ? deps.makeClient(a8sUrl, token)
+    : new A8sClient({ a8sUrl, token });
   const [command, ...rest] = positionals;
   const raw = !!values.json;
 
   const out = (human: string, data: unknown): void => {
-    process.stdout.write(raw ? `${JSON.stringify(data, null, 2)}\n` : `${human}\n`);
+    writeOut(raw ? `${JSON.stringify(data, null, 2)}\n` : `${human}\n`);
   };
 
   try {
@@ -138,7 +155,7 @@ async function main(argv: string[]): Promise<number> {
       case 'undrain':
       case 'evict': {
         const workerId = rest[0];
-        if (!workerId) { process.stderr.write(`${command} needs a <workerId>\n`); return 2; }
+        if (!workerId) { writeErr(`${command} needs a <workerId>\n`); return 2; }
         if (command === 'drain') await client.drainWorker(workerId);
         else if (command === 'undrain') await client.undrainWorker(workerId);
         else await client.evictWorker(workerId);
@@ -148,20 +165,20 @@ async function main(argv: string[]): Promise<number> {
       case 'join-script': {
         const r = await client.joinScript({});
         // Always print the script verbatim — it embeds the admin token.
-        process.stdout.write(`${r.script}\n`);
+        writeOut(`${r.script}\n`);
         return 0;
       }
       case 'machine-join-script': {
         const r = await client.machineJoinScript({});
-        process.stdout.write(`${r.script}\n`);
+        writeOut(`${r.script}\n`);
         return 0;
       }
       default:
-        process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
+        writeErr(`unknown command: ${command}\n\n${USAGE}`);
         return 2;
     }
   } catch (err) {
-    process.stderr.write(`berry-a8s-ops ${command} failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    writeErr(`berry-a8s-ops ${command} failed: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
 }
@@ -171,10 +188,18 @@ function labelStr(labels?: Record<string, string>): string {
   return Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(',');
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(`[berry-a8s-ops] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-    process.exit(1);
-  },
-);
+// Auto-run only when invoked as the CLI entrypoint (not when imported by a
+// test). `process.argv[1]` is the script path the bin was launched with.
+const invokedDirectly = typeof process !== 'undefined'
+  && Array.isArray(process.argv)
+  && /ops-cli\.(js|ts)$/.test(process.argv[1] ?? '');
+
+if (invokedDirectly) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write(`[berry-a8s-ops] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+      process.exit(1);
+    },
+  );
+}
