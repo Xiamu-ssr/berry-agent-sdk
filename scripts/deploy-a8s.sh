@@ -146,6 +146,17 @@ done
 if [[ $OK -eq 1 ]]; then
   say "✅ a8s healthy at ${A8S_HEALTH_URL}"
   ssh $SSH_OPTS "$BOX" "systemctl is-active berry-a8s berry-worker | tr '\n' ' '; echo" || true
+  # Re-ensure the admin agent: the restart clears the in-memory assignment,
+  # and an idle agent's lease may have expired (see the restart-deadlock note
+  # in memory). This endpoint is idempotent — it just guarantees berry-admin
+  # is scheduled so the cluster is usable right after a deploy. Runs on the
+  # box so the admin token comes from /etc/berry-a8s.env, never this script.
+  say "Re-ensuring admin agent…"
+  ssh $SSH_OPTS "$BOX" 'set -a; . /etc/berry-a8s.env 2>/dev/null; set +a; \
+    curl -fsS --max-time 10 -X POST \
+      -H "authorization: Bearer ${BERRY_A8S_ADMIN_TOKEN}" \
+      http://127.0.0.1:28789/v1/operator/admin-agent >/dev/null 2>&1 \
+      && echo "   berry-admin ensured" || echo "   (admin ensure skipped — no worker capacity yet?)"' || true
   rm -f "$TARBALL"
 else
   echo "❌ a8s did NOT come healthy after ~30s." >&2
