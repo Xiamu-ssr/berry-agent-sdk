@@ -50,11 +50,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # macOS tar/scp would otherwise scatter AppleDouble ._ files on the box and
-# embed com.apple.* xattrs that GNU tar warns about. Disable both.
+# embed com.apple.* xattrs that GNU tar warns about on unpack. Disable both.
 export COPYFILE_DISABLE=1
-# bsdtar (macOS default /usr/bin/tar) honors --no-mac-metadata; ignore if absent.
+# bsdtar (macOS default /usr/bin/tar) honors these; ignore if absent.
 TAR_NOMETA=""
-if tar --no-mac-metadata --version >/dev/null 2>&1; then TAR_NOMETA="--no-mac-metadata"; fi
+if tar --no-mac-metadata --version >/dev/null 2>&1; then TAR_NOMETA="$TAR_NOMETA --no-mac-metadata"; fi
+if tar --no-xattrs --version >/dev/null 2>&1; then TAR_NOMETA="$TAR_NOMETA --no-xattrs"; fi
 
 say() { printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
 
