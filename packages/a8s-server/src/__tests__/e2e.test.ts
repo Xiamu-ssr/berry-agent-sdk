@@ -34,7 +34,7 @@ import { makeTestWorkerEnv } from '@berry-agent/worker/test-utils';
 import {
   WorkerDaemon,
   WorkerRegistrationClient,
-  withClusterAdminHostTools,
+  withAdminOpsEnv,
   withMachineHostTools,
 } from '@berry-agent/worker-daemon';
 import {
@@ -93,7 +93,7 @@ async function startTestWorker(opts: {
   };
   // Layer the production resolveSpec wrappers, exactly like the CLI.
   let resolveSpec = base;
-  resolveSpec = withClusterAdminHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
+  resolveSpec = withAdminOpsEnv(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
   resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
 
   const wPort = await pickPort();
@@ -832,7 +832,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
-  it('admin agent: scheduled onto a real worker, gets cluster-admin tools + skill by label', async () => {
+  it('admin agent: scheduled onto a real worker, gets ops skills + a8s creds by label (no hardcoded tools)', async () => {
     const orchestrator = new RuntimeOrchestrator({
       store: new MemoryRuntimeOrchestrationStore(),
     });
@@ -859,21 +859,20 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(admin).toBeDefined();
     expect(admin!.workerId).toBe('w-admin');
 
-    // ---- The worker injected the cluster-admin tools by label (labels.role
-    // === 'a8s-admin'), via the same withClusterAdminHostTools path the CLI
-    // uses. a8s-server itself never touches cluster-admin code. ----
+    // ---- The worker recognized the a8s-admin label (via withAdminOpsEnv,
+    // the same path the CLI uses) and wired the agent for cluster ops the
+    // 新-2 way: NO hardcoded cluster tools — ops are a CLI + skill now.
+    // a8s-server itself never touches admin-ops code. ----
     const mount = w.worker.get('berry-admin');
     expect(mount).toBeDefined();
-    expect(mount!.runtime.hasHand?.('worker-host')).toBe(true);
     const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));
-    expect(toolNames.has('cluster_report')).toBe(true);
-    expect(toolNames.has('list_workers')).toBe(true);
-    expect(toolNames.has('drain_worker')).toBe(true);
-    expect(toolNames.has('worker_join_script')).toBe(true);
-    expect(toolNames.has('list_machines')).toBe(true);
-    expect(toolNames.has('machine_join_script')).toBe(true);
+    // The old hardcoded cluster tools are gone; the agent drives berry-a8s-ops.
+    expect(toolNames.has('cluster_report')).toBe(false);
+    expect(toolNames.has('drain_worker')).toBe(false);
+    expect(toolNames.has('worker_join_script')).toBe(false);
 
-    // ---- First-boot seeded the install-worker skill into the agent home ----
+    // ---- First-boot seeded both ops skills into the agent home ----
+    expect(existsSync(join(agentsRoot, 'berry-admin', 'skills', 'a8s-ops', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(agentsRoot, 'berry-admin', 'skills', 'install-worker', 'SKILL.md'))).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----

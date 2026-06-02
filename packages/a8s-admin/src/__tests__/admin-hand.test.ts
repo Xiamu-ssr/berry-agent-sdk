@@ -1,13 +1,14 @@
 // ============================================================
-// @berry-agent/a8s-admin — unit tests
+// @berry-agent/a8s-admin — A8sOperatorClient unit tests
 // ============================================================
 // We don't spin up a real a8s here — the e2e test in a8s-server already
-// covers that. These tests focus on: hand wires tools correctly, parses
-// the operator schemas, and surfaces errors as ToolResult.isError.
+// covers that. These tests focus on the operator client: it sends the
+// bearer admin token, parses the operator schemas, and surfaces HTTP
+// errors. (Cluster ops moved from a hardcoded Hand to the berry-a8s-ops
+// CLI — see 新-2 / ops-cli.ts — so there is no admin-Hand to test here.)
 
 import { describe, expect, it } from 'vitest';
 import { A8sOperatorClient } from '../operator-client.js';
-import { createClusterAdminHand } from '../cluster-admin-hand.js';
 
 function stubFetch(handler: (url: string, init: RequestInit | undefined) => Response | Promise<Response>): typeof fetch {
   return (async (input: Request | string | URL, init?: RequestInit) => {
@@ -66,67 +67,5 @@ describe('A8sOperatorClient', () => {
     await client.drainWorker('worker-1');
     expect(seenMethod).toBe('POST');
     expect(seenBody).toBe('{}');
-  });
-});
-
-describe('createClusterAdminHand', () => {
-  it('exposes the expected capability set', () => {
-    const client = new A8sOperatorClient({ a8sUrl: 'http://test', adminToken: 'x' });
-    const hand = createClusterAdminHand({ client });
-    const names = hand.capabilities().map((c) => c.definition.name).sort();
-    expect(names).toEqual([
-      'cluster_report',
-      'drain_worker',
-      'evict_worker',
-      'list_agents',
-      'list_leases',
-      'list_machines',
-      'list_workers',
-      'machine_join_script',
-      'undrain_worker',
-      'worker_join_script',
-    ]);
-  });
-
-  it('list_workers tool returns JSON payload from the client', async () => {
-    const fetchImpl = stubFetch(() =>
-      jsonResponse(200, {
-        workers: [
-          {
-            workerId: 'w1',
-            state: 'active',
-            capacity: 4,
-            used: 1,
-            callbackUrl: 'http://w1:7100',
-            registeredAt: 1,
-            heartbeatAt: 2,
-            heartbeatExpiresAt: 30000,
-          },
-        ],
-      }),
-    );
-    const client = new A8sOperatorClient({ a8sUrl: 'http://test', adminToken: 'x', fetch: fetchImpl });
-    const hand = createClusterAdminHand({ client });
-    const tool = hand.capabilities().find((c) => c.definition.name === 'list_workers')!;
-    const result = await hand.execute(
-      { capabilityId: tool.id, input: {} },
-      { cwd: '/tmp', handId: 'cluster-admin', handKind: 'local', capability: tool },
-    );
-    expect(result.isError).not.toBe(true);
-    const parsed = JSON.parse(result.content);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].workerId).toBe('w1');
-  });
-
-  it('drain_worker tool reports missing workerId as isError', async () => {
-    const client = new A8sOperatorClient({ a8sUrl: 'http://test', adminToken: 'x' });
-    const hand = createClusterAdminHand({ client });
-    const tool = hand.capabilities().find((c) => c.definition.name === 'drain_worker')!;
-    const result = await hand.execute(
-      { capabilityId: tool.id, input: { workerId: '' } },
-      { cwd: '/tmp', handId: 'cluster-admin', handKind: 'local', capability: tool },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/required/);
   });
 });

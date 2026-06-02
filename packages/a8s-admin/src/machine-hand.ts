@@ -64,8 +64,9 @@ function coerceObjectSchema(
 
 /**
  * Build the exec tool(s) for one machine. Exposed separately so the
- * worker-daemon resolver can inject them as hostTools (no Hand wrapper),
- * matching the buildClusterAdminTools pattern.
+ * worker-daemon resolver can inject them as hostTools (no Hand wrapper).
+ * Machine exec is a genuine execution-layer capability — unlike cluster
+ * ops, which moved to the berry-a8s-ops CLI + skill (新-2).
  */
 export function buildMachineTools(options: MachineHandOptions): ToolRegistration[] {
   const { client, machineId } = options;

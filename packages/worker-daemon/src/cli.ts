@@ -29,7 +29,7 @@ import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withClusterAdminHostTools, withMachineHostTools } from './index.js';
+import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withAdminOpsEnv, withMachineHostTools } from './index.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -325,13 +325,14 @@ async function main(argv: string[]): Promise<number> {
   };
   // Chain the resolveSpec wrappers. When admin token is configured we
   // layer team-mode (label-gated message_leader injection) and
-  // cluster-admin-mode (label-gated 8-tool admin Hand) on top of the
-  // base resolver. Each wrapper inspects labels on its own and is a
-  // no-op for agents that don't match.
+  // admin-ops-mode (label-gated a8s credential injection for the
+  // berry-admin agent's berry-a8s-ops CLI) on top of the base resolver.
+  // Each wrapper inspects labels on its own and is a no-op for agents
+  // that don't match.
   let resolveSpec = baseResolveSpec;
   if (adminToken) {
     resolveSpec = withTeamModeHostTools(resolveSpec, { a8sUrl, adminToken });
-    resolveSpec = withClusterAdminHostTools(resolveSpec, { a8sUrl, adminToken });
+    resolveSpec = withAdminOpsEnv(resolveSpec, { a8sUrl, adminToken });
     resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl, adminToken });
   }
 
