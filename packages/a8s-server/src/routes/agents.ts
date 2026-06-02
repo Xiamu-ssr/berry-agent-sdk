@@ -118,6 +118,14 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
     proxyRoute(deps, 'GET', '/v1/agents/:agentId/context-size'),
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/pause'),
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/interject'),
+
+    // ---- Session write ops (D-sessions): same transparent proxy ----
+    // Read side (list, events, stream) lives in sessions.ts; these mutate.
+    proxyRoute(deps, 'POST', '/v1/agents/:agentId/sessions'),
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/sessions/:sessionId'),
+    proxyRoute(deps, 'DELETE', '/v1/agents/:agentId/sessions/:sessionId'),
+    proxyRoute(deps, 'POST', '/v1/agents/:agentId/sessions/:sessionId/clear'),
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/sessions/:sessionId/todos'),
   ];
 }
 

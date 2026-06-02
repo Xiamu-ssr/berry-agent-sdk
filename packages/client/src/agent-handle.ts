@@ -62,6 +62,13 @@ export class AgentHandle {
     return this.client.listSessionEvents(this.agentId, sessionId, opts);
   }
 
+  // ----- Session write ops (D-sessions, agentId bound) -----
+  createSession() { return this.client.createSession(this.agentId); }
+  getSession(sessionId: string) { return this.client.getSession(this.agentId, sessionId); }
+  deleteSession(sessionId: string) { return this.client.deleteSession(this.agentId, sessionId); }
+  clearSession(sessionId: string) { return this.client.clearSession(this.agentId, sessionId); }
+  getSessionTodos(sessionId: string) { return this.client.getSessionTodos(this.agentId, sessionId); }
+
   // ----- Config & introspection (delegate to the client, agentId bound) -----
 
   readHome(doc: AgentHomeDoc) { return this.client.readAgentHome(this.agentId, doc); }

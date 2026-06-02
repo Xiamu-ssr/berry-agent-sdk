@@ -22,6 +22,11 @@ import {
   operatorWorkerListResponseSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
+  sessionCreateResponseSchema,
+  sessionViewResponseSchema,
+  sessionDeleteResponseSchema,
+  sessionClearResponseSchema,
+  sessionTodosResponseSchema,
   SSE_LAST_EVENT_ID_HEADER,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
@@ -504,6 +509,89 @@ describe('a8s-server + worker-daemon E2E', () => {
       .filter((e) => (e as { type: string }).type === 'metadata')
       .map((e) => (e as { value: number }).value);
     expect(seqValues).toEqual([0, 1, 2, 3, 4, 5, 6]);
+
+    await reg.withdraw(true);
+    await daemon.stop();
+    await worker.dispose();
+    await a8s.stop();
+  });
+
+  it('session write ops (create/get/clear/delete/todos) round-trip through a8s → worker', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({ port: a8sPort, controlPlane: { orchestrator } });
+    const a8sInfo = await a8s.start();
+
+    const root = mkdtempSync(join(tmpdir(), 'wd-sesswrite-'));
+    const wPort = await pickPort();
+    const env = makeTestWorkerEnv(root);
+    const worker = new Worker<TestEntry>({ env });
+    const daemon = new WorkerDaemon<TestEntry>({
+      worker,
+      workerId: 'wd-sesswrite',
+      port: wPort,
+      bindHost: '127.0.0.1',
+      resolveSpec: (wire) => ({
+        agentId: wire.agentId,
+        workspace: wire.workspace,
+        home: new AgentHome(wire.workspace),
+        projectRoot: wire.projectRoot,
+        model: wire.model,
+        ensureDefaultMcpConfig: false,
+      }),
+    });
+    const dInfo = await daemon.start();
+    const reg = new WorkerRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      workerId: 'wd-sesswrite',
+      callbackUrl: dInfo.callbackUrl,
+      capacity: 4,
+      heartbeatTtlMs: 30_000,
+    });
+    const regResult = await reg.register();
+    daemon.setAuthToken(regResult.workerToken);
+
+    const agentWorkspace = mkdtempSync(join(tmpdir(), 'wd-sesswrite-agent-'));
+    await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: { agentId: 'a-sw', workspace: agentWorkspace, model: 'tier:strong', ensureDefaultMcpConfig: false },
+        entry: { tag: 'sw' },
+      })),
+    });
+
+    // ---- Create a session via a8s ----
+    const createResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessions('a-sw')}`, { method: 'POST' });
+    expect(createResp.status).toBe(200);
+    const created = sessionCreateResponseSchema.parse(await createResp.json());
+    const sid = created.session.id;
+    expect(sid).toBeTruthy();
+
+    // ---- Get that one full view ----
+    const getResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSession('a-sw', sid)}`);
+    expect(getResp.status).toBe(200);
+    const got = sessionViewResponseSchema.parse(await getResp.json());
+    expect(got.session?.id).toBe(sid);
+
+    // ---- Todos (empty for a fresh session) ----
+    const todosResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessionTodos('a-sw', sid)}`);
+    expect(todosResp.status).toBe(200);
+    const todos = sessionTodosResponseSchema.parse(await todosResp.json());
+    expect(Array.isArray(todos.todos)).toBe(true);
+
+    // ---- Clear: returns the (possibly fresh) view ----
+    const clearResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessionClear('a-sw', sid)}`, { method: 'POST' });
+    expect(clearResp.status).toBe(200);
+    const cleared = sessionClearResponseSchema.parse(await clearResp.json());
+    expect(cleared.sessionId).toBeTruthy();
+
+    // ---- Delete ----
+    const delTarget = cleared.sessionId;
+    const delResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSession('a-sw', delTarget)}`, { method: 'DELETE' });
+    expect(delResp.status).toBe(200);
+    const deleted = sessionDeleteResponseSchema.parse(await delResp.json());
+    expect(deleted.sessionId).toBe(delTarget);
 
     await reg.withdraw(true);
     await daemon.stop();

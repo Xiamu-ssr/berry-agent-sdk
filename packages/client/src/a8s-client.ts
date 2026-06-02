@@ -40,6 +40,11 @@ import {
   sendResponseSchema,
   sessionEventsResponseSchema,
   sessionListResponseSchema,
+  sessionCreateResponseSchema,
+  sessionViewResponseSchema,
+  sessionDeleteResponseSchema,
+  sessionClearResponseSchema,
+  sessionTodosResponseSchema,
   agentHomeReadResponseSchema,
   agentHomeWriteResponseSchema,
   agentSpecPatchResponseSchema,
@@ -77,6 +82,11 @@ import {
   type SendResponse,
   type SessionEventsResponse,
   type SessionListResponse,
+  type SessionCreateResponse,
+  type SessionViewResponse,
+  type SessionDeleteResponse,
+  type SessionClearResponse,
+  type SessionTodosResponse,
 } from '@berry-agent/cluster-protocol';
 
 export interface A8sClientOptions {
@@ -226,6 +236,33 @@ export class A8sClient {
     const qs = q.toString();
     const path = A8S_PATHS.agentSessionEvents(agentId, sessionId) + (qs ? `?${qs}` : '');
     return this.request('GET', path, sessionEventsResponseSchema);
+  }
+
+  // ----- Session write ops (D-sessions, proxied to the worker) -----
+
+  /** Create a fresh session; returns its full view. */
+  createSession(agentId: string): Promise<SessionCreateResponse> {
+    return this.request('POST', A8S_PATHS.agentSessions(agentId), sessionCreateResponseSchema, {});
+  }
+
+  /** Load one session's full view (with rendered messages); null if absent. */
+  getSession(agentId: string, sessionId: string): Promise<SessionViewResponse> {
+    return this.request('GET', A8S_PATHS.agentSession(agentId, sessionId), sessionViewResponseSchema);
+  }
+
+  /** Delete a session; reports whether it was the active one. */
+  deleteSession(agentId: string, sessionId: string): Promise<SessionDeleteResponse> {
+    return this.request('DELETE', A8S_PATHS.agentSession(agentId, sessionId), sessionDeleteResponseSchema);
+  }
+
+  /** Clear a session's history; returns the (possibly fresh) view. */
+  clearSession(agentId: string, sessionId: string): Promise<SessionClearResponse> {
+    return this.request('POST', A8S_PATHS.agentSessionClear(agentId, sessionId), sessionClearResponseSchema, {});
+  }
+
+  /** Read a session's todo items. */
+  getSessionTodos(agentId: string, sessionId: string): Promise<SessionTodosResponse> {
+    return this.request('GET', A8S_PATHS.agentSessionTodos(agentId, sessionId), sessionTodosResponseSchema);
   }
 
   // ----- Agent configuration & introspection (proxied to the worker) -----

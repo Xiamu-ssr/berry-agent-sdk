@@ -26,6 +26,12 @@ import {
   sessionEventsResponseSchema,
   sessionListResponseSchema,
   sessionSummarySchema,
+  agentSessionViewSchema,
+  sessionCreateResponseSchema,
+  sessionViewResponseSchema,
+  sessionDeleteResponseSchema,
+  sessionClearResponseSchema,
+  sessionTodosResponseSchema,
   workerCapacityResponseSchema,
   workerHasAgentResponseSchema,
   workerRunAgentRequestSchema,
@@ -171,7 +177,7 @@ export class WorkerDaemon<TEntry = unknown> {
       return this.handleEventStream(decodeURIComponent(streamMatch[1]), req, res);
     }
 
-    // /agents/:id/sessions  &  /agents/:id/sessions/:sid/events
+    // /agents/:id/sessions  &  /agents/:id/sessions/:sid/{events,clear,todos}  &  /agents/:id/sessions/:sid
     const sessionEventsMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)\/events(?:\?.*)?$/);
     if (sessionEventsMatch && req.method === 'GET') {
       return this.handleSessionEvents(
@@ -181,9 +187,28 @@ export class WorkerDaemon<TEntry = unknown> {
         res,
       );
     }
+    const sessionClearMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)\/clear$/);
+    if (sessionClearMatch && req.method === 'POST') {
+      return this.handleSessionClear(decodeURIComponent(sessionClearMatch[1]), decodeURIComponent(sessionClearMatch[2]), res);
+    }
+    const sessionTodosMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)\/todos(?:\?.*)?$/);
+    if (sessionTodosMatch && req.method === 'GET') {
+      return this.handleSessionTodos(decodeURIComponent(sessionTodosMatch[1]), decodeURIComponent(sessionTodosMatch[2]), res);
+    }
+    // /agents/:id/sessions/:sid  — GET one full view, DELETE remove
+    const sessionOneMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)(?:\?.*)?$/);
+    if (sessionOneMatch) {
+      const aId = decodeURIComponent(sessionOneMatch[1]);
+      const sId = decodeURIComponent(sessionOneMatch[2]);
+      if (req.method === 'GET') return this.handleSessionView(aId, sId, req, res);
+      if (req.method === 'DELETE') return this.handleSessionDelete(aId, sId, res);
+    }
     const sessionListMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions(?:\?.*)?$/);
     if (sessionListMatch && req.method === 'GET') {
       return this.handleSessionList(decodeURIComponent(sessionListMatch[1]), res);
+    }
+    if (sessionListMatch && req.method === 'POST') {
+      return this.handleSessionCreate(decodeURIComponent(sessionListMatch[1]), res);
     }
 
     // /agents/:id/{run,stop,send,active-session,has}
@@ -412,6 +437,69 @@ export class WorkerDaemon<TEntry = unknown> {
       messageCount: v.messages.length,
     }));
     writeJson(res, 200, sessionListResponseSchema.parse({ sessions }));
+  }
+
+  // ----- Session write ops (D-sessions). Delegate to mount.runtime (same
+  // object AgentSession wraps). a8s proxies these verbatim. -----
+
+  /** Map a full AgentSessionView → the opaque wire shape. */
+  private toSessionViewWire(v: {
+    id: string; title?: string; createdAt: number; lastActiveAt: number;
+    agentId?: string; status: string; messages: unknown[];
+  }): unknown {
+    return agentSessionViewSchema.parse({
+      id: v.id,
+      title: v.title,
+      createdAt: v.createdAt,
+      lastActiveAt: v.lastActiveAt,
+      agentId: v.agentId,
+      status: v.status,
+      messages: v.messages as Record<string, unknown>[],
+    });
+  }
+
+  private async handleSessionCreate(agentId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const view = await mount.runtime.createSession();
+    writeJson(res, 200, sessionCreateResponseSchema.parse({ session: this.toSessionViewWire(view) }));
+  }
+
+  private async handleSessionView(
+    agentId: string, sessionId: string, req: IncomingMessage, res: ServerResponse,
+  ): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const view = await mount.runtime.loadSessionView(sessionId);
+    writeJson(res, 200, sessionViewResponseSchema.parse({
+      session: view ? this.toSessionViewWire(view) : null,
+    }));
+  }
+
+  private async handleSessionDelete(agentId: string, sessionId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const result = await mount.runtime.deleteSession(sessionId);
+    writeJson(res, 200, sessionDeleteResponseSchema.parse({
+      sessionId: result.sessionId, wasActive: result.wasActive,
+    }));
+  }
+
+  private async handleSessionClear(agentId: string, sessionId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const result = await mount.runtime.clearSession(sessionId);
+    writeJson(res, 200, sessionClearResponseSchema.parse({
+      sessionId: result.sessionId,
+      session: result.view ? this.toSessionViewWire(result.view) : null,
+    }));
+  }
+
+  private async handleSessionTodos(agentId: string, sessionId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const todos = await mount.runtime.getTodos(sessionId);
+    writeJson(res, 200, sessionTodosResponseSchema.parse({ todos }));
   }
 
   private async handleSessionEvents(

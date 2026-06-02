@@ -492,6 +492,62 @@ export const agentInterjectResponseSchema = z.object({
 }).strict();
 export type AgentInterjectResponse = z.infer<typeof agentInterjectResponseSchema>;
 
+// ----- Session write operations (product → a8s → worker) -----
+// The read side (list sessions, page events) already exists above. These
+// are the mutating ops: create/delete/clear a session, load one full view,
+// read its todos. All map 1:1 to ManagedAgentRuntime methods (the same
+// object AgentSession wraps in-process). A full session view carries the
+// rendered message timeline, which is a rich SDK shape — kept opaque here
+// (z.record) exactly like raw session events, so the protocol stays thin.
+
+/** One rendered session view (id + metadata + opaque messages). */
+export const agentSessionViewSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().optional(),
+  createdAt: z.number().int().nonnegative(),
+  lastActiveAt: z.number().int().nonnegative(),
+  agentId: z.string().optional(),
+  status: z.string(),
+  /** Rendered message timeline — opaque SDK shape (AgentChatMessage[]). */
+  messages: z.array(z.record(z.unknown())),
+}).strict();
+export type AgentSessionViewWire = z.infer<typeof agentSessionViewSchema>;
+
+/** POST .../sessions → create a fresh session, returns its view. */
+export const sessionCreateResponseSchema = z.object({
+  session: agentSessionViewSchema,
+}).strict();
+export type SessionCreateResponse = z.infer<typeof sessionCreateResponseSchema>;
+
+/** GET .../sessions/:id → one full view, or null if absent. */
+export const sessionViewResponseSchema = z.object({
+  session: agentSessionViewSchema.nullable(),
+}).strict();
+export type SessionViewResponse = z.infer<typeof sessionViewResponseSchema>;
+
+/** DELETE .../sessions/:id → removed; flags whether it was the active one. */
+export const sessionDeleteResponseSchema = z.object({
+  sessionId: z.string(),
+  wasActive: z.boolean(),
+}).strict();
+export type SessionDeleteResponse = z.infer<typeof sessionDeleteResponseSchema>;
+
+/** POST .../sessions/:id/clear → cleared; returns the (possibly fresh) view. */
+export const sessionClearResponseSchema = z.object({
+  sessionId: z.string(),
+  session: agentSessionViewSchema.nullable(),
+}).strict();
+export type SessionClearResponse = z.infer<typeof sessionClearResponseSchema>;
+
+/** GET .../sessions/:id/todos → the session's todo items. */
+export const sessionTodosResponseSchema = z.object({
+  todos: z.array(z.object({
+    text: z.string(),
+    done: z.boolean().optional(),
+  }).strict()),
+}).strict();
+export type SessionTodosResponse = z.infer<typeof sessionTodosResponseSchema>;
+
 // ============================================================
 // Worker-side endpoints (a8s → worker)
 // ============================================================
@@ -893,6 +949,12 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
   agentSessionEvents: (agentId: string, sessionId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+  agentSession: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`,
+  agentSessionClear: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/clear`,
+  agentSessionTodos: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/todos`,
   agentEventsStream: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   agentHomeDoc: (agentId: string, doc: string) =>
@@ -945,6 +1007,12 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions`,
   agentSessionEvents: (agentId: string, sessionId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+  agentSession: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`,
+  agentSessionClear: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/clear`,
+  agentSessionTodos: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/todos`,
   agentEventsStream: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/events/stream`,
   hasAgent: (agentId: string) =>
