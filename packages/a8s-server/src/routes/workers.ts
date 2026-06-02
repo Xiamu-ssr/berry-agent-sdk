@@ -55,16 +55,17 @@ export function workerRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
         if (!refreshed) {
           throw httpError(410, 'worker_evicted', `worker ${params.workerId} has been evicted; please re-register`);
         }
-        // Renew the leases of agents this worker is actually running. Only the
-        // holder can renew (orchestrator enforces), so this keeps "brain alive
-        // ⇒ lease alive" true — an idle agent under a live worker no longer
-        // lets its lease lapse. Re-bind the in-memory assignment too in case a
-        // restart wiped the cache while the lease was still live.
+        // Converge the leases of agents this worker is actually running.
+        // renew-if-held / acquire-if-absent (revives an expired lease, e.g. an
+        // idle agent recovered from disk after a restart) / skip-if-conflict.
+        // Same helper as registration → one source of truth.
         for (const agentId of parsed.mountedAgents ?? []) {
-          const lease = await deps.plane.orchestrator.renewAgentLease(
-            agentId, params.workerId, entry.heartbeatTtlMs,
-          );
-          if (lease) deps.plane.bindAssignment(agentId, params.workerId);
+          const outcome = await convergeMountedAgent(deps, agentId, params.workerId, entry.heartbeatTtlMs);
+          if (typeof outcome === 'object') {
+            deps.logger.warn?.(
+              `[a8s-server] worker ${params.workerId} heartbeats mount of ${agentId} but lease is held by ${outcome.conflict}; keeping holder`,
+            );
+          }
         }
         writeJson(res, 200, workerHeartbeatResponseSchema.parse({
           ok: true,
@@ -244,25 +245,17 @@ async function handleRegister<TEntry>(
     );
   }
 
-  // Reverse convergence — see Sprint A commit message for the full
-  // story. Mounted agents the orch doesn't know about get fresh leases.
+  // Reverse convergence — mounted agents the orch doesn't already credit to
+  // this worker get their lease renewed or (re)acquired via the shared
+  // converge helper. Same logic the heartbeat uses.
   const reconciled: string[] = [];
   const conflicts: Array<{ agentId: string; existingHolder: string }> = [];
   for (const agentId of parsed.mountedAgents) {
     if (hydrated.restored.some((r) => r.agentId === agentId && r.workerId === parsed.workerId)) continue;
-    const acquired = await deps.plane.orchestrator.acquireLease({
-      agentId,
-      holderId: parsed.workerId,
-      workerId: parsed.workerId,
-      ttlMs: 5 * 60_000,
-    });
-    if (acquired.acquired) {
-      deps.plane.bindAssignment(agentId, parsed.workerId);
-      reconciled.push(agentId);
-    } else if (acquired.active.workerId !== parsed.workerId) {
-      conflicts.push({ agentId, existingHolder: acquired.active.workerId ?? acquired.active.holderId });
+    const outcome = await convergeMountedAgent(deps, agentId, parsed.workerId, 5 * 60_000);
+    if (typeof outcome === 'object') {
+      conflicts.push({ agentId, existingHolder: outcome.conflict });
     } else {
-      deps.plane.bindAssignment(agentId, parsed.workerId);
       reconciled.push(agentId);
     }
   }
@@ -300,6 +293,38 @@ async function handleRegister<TEntry>(
     workerToken: token,
     ownedAgents,
   }));
+}
+
+/**
+ * Converge one agent the worker reports as mounted onto the durable lease
+ * table. Single source of truth for both register and heartbeat:
+ *   - lease held by this worker → renew its TTL (keeps it alive while running)
+ *   - no active lease → acquire one (revives an expired/absent lease, e.g.
+ *     an idle agent recovered from disk after a restart past the TTL)
+ *   - lease held by someone else → conflict; leave the real holder alone
+ * Returns the outcome so callers can log / build ownedAgents.
+ */
+async function convergeMountedAgent<TEntry>(
+  deps: ServerDeps<TEntry>,
+  agentId: string,
+  workerId: string,
+  ttlMs: number,
+): Promise<'renewed' | 'acquired' | { conflict: string }> {
+  const renewed = await deps.plane.orchestrator.renewAgentLease(agentId, workerId, ttlMs);
+  if (renewed) {
+    deps.plane.bindAssignment(agentId, workerId);
+    return 'renewed';
+  }
+  const acquired = await deps.plane.orchestrator.acquireLease({ agentId, holderId: workerId, workerId, ttlMs });
+  if (acquired.acquired) {
+    deps.plane.bindAssignment(agentId, workerId);
+    return 'acquired';
+  }
+  if (acquired.active.workerId === workerId) {
+    deps.plane.bindAssignment(agentId, workerId);
+    return 'renewed';
+  }
+  return { conflict: acquired.active.workerId ?? acquired.active.holderId };
 }
 
 async function handleJoinScript<TEntry>(

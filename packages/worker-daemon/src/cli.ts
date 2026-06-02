@@ -15,7 +15,7 @@
 // in this package's docs/ for the schema.
 
 import { parseArgs } from 'node:util';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -394,6 +394,39 @@ async function main(argv: string[]): Promise<number> {
           `   ✗ ${agentId}: ${err instanceof Error ? err.message : String(err)}\n`,
         );
       }
+    }
+  }
+
+  // ---- Recover agents whose lease expired before we restarted ----
+  // a8s's ownedAgents only lists agents with a still-active lease. If a8s +
+  // this worker were both down past the lease TTL, an idle agent's lease
+  // expired and a8s no longer knows we own it — but its home is still on
+  // disk. Scan agentsRoot and re-mount any agent.json-bearing dir we didn't
+  // already rehydrate, then let the heartbeat self-report it: a8s reconciles
+  // via acquireLease, which safely revives the expired lease (and fails if
+  // another worker legitimately took over — so no double-mount). This closes
+  // the restart-deadlock for idle agents.
+  if (existsSync(agentsRoot)) {
+    const alreadyMounted = new Set(worker.ids());
+    let recovered = 0;
+    for (const entry of readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || alreadyMounted.has(entry.name)) continue;
+      const home = new AgentHome(join(agentsRoot, entry.name));
+      if (!existsSync(home.metadataPath)) continue;
+      try {
+        const spec = await loadAgentSpecFromDisk(entry.name, agentsRoot);
+        if (worker.supervisor()) await worker.runAgent(entry.name, {}, spec);
+        else worker.runAgentSync(entry.name, {}, spec);
+        recovered++;
+        process.stdout.write(`   ↻ recovered ${entry.name} (lease expired while down)\n`);
+      } catch (err) {
+        process.stderr.write(
+          `   ✗ recover ${entry.name}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    if (recovered > 0) {
+      process.stdout.write(`🧬 recovered ${recovered} agent(s) from disk scan; heartbeat will reconcile their leases\n`);
     }
   }
 
