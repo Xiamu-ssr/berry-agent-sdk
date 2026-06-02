@@ -4,11 +4,11 @@
 //
 // Usage:
 //   import { createManagedRuntime } from '@berry-agent/runtime';
-//   import { createLocalWorkspaceHand } from '@berry-agent/tools-common';
 //
 //   const { runtime } = createManagedRuntime({
 //     // ...workspace, home, registry, credentials, model
-//     localWorkspace: { /* options */ },
+//     workspaceTools: { /* options */ },  // file/shell/search (env-bound)
+//     webTools: true,                     // web_fetch/web_search (env-less)
 //   });
 
 export { createFileTools } from './file.js';
@@ -24,12 +24,14 @@ export { createWebSearchTool } from './web-search.js';
 export type { SearchProvider, SearchResult, WebSearchConfig, WebSearchProviderName, CredentialKeyMeta } from './web-search.js';
 export { WEB_SEARCH_CREDENTIAL_KEYS, WEB_SEARCH_CREDENTIAL_META } from './web-search.js';
 export {
-  createLocalWorkspaceHand,
+  createWorkspaceToolsHand,
   createSandboxExecutionEnvironment,
   createSandboxExecutionEnvironmentProvider,
   createSandboxedShellOptions,
 } from './workspace-hand.js';
-export type { LocalWorkspaceHandOptions, LocalWorkspaceSandboxOptions } from './workspace-hand.js';
+export type { WorkspaceToolsHandOptions, LocalWorkspaceSandboxOptions } from './workspace-hand.js';
+export { createWebHand } from './web-hand.js';
+export type { WebHandOptions } from './web-hand.js';
 
 // Container / remote runners — alternative ExecutionEnvironment implementations
 // for hosts that want to move command execution off the local machine.

@@ -55,9 +55,10 @@ export function buildAgentRuntime(
     promptPackDir: env.promptPacksDir,
     toolDenylist: spec.toolDenylist ?? [],
     executionEnvironmentProvider,
-    localWorkspace: spec.localWorkspace === false
+    workspaceTools: spec.workspaceTools === false
       ? false
-      : { allowedTools: spec.localWorkspace?.allowedTools },
+      : { allowedTools: spec.workspaceTools?.allowedTools },
+    webTools: spec.webTools === false ? false : { allowedTools: spec.webTools?.allowedTools },
     hostHand: spec.hostTools && spec.hostTools.length > 0
       ? {
           id: 'worker-host',

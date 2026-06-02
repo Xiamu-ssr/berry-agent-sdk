@@ -40,7 +40,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
     });
     const runtime = built.runtime;
 
@@ -61,7 +62,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       mcp: { ensureDefaultConfig: true },
     }).runtime;
 
@@ -79,7 +81,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       executionEnvironment: createExecutionEnvironment({
         id: 'remote-worker',
         kind: 'remote',
@@ -114,7 +117,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       executionEnvironmentLifetime: 'runtime',
       executionEnvironment: createExecutionEnvironment({
         id: 'owned-worker',
@@ -139,7 +143,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       executionEnvironmentProvider: {
         provision: (request) => {
           seen.push(request.agentId, request.binding.workspace, request.binding.cwd);
@@ -169,7 +174,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       executionEnvironmentProvider: {
         provision: async () => createExecutionEnvironment({
           id: 'remote-a',
@@ -192,7 +198,8 @@ describe('createManagedRuntime', () => {
       registry,
       credentials: new MemoryCredentialStore(),
       model: 'gpt-test',
-      localWorkspace: false,
+      workspaceTools: false,
+      webTools: false,
       executionEnvironmentProvider: {
         provision: async () => createExecutionEnvironment({
           id: 'remote-b',

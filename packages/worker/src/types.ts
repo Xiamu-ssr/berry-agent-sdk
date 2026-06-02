@@ -40,8 +40,10 @@ export interface WorkerAgentSpec {
   /** Tool names refused for this agent regardless of safety guard. */
   toolDenylist?: string[];
 
-  /** Local workspace hand options forwarded to the SDK runtime builder. */
-  localWorkspace?: { allowedTools?: string[] } | false;
+  /** Workspace tools hand (file/shell/search, env-bound) options forwarded to the SDK runtime builder. */
+  workspaceTools?: { allowedTools?: string[] } | false;
+  /** Web tools hand (web_fetch/web_search, env-less). `false` disables it. */
+  webTools?: { allowedTools?: string[] } | false;
   /** Host-supplied introspection / control tools mounted as a hand. */
   hostTools?: readonly ToolRegistration[];
   /** Host-supplied display name for the host hand. */

@@ -30,7 +30,7 @@ import type {
   SafeNamespaceConfig,
   SafetyLevel,
 } from '@berry-agent/safe';
-import type { LocalWorkspaceHandOptions } from '@berry-agent/tools-common';
+import type { WorkspaceToolsHandOptions } from '@berry-agent/tools-common';
 import {
   buildManagedRuntimeAsync,
   buildManagedRuntimeSync,
@@ -125,7 +125,17 @@ export interface ManagedRuntimeBuildOptions {
    * environments or the SDK-created default.
    */
   executionEnvironmentLifetime?: 'host' | 'runtime';
-  localWorkspace?: false | Omit<LocalWorkspaceHandOptions, 'scope' | 'credentials' | 'environment' | 'sandbox'>;
+  /**
+   * Workspace tools hand: file / edit / shell / search, bound to the
+   * resolved execution environment's executor. `false` disables it (e.g. a
+   * pure-API agent). Default: enabled, using the SDK OS sandbox.
+   */
+  workspaceTools?: false | Omit<WorkspaceToolsHandOptions, 'scope' | 'environment' | 'sandbox'>;
+  /**
+   * Web hand: web_fetch / web_search. Env-less (no executor) — kept even
+   * when no machine is reachable. `false` disables it. Default: enabled.
+   */
+  webTools?: false | { allowedTools?: string[] };
   hostHand?: false | ManagedRuntimeHostHandOptions;
   mcp?: false | ManagedRuntimeMcpOptions;
   /** SDK-owned capability policy applied to local, host, MCP, and environment hands. */

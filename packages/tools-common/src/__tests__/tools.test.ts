@@ -11,7 +11,7 @@ import {
   type CredentialStore,
   type ProcessHandle,
 } from '@berry-agent/core';
-import { createFileTools, createShellTool, createShellTools, createSearchTools, createEditFileTool, createWebFetchTool, createWebSearchTool, createLocalWorkspaceHand, createSandboxedShellOptions } from '../index.js';
+import { createFileTools, createShellTool, createShellTools, createSearchTools, createEditFileTool, createWebFetchTool, createWebSearchTool, createWorkspaceToolsHand, createWebHand, createSandboxedShellOptions } from '../index.js';
 import { NodeExecutor } from '../executor.js';
 
 let tmpDir: string;
@@ -464,34 +464,30 @@ describe('web_search tool', () => {
   });
 });
 
-describe('createLocalWorkspaceHand', () => {
-  const emptyCredentials: CredentialStore = { get: () => undefined };
-
-  it('wraps local workspace tools and web tools as one hand', () => {
-    const hand = createLocalWorkspaceHand({
+describe('createWorkspaceToolsHand', () => {
+  it('bundles only kitchen-bound tools (file/shell/search), no web', () => {
+    const hand = createWorkspaceToolsHand({
       scope: new AgentScope(tmpDir),
-      credentials: emptyCredentials,
     });
     const names = hand.capabilities().map((capability) => capability.definition.name);
 
-    expect(hand.id).toBe('local-workspace');
+    expect(hand.id).toBe('workspace');
     expect(names).toContain('read_file');
     expect(names).toContain('shell');
-    expect(names).toContain('web_fetch');
-    expect(names).toContain('web_search');
+    // web tools are NOT here — they belong to the env-less web hand.
+    expect(names).not.toContain('web_fetch');
+    expect(names).not.toContain('web_search');
   });
 
   it('filters by tool group or explicit tool name', () => {
-    const hand = createLocalWorkspaceHand({
+    const hand = createWorkspaceToolsHand({
       scope: new AgentScope(tmpDir),
-      credentials: emptyCredentials,
-      allowedTools: ['file', 'web_fetch'],
+      allowedTools: ['file'],
     });
     const names = hand.capabilities().map((capability) => capability.definition.name);
 
-    expect(names).toEqual(expect.arrayContaining(['read_file', 'write_file', 'list_files', 'web_fetch']));
+    expect(names).toEqual(expect.arrayContaining(['read_file', 'write_file', 'list_files']));
     expect(names).not.toContain('shell');
-    expect(names).not.toContain('web_search');
   });
 
   it('can derive sandbox shell options from the scope', () => {
@@ -509,9 +505,8 @@ describe('createLocalWorkspaceHand', () => {
       spawn: () => ({ pid: undefined } as ProcessHandle),
     };
     const scope = new AgentScope(tmpDir);
-    const hand = createLocalWorkspaceHand({
+    const hand = createWorkspaceToolsHand({
       scope,
-      credentials: emptyCredentials,
       allowedTools: ['shell'],
       environment: createExecutionEnvironment({
         id: 'container-a',
@@ -525,5 +520,27 @@ describe('createLocalWorkspaceHand', () => {
 
     expect(result.content).toBe('from environment');
     expect(calls).toEqual([{ command: 'pwd', cwd: scope.projectDir }]);
+  });
+});
+
+describe('createWebHand', () => {
+  const emptyCredentials: CredentialStore = { get: () => undefined };
+
+  it('bundles only web tools, no kitchen-bound tools, no executor', () => {
+    const hand = createWebHand({ credentials: emptyCredentials });
+    const names = hand.capabilities().map((capability) => capability.definition.name);
+
+    expect(hand.id).toBe('web');
+    expect(names).toContain('web_fetch');
+    expect(names).toContain('web_search');
+    expect(names).not.toContain('shell');
+    expect(names).not.toContain('read_file');
+  });
+
+  it('filters by explicit tool name', () => {
+    const hand = createWebHand({ credentials: emptyCredentials, allowedTools: ['web_fetch'] });
+    const names = hand.capabilities().map((capability) => capability.definition.name);
+
+    expect(names).toEqual(['web_fetch']);
   });
 });

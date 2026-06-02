@@ -33,7 +33,8 @@ import {
   type ManagedToolGuardOptions,
 } from '@berry-agent/safe';
 import {
-  createLocalWorkspaceHand,
+  createWorkspaceToolsHand,
+  createWebHand,
   createSandboxExecutionEnvironment,
 } from '@berry-agent/tools-common';
 import type {
@@ -168,14 +169,30 @@ function buildHands(
 ): Hand[] {
   const hands: Hand[] = [];
 
+  // Env-provisioned extra hands (e.g. a remote browser, a remote file
+  // bridge). These are the environment's *own* additional capabilities,
+  // distinct from the workspace tools below. Most envs supply none.
   hands.push(...(executionEnvironment?.createHands?.(scope) ?? []));
 
-  if (options.localWorkspace !== false) {
-    hands.push(createLocalWorkspaceHand({
+  // Workspace tools (file/shell/search) are bound to the resolved execution
+  // environment's executor — the same shape a remote machine's exec hand
+  // has, just for the primary/local env. The brain doesn't know which pipe
+  // sits behind `shell`. This is the single, machine-agnostic assembly path
+  // (新-1: localWorkspace's special-case branch is gone).
+  if (options.workspaceTools !== false) {
+    hands.push(createWorkspaceToolsHand({
       scope,
-      credentials: options.credentials,
       environment: executionEnvironment,
-      ...(options.localWorkspace ?? {}),
+      ...(options.workspaceTools ?? {}),
+    }));
+  }
+
+  // Web tools are env-less: outbound HTTP, no executor, agent-level. Kept
+  // even when no machine is reachable. Never packed with workspace tools.
+  if (options.webTools !== false) {
+    hands.push(createWebHand({
+      credentials: options.credentials,
+      ...(options.webTools ?? {}),
     }));
   }
 
@@ -231,7 +248,7 @@ function resolveDirectExecutionEnvironment(options: ManagedRuntimeBuildOptions):
   if (options.executionEnvironmentProvider) {
     return { kind: 'provider', provider: options.executionEnvironmentProvider };
   }
-  if (options.localWorkspace === false) return { kind: 'value', value: undefined };
+  if (options.workspaceTools === false) return { kind: 'value', value: undefined };
   return { kind: 'value', value: createSandboxExecutionEnvironment({ logger: options.logger ?? console }) };
 }
 
@@ -252,7 +269,7 @@ function shouldRuntimeOwnExecutionEnvironment(options: ManagedRuntimeBuildOption
   if (options.executionEnvironmentLifetime) return options.executionEnvironmentLifetime === 'runtime';
   if (options.executionEnvironment) return false;
   if (options.executionEnvironmentProvider) return true;
-  return options.localWorkspace !== false;
+  return options.workspaceTools !== false;
 }
 
 function buildSafetyClassifier(options: ManagedRuntimeBuildOptions): ManagedToolGuardOptions['classifier'] {

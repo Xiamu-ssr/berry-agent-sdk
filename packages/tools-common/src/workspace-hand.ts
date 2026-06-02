@@ -1,9 +1,17 @@
 // ============================================================
-// Berry Agent SDK — Local Workspace Hand Factory
+// Berry Agent SDK — Workspace Tools Hand + Sandbox Environment
 // ============================================================
-// Builds the common local hand used by host products: file/edit/shell/search
-// plus web_fetch/web_search. Hosts still choose the AgentScope, sandboxed
-// shell executor, credentials, and allowed tool surface.
+// The workspace tools hand bundles the capabilities that *land on a
+// machine's filesystem*: file, edit, shell, search. Its executor comes
+// from an ExecutionEnvironment (local OS sandbox by default; a container /
+// remote / polling env when the host supplies one). This is the brain's
+// primary work hand — the same shape a remote machine's exec hand has
+// (env's executor → workspace tools), just built for the local/primary env.
+//
+// Web tools (web_fetch / web_search) are NOT here — they touch no machine,
+// hold no executor, and are an agent-level env-less hand (see web-hand.ts).
+// Keeping them apart is the 新-1 fix: "needs a kitchen" vs "needs no
+// kitchen" must not be packed into one hand.
 
 import {
   AgentScope,
@@ -19,20 +27,13 @@ import {
 import { createSandbox } from '@berry-agent/safe';
 import { createLocalToolRegistrations } from './local-tools.js';
 import type { ShellToolOptions } from './shell.js';
-import {
-  createWebSearchTool,
-  WEB_SEARCH_CREDENTIAL_KEYS,
-  type WebSearchProviderName,
-} from './web-search.js';
-import { createWebFetchTool } from './web-fetch.js';
 
-export interface LocalWorkspaceHandOptions {
+export interface WorkspaceToolsHandOptions {
   scope: AgentScope;
-  credentials: CredentialStore;
   shellOptions?: ShellToolOptions;
   /** Runner boundary for shell/process commands: local, sandbox, container, or remote. */
   environment?: ExecutionEnvironment;
-  /** Tool names or tool groups to expose. Undefined means every local workspace tool. */
+  /** Tool names or tool groups to expose. Undefined means every workspace tool. */
   allowedTools?: string[];
   /** Create the default SDK OS-sandbox execution environment from the AgentScope. */
   sandbox?: boolean | LocalWorkspaceSandboxOptions;
@@ -46,21 +47,20 @@ export interface LocalWorkspaceSandboxOptions {
   platform?: 'macos' | 'linux';
 }
 
-export function createLocalWorkspaceHand(options: LocalWorkspaceHandOptions): Hand {
+/**
+ * Build the workspace tools hand: file / edit / shell / search, all bound
+ * to one execution environment's executor. The brain sees `shell`,
+ * `read_file`, etc. and never knows which pipe (local sandbox / container /
+ * remote machine) sits behind them.
+ */
+export function createWorkspaceToolsHand(options: WorkspaceToolsHandOptions): Hand {
   const shellOptions = resolveShellOptions(options);
-  const tools = [
-    ...createLocalToolRegistrations(options.scope, shellOptions),
-    createWebFetchTool(),
-    createWebSearchTool({
-      provider: pickWebSearchProvider(options.credentials) ?? 'tavily',
-      credentials: options.credentials,
-    }),
-  ];
+  const tools = createLocalToolRegistrations(options.scope, shellOptions);
 
   return createToolRegistrationHand({
-    id: options.id ?? 'local-workspace',
+    id: options.id ?? 'workspace',
     kind: 'local',
-    displayName: options.displayName ?? 'Local workspace',
+    displayName: options.displayName ?? 'Workspace',
     tools: filterTools(tools, options.allowedTools),
   });
 }
@@ -110,7 +110,7 @@ export function createSandboxExecutionEnvironmentProvider(
   };
 }
 
-function resolveShellOptions(options: LocalWorkspaceHandOptions): ShellToolOptions | undefined {
+function resolveShellOptions(options: WorkspaceToolsHandOptions): ShellToolOptions | undefined {
   if (options.shellOptions) return options.shellOptions;
 
   const environmentExecutor = options.environment?.createCommandExecutor?.(options.scope);
@@ -127,15 +127,6 @@ function normalizeSandboxOptions(value: boolean | LocalWorkspaceSandboxOptions):
   return typeof value === 'boolean' ? { enabled: value } : value;
 }
 
-function pickWebSearchProvider(credentials: CredentialStore): WebSearchProviderName | null {
-  const order: WebSearchProviderName[] = ['tavily', 'brave', 'serpapi'];
-  for (const provider of order) {
-    const key = WEB_SEARCH_CREDENTIAL_KEYS[provider];
-    if (credentials.get(key)) return provider;
-  }
-  return null;
-}
-
 function filterTools(tools: ToolRegistration[], allowedTools?: string[]): ToolRegistration[] {
   if (allowedTools === undefined) return tools;
   const groupToNames = new Map<string, string[]>();
@@ -149,3 +140,7 @@ function filterTools(tools: ToolRegistration[], allowedTools?: string[]): ToolRe
   );
   return tools.filter((tool) => allowedToolNames.has(tool.definition.name));
 }
+
+// Re-export for callers that still type against the credential store shape
+// when assembling web hands alongside workspace hands.
+export type { CredentialStore };

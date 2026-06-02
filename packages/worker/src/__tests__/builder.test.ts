@@ -38,10 +38,10 @@ describe('buildAgentRuntime', () => {
     expect(snapshot).toBeDefined();
   });
 
-  it('disables local workspace when localWorkspace=false', () => {
+  it('disables workspace tools when workspaceTools=false', () => {
     const { root } = makeTestWorkerSetup();
     const built = buildAgentRuntime(
-      { ...makeTestAgentSpec('no-local', root), localWorkspace: false },
+      { ...makeTestAgentSpec('no-local', root), workspaceTools: false },
       makeTestWorkerEnv(root),
     );
 
