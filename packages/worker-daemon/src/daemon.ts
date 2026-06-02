@@ -272,6 +272,14 @@ export class WorkerDaemon<TEntry = unknown> {
   private async handleRunAgent(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readJson(req);
     const parsed = workerRunAgentRequestSchema.parse(body);
+    // Idempotent: if the agent is already mounted (e.g. the worker recovered
+    // it from a disk scan on startup, and a8s now also asks us to run it),
+    // the desired end-state — "agent running here" — already holds. Return ok
+    // instead of throwing "already mounted", so the two convergence paths
+    // (worker self-recovery + a8s createAgent) don't race into an error.
+    if (this.worker.has(agentId)) {
+      return writeJson(res, 200, workerRunAgentResponseSchema.parse({ ok: true }));
+    }
     const spec = this.options.resolveSpec({
       agentId,
       workspace: parsed.spec.workspace,
