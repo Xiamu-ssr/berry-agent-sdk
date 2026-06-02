@@ -570,6 +570,21 @@ export const sessionTodosResponseSchema = z.object({
 }).strict();
 export type SessionTodosResponse = z.infer<typeof sessionTodosResponseSchema>;
 
+/** POST .../sessions/:id/events → append one event draft to the log.
+ *  Draft + persisted event are opaque SDK shapes (z.record), like the read
+ *  side. Used by products to record orchestration events (e.g. approval
+ *  request/decision) onto the durable session log on the worker. */
+export const sessionAppendEventRequestSchema = z.object({
+  event: z.record(z.unknown()),
+}).strict();
+export type SessionAppendEventRequest = z.infer<typeof sessionAppendEventRequestSchema>;
+
+export const sessionAppendEventResponseSchema = z.object({
+  /** The persisted event (with id/timestamp), or null if not appended. */
+  event: z.record(z.unknown()).nullable(),
+}).strict();
+export type SessionAppendEventResponse = z.infer<typeof sessionAppendEventResponseSchema>;
+
 // ============================================================
 // Worker-side endpoints (a8s → worker)
 // ============================================================

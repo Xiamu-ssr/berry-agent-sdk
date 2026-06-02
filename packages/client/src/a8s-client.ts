@@ -45,6 +45,7 @@ import {
   sessionDeleteResponseSchema,
   sessionClearResponseSchema,
   sessionTodosResponseSchema,
+  sessionAppendEventResponseSchema,
   agentHomeReadResponseSchema,
   agentHomeWriteResponseSchema,
   agentSpecPatchResponseSchema,
@@ -84,6 +85,7 @@ import {
   type SessionListResponse,
   type SessionCreateResponse,
   type SessionViewResponse,
+  type SessionAppendEventResponse,
   type SessionDeleteResponse,
   type SessionClearResponse,
   type SessionTodosResponse,
@@ -273,9 +275,20 @@ export class A8sClient {
     return this.request('POST', A8S_PATHS.agentSessions(agentId), sessionCreateResponseSchema, {});
   }
 
-  /** Load one session's full view (with rendered messages); null if absent. */
-  getSession(agentId: string, sessionId: string): Promise<SessionViewResponse> {
-    return this.request('GET', A8S_PATHS.agentSession(agentId, sessionId), sessionViewResponseSchema);
+  /** Load one session's full view (with rendered messages); null if absent.
+   *  `activate: false` reads without switching the agent's active session. */
+  getSession(agentId: string, sessionId: string, opts: { activate?: boolean } = {}): Promise<SessionViewResponse> {
+    const path = A8S_PATHS.agentSession(agentId, sessionId)
+      + (opts.activate === false ? '?activate=false' : '');
+    return this.request('GET', path, sessionViewResponseSchema);
+  }
+
+  /** Append an event draft to a session's durable log (e.g. approval
+   *  request/decision). Returns the persisted event, or null. */
+  appendSessionEvent(agentId: string, sessionId: string, event: Record<string, unknown>): Promise<SessionAppendEventResponse> {
+    return this.request(
+      'POST', A8S_PATHS.agentSessionEvents(agentId, sessionId), sessionAppendEventResponseSchema, { event },
+    );
   }
 
   /** Delete a session; reports whether it was the active one. */

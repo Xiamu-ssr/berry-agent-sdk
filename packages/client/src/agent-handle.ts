@@ -65,10 +65,11 @@ export class AgentHandle {
 
   // ----- Session write ops (D-sessions, agentId bound) -----
   createSession() { return this.client.createSession(this.agentId); }
-  getSession(sessionId: string) { return this.client.getSession(this.agentId, sessionId); }
+  getSession(sessionId: string, opts: { activate?: boolean } = {}) { return this.client.getSession(this.agentId, sessionId, opts); }
   deleteSession(sessionId: string) { return this.client.deleteSession(this.agentId, sessionId); }
   clearSession(sessionId: string) { return this.client.clearSession(this.agentId, sessionId); }
   getSessionTodos(sessionId: string) { return this.client.getSessionTodos(this.agentId, sessionId); }
+  appendSessionEvent(sessionId: string, event: Record<string, unknown>) { return this.client.appendSessionEvent(this.agentId, sessionId, event); }
 
   // ----- Config & introspection (delegate to the client, agentId bound) -----
 

@@ -33,6 +33,8 @@ import {
   sessionDeleteResponseSchema,
   sessionClearResponseSchema,
   sessionTodosResponseSchema,
+  sessionAppendEventRequestSchema,
+  sessionAppendEventResponseSchema,
   workerCapacityResponseSchema,
   workerHasAgentResponseSchema,
   workerRunAgentRequestSchema,
@@ -182,6 +184,14 @@ export class WorkerDaemon<TEntry = unknown> {
     const sessionEventsMatch = url.match(/^\/v1\/agents\/([^/]+)\/sessions\/([^/]+)\/events(?:\?.*)?$/);
     if (sessionEventsMatch && req.method === 'GET') {
       return this.handleSessionEvents(
+        decodeURIComponent(sessionEventsMatch[1]),
+        decodeURIComponent(sessionEventsMatch[2]),
+        req,
+        res,
+      );
+    }
+    if (sessionEventsMatch && req.method === 'POST') {
+      return this.handleSessionAppendEvent(
         decodeURIComponent(sessionEventsMatch[1]),
         decodeURIComponent(sessionEventsMatch[2]),
         req,
@@ -509,9 +519,28 @@ export class WorkerDaemon<TEntry = unknown> {
   ): Promise<void> {
     const mount = this.mountOr404(agentId, res);
     if (!mount) return;
-    const view = await mount.runtime.loadSessionView(sessionId);
+    // ?activate=false reads the view without switching the active session
+    // (products inspecting a historical session must not steal focus).
+    const params = parseQuery(req.url ?? '');
+    const activate = params.activate !== 'false';
+    const view = await mount.runtime.loadSessionView(sessionId, { activate });
     writeJson(res, 200, sessionViewResponseSchema.parse({
       session: view ? this.toSessionViewWire(view) : null,
+    }));
+  }
+
+  private async handleSessionAppendEvent(
+    agentId: string, sessionId: string, req: IncomingMessage, res: ServerResponse,
+  ): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const { event } = sessionAppendEventRequestSchema.parse(await readJson(req));
+    const persisted = await mount.runtime.appendSessionEvent(
+      sessionId,
+      event as Parameters<typeof mount.runtime.appendSessionEvent>[1],
+    );
+    writeJson(res, 200, sessionAppendEventResponseSchema.parse({
+      event: persisted as Record<string, unknown> | null,
     }));
   }
 

@@ -27,6 +27,7 @@ import {
   sessionDeleteResponseSchema,
   sessionClearResponseSchema,
   sessionTodosResponseSchema,
+  sessionAppendEventResponseSchema,
   SSE_LAST_EVENT_ID_HEADER,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
@@ -573,6 +574,16 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(getResp.status).toBe(200);
     const got = sessionViewResponseSchema.parse(await getResp.json());
     expect(got.session?.id).toBe(sid);
+
+    // ---- Append an event to the durable log (e.g. an approval record) ----
+    const appendResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessionEvents('a-sw', sid)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ event: { type: 'metadata', key: 'probe', value: 1 } }),
+    });
+    expect(appendResp.status).toBe(200);
+    const appended = sessionAppendEventResponseSchema.parse(await appendResp.json());
+    expect(appended.event).not.toBeNull();
 
     // ---- Todos (empty for a fresh session) ----
     const todosResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSessionTodos('a-sw', sid)}`);

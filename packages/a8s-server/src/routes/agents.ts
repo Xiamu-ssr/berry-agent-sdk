@@ -122,6 +122,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
     // ---- Session write ops (D-sessions): same transparent proxy ----
     // Read side (list, events, stream) lives in sessions.ts; these mutate.
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/sessions'),
+    proxyRoute(deps, 'POST', '/v1/agents/:agentId/sessions/:sessionId/events'),
     proxyRoute(deps, 'GET', '/v1/agents/:agentId/sessions/:sessionId'),
     proxyRoute(deps, 'DELETE', '/v1/agents/:agentId/sessions/:sessionId'),
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/sessions/:sessionId/clear'),
