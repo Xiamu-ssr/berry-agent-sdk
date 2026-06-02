@@ -228,9 +228,14 @@ export class A8sServer<TEntry = unknown> {
       this.wakeScheduler.start();
     }
 
-    const url = `http://localhost:${this.options.port}`;
+    // Read the actually-bound port from the server, so `port: 0` (let the OS
+    // pick a free port atomically) works and returns the real port. This is
+    // what lets callers/tests avoid the probe-then-bind TOCTOU race.
+    const addr = this.server.address();
+    const boundPort = typeof addr === 'object' && addr ? addr.port : this.options.port;
+    const url = `http://localhost:${boundPort}`;
     this.logger.log?.(`[a8s-server] listening on ${url}`);
-    return { port: this.options.port, url };
+    return { port: boundPort, url };
   }
 
   async stop(): Promise<void> {

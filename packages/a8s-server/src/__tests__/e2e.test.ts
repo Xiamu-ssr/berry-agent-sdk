@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AddressInfo } from 'node:net';
+
 import {
   A8S_PATHS,
   adminAgentStatusResponseSchema,
@@ -53,15 +53,18 @@ import { ensureAdminAgent } from '../bootstrap.js';
 interface TestEntry { tag: string }
 
 async function pickPort(): Promise<number> {
-  // Cheap port picker: open a server on 0, read the assigned port, close.
-  // We bind to all interfaces (matching how A8sServer / WorkerDaemon bind)
-  // so the port we probe matches the one they'll subsequently grab.
+  // Probe a free port by binding to 0 and reading the assignment. A few tests
+  // deliberately restart a server on the SAME port (catastrophic-restart
+  // simulation), so callers need a concrete, reusable port — not 0. Servers
+  // also read their actually-bound port back from .start(), so a port that
+  // gets stolen between probe and bind still yields a working url; the rare
+  // residual EADDRINUSE only hits same-port-rebind tests.
   const net = await import('node:net');
   return await new Promise<number>((resolve) => {
     const s = net.createServer();
     s.unref();
     s.listen(0, () => {
-      const port = (s.address() as AddressInfo).port;
+      const port = (s.address() as { port: number }).port;
       s.close(() => resolve(port));
     });
   });

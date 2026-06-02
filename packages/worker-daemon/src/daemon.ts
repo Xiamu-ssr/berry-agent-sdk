@@ -133,9 +133,13 @@ export class WorkerDaemon<TEntry = unknown> {
       });
     });
 
-    const callbackUrl = `http://${bindHost}:${port}`;
+    // Read the actually-bound port so `port: 0` (OS picks a free port
+    // atomically) works — lets callers/tests skip the probe-then-bind race.
+    const addr = this.server.address();
+    const boundPort = typeof addr === 'object' && addr ? addr.port : port;
+    const callbackUrl = `http://${bindHost}:${boundPort}`;
     this.logger.log?.(`[worker-daemon] listening on ${callbackUrl}`);
-    return { host: bindHost, port, callbackUrl };
+    return { host: bindHost, port: boundPort, callbackUrl };
   }
 
   async stop(): Promise<void> {
