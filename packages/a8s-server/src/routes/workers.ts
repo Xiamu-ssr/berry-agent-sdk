@@ -49,11 +49,22 @@ export function workerRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
       middleware: [requireWorkerToken(deps)],
       handler: async ({ params, req, res }) => {
         const body = await readJsonBody(req);
-        workerHeartbeatRequestSchema.parse(body);
+        const parsed = workerHeartbeatRequestSchema.parse(body);
         const entry = deps.tokens.get(params.workerId)!;
         const refreshed = await deps.plane.orchestrator.heartbeatWorker(params.workerId, entry.heartbeatTtlMs);
         if (!refreshed) {
           throw httpError(410, 'worker_evicted', `worker ${params.workerId} has been evicted; please re-register`);
+        }
+        // Renew the leases of agents this worker is actually running. Only the
+        // holder can renew (orchestrator enforces), so this keeps "brain alive
+        // ⇒ lease alive" true — an idle agent under a live worker no longer
+        // lets its lease lapse. Re-bind the in-memory assignment too in case a
+        // restart wiped the cache while the lease was still live.
+        for (const agentId of parsed.mountedAgents ?? []) {
+          const lease = await deps.plane.orchestrator.renewAgentLease(
+            agentId, params.workerId, entry.heartbeatTtlMs,
+          );
+          if (lease) deps.plane.bindAssignment(agentId, params.workerId);
         }
         writeJson(res, 200, workerHeartbeatResponseSchema.parse({
           ok: true,

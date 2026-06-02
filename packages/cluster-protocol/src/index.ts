@@ -80,6 +80,10 @@ export type WorkerRegistrationResponse = z.infer<typeof workerRegistrationRespon
 export const workerHeartbeatRequestSchema = z.object({
   /** Optional capacity update; omit to keep current. */
   capacity: z.number().int().nonnegative().optional(),
+  /** Agent ids this worker currently has mounted. a8s renews their leases
+   *  (only the holder can), keeping "brain alive ⇒ lease alive" true so an
+   *  idle agent's lease doesn't expire under a running worker. */
+  mountedAgents: z.array(z.string()).optional(),
 }).strict();
 export type WorkerHeartbeatRequest = z.infer<typeof workerHeartbeatRequestSchema>;
 

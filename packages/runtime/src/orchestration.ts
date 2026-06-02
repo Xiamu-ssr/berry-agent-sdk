@@ -158,6 +158,34 @@ export class RuntimeOrchestrator {
     });
   }
 
+  /**
+   * Renew the active lease for `agentId` **only if** it is currently held by
+   * `holderId`. This is how a worker keeps the leases of agents it is
+   * actually running alive (called on heartbeat) — enforcing the invariant
+   * "brain alive ⇒ lease alive". Returns null when there is no active lease
+   * for the agent, or it's held by someone else (a non-holder can never
+   * renew), or it has already expired (renewal keeps a live lease alive; it
+   * does not resurrect a dead one — that path is acquire-by-a-new-holder).
+   */
+  async renewAgentLease(agentId: string, holderId: string, ttlMs: number): Promise<RuntimeLease | null> {
+    if (!agentId) throw new Error('agentId is required');
+    if (!holderId) throw new Error('holderId is required');
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('ttlMs must be a positive number');
+    return this.options.store.transact((snapshot) => {
+      const now = this.now();
+      reapExpiredLeases(snapshot, now);
+      const lease = snapshot.leases.find(
+        (item) => item.agentId === agentId && isActiveLease(item, now),
+      );
+      if (!lease || lease.holderId !== holderId) {
+        return { snapshot, result: null as RuntimeLease | null };
+      }
+      lease.expiresAt = now + ttlMs;
+      lease.renewedAt = now;
+      return { snapshot, result: lease };
+    });
+  }
+
   async releaseLease(leaseId: string): Promise<RuntimeLease | null> {
     if (!leaseId) throw new Error('leaseId is required');
     return this.options.store.transact((snapshot) => {

@@ -130,7 +130,10 @@ export class WorkerRegistrationClient {
 
   private async heartbeatOnce(): Promise<void> {
     if (!this.token) return;
-    const body = workerHeartbeatRequestSchema.parse({});
+    // Report mounted agents so a8s can renew their leases (only the holder
+    // can renew) — keeps an idle agent's lease alive under a running worker.
+    const mountedAgents = this.options.mountedAgentsProvider?.() ?? [];
+    const body = workerHeartbeatRequestSchema.parse({ mountedAgents });
     try {
       const response = await this.fetchImpl(
         `${this.baseUrl}${A8S_PATHS.workerHeartbeat(this.options.workerId)}`,

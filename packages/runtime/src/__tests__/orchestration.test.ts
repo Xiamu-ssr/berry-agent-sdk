@@ -134,6 +134,34 @@ describe('RuntimeOrchestrator leases', () => {
     await expect(orchestrator.renewLease('lease_1', 300)).resolves.toBeNull();
     await expect(orchestrator.getActiveLease('agent_1')).resolves.toBeNull();
   });
+
+  it('renewAgentLease extends only the holder\'s active lease', async () => {
+    const time = clock();
+    const orchestrator = new RuntimeOrchestrator({
+      store: new MemoryRuntimeOrchestrationStore(),
+      now: time.now,
+      idFactory: ids(),
+    });
+
+    await orchestrator.acquireLease({ agentId: 'agent_1', holderId: 'worker_a', ttlMs: 100 });
+    time.advance(50);
+
+    // The holder renews → expiry extended (keeps "brain alive ⇒ lease alive").
+    const renewed = await orchestrator.renewAgentLease('agent_1', 'worker_a', 300);
+    expect(renewed).toEqual(expect.objectContaining({ agentId: 'agent_1', renewedAt: 1_050, expiresAt: 1_350 }));
+
+    // A non-holder cannot renew (no failover hijack via heartbeat).
+    await expect(orchestrator.renewAgentLease('agent_1', 'worker_b', 300)).resolves.toBeNull();
+    // The holder's lease is untouched by the failed non-holder attempt.
+    await expect(orchestrator.getActiveLease('agent_1')).resolves.toEqual(
+      expect.objectContaining({ holderId: 'worker_a', expiresAt: 1_350 }),
+    );
+
+    // Once expired, renewal does NOT resurrect — that path is acquire-by-new-holder.
+    time.set(1_351);
+    await expect(orchestrator.renewAgentLease('agent_1', 'worker_a', 300)).resolves.toBeNull();
+    await expect(orchestrator.getActiveLease('agent_1')).resolves.toBeNull();
+  });
 });
 
 describe('RuntimeOrchestrator wakes', () => {
