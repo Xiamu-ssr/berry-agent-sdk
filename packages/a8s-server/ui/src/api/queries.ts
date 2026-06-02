@@ -368,10 +368,32 @@ export interface SendResponse {
 }
 export function useAdminChat() {
   return useMutation({
-    mutationFn: (prompt: string) =>
+    // sessionId continues an existing session; omit to start a new one.
+    mutationFn: (input: { prompt: string; sessionId?: string }) =>
       api<SendResponse>('/v1/agents/berry-admin/send', {
         method: 'POST',
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: input.prompt, sessionId: input.sessionId }),
       }),
+  });
+}
+
+/**
+ * Load a session's persisted events (the durable timeline) so the chat UI
+ * can rebuild history when an operator selects a past session. The SDK
+ * session is the source of truth — Claw/the UI hold no message state.
+ */
+export interface RawSessionEvent {
+  id: string;
+  type: string;
+  [k: string]: unknown;
+}
+export function useSessionEvents(agentId: string, sessionId: string | null) {
+  return useQuery({
+    queryKey: ['session-events', agentId, sessionId],
+    queryFn: () =>
+      api<{ events: RawSessionEvent[]; nextBefore: string | null; reachedStart: boolean }>(
+        `/v1/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId!)}/events?limit=1000`,
+      ).then((r) => r.events),
+    enabled: !!sessionId,
   });
 }
