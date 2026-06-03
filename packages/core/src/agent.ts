@@ -638,6 +638,7 @@ export class Agent {
       providerConfig: this.providerRuntime.currentConfig,
       systemPrompt: this.systemPrompt,
       tools: this.tools,
+      hands: this.hands,
       loadedSkills: this.skills.loadedSnapshot,
       cwd: this.cwd,
       middleware: this.middleware,

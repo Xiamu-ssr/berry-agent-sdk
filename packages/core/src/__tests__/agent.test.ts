@@ -1192,4 +1192,31 @@ Review the code thoroughly. Check for:
     expect(agent.snapshot().status).toBe('idle');
     expect(agent.snapshot().statusDetail).toBeUndefined();
   });
+
+  it('snapshot reports hands as first-class (4+1-native), not only flat tools', async () => {
+    const { createToolRegistrationHand } = await import('../hands.js');
+    const hand = createToolRegistrationHand({
+      id: 'workspace',
+      kind: 'local',
+      displayName: 'Workspace',
+      tools: [{
+        definition: { name: 'read_file', description: 'read', inputSchema: { type: 'object', properties: {} } },
+        execute: async () => ({ content: 'ok' }),
+      }],
+    });
+    const agent = new Agent({
+      home: tmpHome(),
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake-model' },
+      systemPrompt: stablePrompt('You are helpful'),
+      hands: [hand],
+    });
+    const snap = agent.snapshot();
+    const ws = snap.hands.find((h) => h.id === 'workspace');
+    expect(ws).toBeDefined();
+    expect(ws!.displayName).toBe('Workspace');
+    expect(ws!.kind).toBe('local');
+    expect(ws!.capabilities).toContain('read_file');
+    // The flat tool list still projects the same capability for the model.
+    expect(snap.tools.map((t) => t.name)).toContain('read_file');
+  });
 });

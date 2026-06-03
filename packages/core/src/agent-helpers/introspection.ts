@@ -11,6 +11,7 @@ import type { AgentStatus, Middleware } from '../agent-runtime-types.js';
 import type { CompactionConfig, CompactionStrategy } from '../compaction/types.js';
 import { providerPublicConfig, type ProviderConfig, type ProviderPublicConfig } from '../provider-types.js';
 import type { ToolDefinition, ToolGuard, ToolRegistration } from '../tool-types.js';
+import type { Hand } from '../hands.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_COMPACTION_RATIO,
@@ -27,6 +28,10 @@ export interface IntrospectionDeps {
   readonly providerConfig: ProviderConfig;
   readonly systemPrompt: readonly SystemPromptBlock[];
   readonly tools: ReadonlyMap<string, ToolRegistration>;
+  /** Live hand registry — lets the snapshot report hands as first-class
+   *  (id/kind/displayName/capability count) rather than only the flattened
+   *  tool list. Optional so callers that don't track hands still work. */
+  readonly hands?: { list(): readonly Hand[] };
   readonly loadedSkills: readonly Skill[] | null;
   readonly cwd: string;
   readonly middleware: readonly Middleware[];
@@ -53,6 +58,21 @@ export interface MCPSummary {
 }
 
 /**
+ * Per-hand summary: a hand's identity + how many capabilities (tools) it
+ * exposes. This is the 4+1-native view — an agent is a set of Hands, each a
+ * bundle of capabilities bound to an execution surface. The flattened
+ * `tools` list is the projection of all hands' capabilities for the model;
+ * `hands` is the structural truth products should configure/show against.
+ */
+export interface HandSummary {
+  id: string;
+  kind: string;
+  displayName?: string;
+  /** Capability (tool) names this hand exposes. */
+  capabilities: string[];
+}
+
+/**
  * A frozen-in-time view of agent configuration + runtime state. POJO —
  * safe to pass around, serialize, or diff. Produced by `agent.snapshot()`.
  */
@@ -60,6 +80,8 @@ export interface AgentSnapshot {
   provider: Readonly<ProviderPublicConfig>;
   systemPrompt: SystemPromptBlock[];
   tools: ToolDefinition[];
+  /** Hands the agent has mounted (4+1-native; tools above is their projection). */
+  hands: HandSummary[];
   mcp: MCPSummary[];
   skills: Array<{ name: string; description: string; dir: string }>;
   cwd: string;
@@ -133,6 +155,17 @@ export function getMCPFrom(deps: IntrospectionDeps): MCPSummary[] {
     .map(([server, tools]) => ({ server, tools }));
 }
 
+/** Hands the agent has mounted, as 4+1-native summaries. */
+function getHandsFrom(deps: IntrospectionDeps): HandSummary[] {
+  if (!deps.hands) return [];
+  return deps.hands.list().map((hand: Hand) => ({
+    id: hand.id,
+    kind: hand.kind,
+    displayName: hand.displayName,
+    capabilities: hand.capabilities().map((c) => c.definition.name),
+  }));
+}
+
 /** Full agent snapshot. Produced by `agent.snapshot()`. */
 export function snapshotFrom(deps: IntrospectionDeps): AgentSnapshot {
   const ctxWindow = deps.compactionConfig?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
@@ -140,6 +173,7 @@ export function snapshotFrom(deps: IntrospectionDeps): AgentSnapshot {
     provider: providerPublicConfig(deps.providerConfig),
     systemPrompt: normalizeSystemPrompt(deps.systemPrompt),
     tools: getToolsFrom(deps),
+    hands: getHandsFrom(deps),
     mcp: getMCPFrom(deps),
     skills: getSkillMetasFrom(deps.loadedSkills),
     cwd: deps.cwd,
