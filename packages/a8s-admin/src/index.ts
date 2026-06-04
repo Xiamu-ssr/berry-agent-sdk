@@ -34,3 +34,9 @@ export {
   A8S_OPS_SKILL,
   seedAdminAgentHome,
 } from './admin-agent-defaults.js';
+export {
+  TEAM_SKILL,
+  CLUSTER_SKILL,
+  COLLABORATION_SKILLS,
+  seedCollaborationSkill,
+} from './collaboration-skills.js';
