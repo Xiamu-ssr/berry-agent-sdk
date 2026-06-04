@@ -70,7 +70,7 @@ export type {
 } from './hands.js';
 
 // Chat / Timeline (UI-friendly format)
-export { timelineEventFromAgentEvent } from './chat.js';
+export { timelineEventFromAgentEvent, createPendingUserChatMessage } from './chat.js';
 export type {
   AgentChatInference,
   AgentChatMessage,
