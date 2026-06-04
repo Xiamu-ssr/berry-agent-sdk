@@ -18,3 +18,6 @@ export type { AdminOpsEnv } from './admin-ops-env.js';
 
 export { withMachineHostTools } from './machine-mode.js';
 export type { MachineModeResolverOptions } from './machine-mode.js';
+
+export { parseBuiltinHands } from './builtin-hands.js';
+export type { BuiltinHandSelection } from './builtin-hands.js';

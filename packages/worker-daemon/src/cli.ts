@@ -30,6 +30,7 @@ import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
 import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withAdminOpsEnv, withMachineHostTools } from './index.js';
+import { parseBuiltinHands } from './builtin-hands.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -314,6 +315,11 @@ async function main(argv: string[]): Promise<number> {
     const workspace = wire.workspace.includes('/') || wire.workspace.includes('\\')
       ? wire.workspace
       : join(agentsRoot, wire.workspace);
+    // Built-in Hand selection via labels.hands (comma list of: workspace, web).
+    // Absent → both on (default). This keeps Hand assembly on one mechanism
+    // (labels) shared with machines/team/role — products pick built-in Hands
+    // the same way they pick a machine, no special wire field.
+    const builtinHands = parseBuiltinHands(wire.labels?.hands);
     return {
       agentId: wire.agentId,
       workspace,
@@ -321,6 +327,8 @@ async function main(argv: string[]): Promise<number> {
       projectRoot: wire.projectRoot,
       model: wire.model,
       ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
+      ...(builtinHands.workspace === false ? { workspaceTools: false } : {}),
+      ...(builtinHands.web === false ? { webTools: false } : {}),
     };
   };
   // Chain the resolveSpec wrappers. When admin token is configured we
