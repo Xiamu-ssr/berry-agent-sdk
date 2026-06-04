@@ -18,6 +18,8 @@ import {
   createAgentResponseSchema,
   listAgentsResponseSchema,
   agentSnapshotResponseSchema,
+  skillListResponseSchema,
+  skillRemoveResponseSchema,
   operatorClusterReportSchema,
   operatorLeaseListResponseSchema,
   operatorWorkerListResponseSchema,
@@ -988,6 +990,25 @@ describe('a8s-server + worker-daemon E2E', () => {
     // The admin agent has a workspace hand (file/shell/search) at minimum.
     expect(snap.hands.some((h) => h.capabilities.includes('shell'))).toBe(true);
     expect(typeof snap.model).toBe('string');
+
+    // ---- Skill install/list/remove round-trip, proxied a8s → worker home ----
+    const skillBody = JSON.stringify({ name: 'e2e-probe', content: '---\nname: e2e-probe\ndescription: probe\n---\nbody' });
+    const instResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSkills('berry-admin')}`, {
+      method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/json' }, body: skillBody,
+    });
+    expect(instResp.status).toBe(200);
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSkills('berry-admin')}`, { headers: adminHeaders });
+    const list = skillListResponseSchema.parse(await listResp.json());
+    expect(list.names).toContain('e2e-probe');
+    // Snapshot now reflects the newly installed skill in its index.
+    const snap2 = agentSnapshotResponseSchema.parse(
+      await fetch(`${a8sInfo.url}${A8S_PATHS.agentSnapshot('berry-admin')}`, { headers: adminHeaders }).then((r) => r.json()),
+    );
+    expect(snap2.skills.some((s) => s.name === 'e2e-probe')).toBe(true);
+    const delResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSkill('berry-admin', 'e2e-probe')}`, {
+      method: 'DELETE', headers: adminHeaders,
+    });
+    expect(skillRemoveResponseSchema.parse(await delResp.json()).removed).toBe(true);
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
     await ensureAdminAgent(a8s.plane);

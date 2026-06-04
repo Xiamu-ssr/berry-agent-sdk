@@ -40,3 +40,4 @@ export {
   COLLABORATION_SKILLS,
   seedCollaborationSkill,
 } from './collaboration-skills.js';
+export { SKILL_CREATOR_SKILL } from './skill-authoring.js';

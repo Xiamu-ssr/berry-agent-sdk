@@ -522,6 +522,42 @@ export const agentSnapshotResponseSchema = z.object({
 }).strict();
 export type AgentSnapshotResponse = z.infer<typeof agentSnapshotResponseSchema>;
 
+// ----- Skill install/remove/list (product → a8s → worker home) -----
+// Skills are files in the agent's home (home/skills/<name>/SKILL.md +
+// optional extras). a8s does NOT store or parse skill content — it proxies
+// the write to the worker that owns the home, exactly like the home docs.
+// Content source is the caller's concern (system skills, ClawHub, agent
+// self-authored); the wire just carries opaque content.
+
+export const skillInstallRequestSchema = z.object({
+  name: z.string().min(1),
+  /** Full SKILL.md content (frontmatter + body). */
+  content: z.string(),
+  /** Optional extra files under the skill dir (scripts/, references/). */
+  files: z.array(z.object({
+    path: z.string().min(1),
+    content: z.string(),
+  }).strict()).optional(),
+}).strict();
+export type SkillInstallRequest = z.infer<typeof skillInstallRequestSchema>;
+
+export const skillInstallResponseSchema = z.object({
+  ok: z.literal(true),
+  name: z.string(),
+}).strict();
+export type SkillInstallResponse = z.infer<typeof skillInstallResponseSchema>;
+
+export const skillRemoveResponseSchema = z.object({
+  removed: z.boolean(),
+}).strict();
+export type SkillRemoveResponse = z.infer<typeof skillRemoveResponseSchema>;
+
+export const skillListResponseSchema = z.object({
+  /** Installed skill dir names. Index meta (description) comes via snapshot. */
+  names: z.array(z.string()),
+}).strict();
+export type SkillListResponse = z.infer<typeof skillListResponseSchema>;
+
 /** Pause the current turn. */
 export const agentPauseRequestSchema = z.object({
   reason: z.string().optional(),
@@ -1035,6 +1071,10 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
   agentSnapshot: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/snapshot`,
+  agentSkills: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills`,
+  agentSkill: (agentId: string, name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
   agentPause: (agentId: string) =>
@@ -1097,6 +1137,10 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
   agentSnapshot: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/snapshot`,
+  agentSkills: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills`,
+  agentSkill: (agentId: string, name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
   agentPause: (agentId: string) =>

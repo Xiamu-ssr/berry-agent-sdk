@@ -51,6 +51,9 @@ import {
   agentSpecPatchResponseSchema,
   agentStatusResponseSchema,
   agentSnapshotResponseSchema,
+  skillInstallResponseSchema,
+  skillRemoveResponseSchema,
+  skillListResponseSchema,
   agentContextSizeResponseSchema,
   agentPauseResponseSchema,
   agentInterjectResponseSchema,
@@ -61,6 +64,10 @@ import {
   type AgentSpecPatchResponse,
   type AgentStatusResponse,
   type AgentSnapshotResponse,
+  type SkillInstallRequest,
+  type SkillInstallResponse,
+  type SkillRemoveResponse,
+  type SkillListResponse,
   type AgentContextSizeResponse,
   type AgentPauseResponse,
   type AgentInterjectResponse,
@@ -332,6 +339,21 @@ export class A8sClient {
   /** Product-facing agent snapshot: Hands (4+1-native), skills, tools, model. */
   agentSnapshot(agentId: string): Promise<AgentSnapshotResponse> {
     return this.request('GET', A8S_PATHS.agentSnapshot(agentId), agentSnapshotResponseSchema);
+  }
+
+  /** Installed skill names for an agent (index meta comes via agentSnapshot). */
+  listSkills(agentId: string): Promise<SkillListResponse> {
+    return this.request('GET', A8S_PATHS.agentSkills(agentId), skillListResponseSchema);
+  }
+
+  /** Install a skill into the agent's home (content provided by caller). */
+  installSkill(agentId: string, input: SkillInstallRequest): Promise<SkillInstallResponse> {
+    return this.request('POST', A8S_PATHS.agentSkills(agentId), skillInstallResponseSchema, input);
+  }
+
+  /** Remove a skill from the agent's home. */
+  removeSkill(agentId: string, name: string): Promise<SkillRemoveResponse> {
+    return this.request('DELETE', A8S_PATHS.agentSkill(agentId, name), skillRemoveResponseSchema);
   }
 
   agentContextSize(agentId: string, sessionId?: string): Promise<AgentContextSizeResponse> {

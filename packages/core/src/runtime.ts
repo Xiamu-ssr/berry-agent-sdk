@@ -8,6 +8,7 @@
 
 import { Agent } from './agent.js';
 import type { AgentConfig } from './agent-config-types.js';
+import type { InstallSkillInput } from './skills/installer.js';
 import type {
   AgentEvent,
   AgentStatus,
@@ -191,6 +192,21 @@ export class ManagedAgentRuntime {
 
   async writeMemory(content: string): Promise<{ path: string; bytes: number }> {
     return this.agent.writeMemory(content);
+  }
+
+  /** Install a skill into the agent's home; takes effect next turn. */
+  async installSkill(input: InstallSkillInput): Promise<void> {
+    return this.agent.installSkill(input);
+  }
+
+  /** Remove a skill from the agent's home. Returns whether it existed. */
+  async removeSkill(name: string): Promise<boolean> {
+    return this.agent.removeSkill(name);
+  }
+
+  /** Names of skills currently installed in the agent's home. */
+  async listInstalledSkills(): Promise<string[]> {
+    return this.agent.listInstalledSkills();
   }
 
   async readInstructions(): Promise<{ path: string; content: string }> {

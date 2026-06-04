@@ -50,6 +50,12 @@ import { saveAgentConfigSync, type ReasoningEffort } from './workspace/initializ
 import type { CompactionResult } from './compaction/compactor.js';
 import type { CompactionStrategy } from './compaction/types.js';
 import type { Skill } from './skills/types.js';
+import {
+  installSkill,
+  removeSkill,
+  listInstalledSkillNames,
+  type InstallSkillInput,
+} from './skills/installer.js';
 import type { AgentHome } from './agent-home.js';
 import type { PromptPack } from './prompts.js';
 import type { AgentSessionView } from './chat-types.js';
@@ -814,6 +820,37 @@ export class Agent {
   /** Get all loaded skill indexes. */
   async getSkillIndexes(): Promise<Array<{ name: string; description: string; whenToUse?: string }>> {
     return this.skills.getSkillIndexes();
+  }
+
+  /**
+   * Install a skill into this agent's home skills dir, then invalidate the
+   * skill cache so the next turn's system-prompt index includes it. The
+   * content (SKILL.md + optional files) comes from the caller — the SDK does
+   * not source skills; products / a8s decide what to install.
+   */
+  async installSkill(input: InstallSkillInput): Promise<void> {
+    this.assertNotDisposed('installSkill');
+    await installSkill(this._home.skillsDir, input);
+    this.skills.reload();
+    // Re-warm the cache so synchronous readers (snapshot's skill index) see
+    // the change immediately, not only on the next turn's prompt build.
+    await this.skills.getLoadedSkills();
+  }
+
+  /** Remove a skill from this agent's home; reload the cache. Returns whether it existed. */
+  async removeSkill(name: string): Promise<boolean> {
+    this.assertNotDisposed('removeSkill');
+    const removed = await removeSkill(this._home.skillsDir, name);
+    if (removed) {
+      this.skills.reload();
+      await this.skills.getLoadedSkills();
+    }
+    return removed;
+  }
+
+  /** Names of skills currently installed in this agent's home skills dir. */
+  async listInstalledSkills(): Promise<string[]> {
+    return listInstalledSkillNames(this._home.skillsDir);
   }
 
   private emit(event: AgentEvent, queryOnEvent?: (event: AgentEvent) => void): void {

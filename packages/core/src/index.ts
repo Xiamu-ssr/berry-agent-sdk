@@ -166,6 +166,8 @@ export type { MemoryProvider, MemoryInitContext } from './memory/index.js';
 export { loadSkillsFromDir, loadSkill, listSkillNamesSync, buildSkillIndex, getSkillIndexes } from './skills/loader.js';
 export type { Skill, SkillMeta, SkillIndex, SkillDirSpec } from './skills/types.js';
 export type { LoadSkillsOptions } from './skills/loader.js';
+export { installSkill, removeSkill, listInstalledSkillNames } from './skills/installer.js';
+export type { InstallSkillInput, SkillExtraFile } from './skills/installer.js';
 
 // Command Executor (sandbox abstraction)
 export type { CommandExecutor, ExecOptions, ExecResult, SpawnOptions, ProcessHandle } from './executor.js';

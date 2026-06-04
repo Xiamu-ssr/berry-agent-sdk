@@ -15,6 +15,7 @@ import {
   SSE_LAST_EVENT_ID_HEADER,
   type AgentHomeDoc,
   type AgentSpecPatchRequest,
+  type SkillInstallRequest,
   type SendRequest,
   type SendResponse,
   type SessionEventsResponse,
@@ -78,6 +79,9 @@ export class AgentHandle {
   patchSpec(patch: AgentSpecPatchRequest) { return this.client.patchAgentSpec(this.agentId, patch); }
   status() { return this.client.agentStatus(this.agentId); }
   snapshot() { return this.client.agentSnapshot(this.agentId); }
+  listSkills() { return this.client.listSkills(this.agentId); }
+  installSkill(input: SkillInstallRequest) { return this.client.installSkill(this.agentId, input); }
+  removeSkill(name: string) { return this.client.removeSkill(this.agentId, name); }
   contextSize(sessionId?: string) { return this.client.agentContextSize(this.agentId, sessionId); }
   pause(reason?: string) { return this.client.pauseAgent(this.agentId, reason); }
   interject(text: string) { return this.client.interjectAgent(this.agentId, text); }

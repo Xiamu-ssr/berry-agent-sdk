@@ -88,4 +88,14 @@ export class SkillManager {
     const skills = await this.getLoadedSkills();
     return buildSkillIndex(skills);
   }
+
+  /**
+   * Invalidate the load cache so the next read re-scans skill dirs from disk.
+   * Call after a skill is installed/removed on disk (e.g. via the agent's
+   * skill-write API) so the system-prompt index reflects the change on the
+   * next turn — without rebuilding the whole runtime.
+   */
+  reload(): void {
+    this.loaded = null;
+  }
 }

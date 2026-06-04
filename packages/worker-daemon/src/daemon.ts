@@ -49,6 +49,10 @@ import {
   agentSpecPatchResponseSchema,
   agentStatusResponseSchema,
   agentSnapshotResponseSchema,
+  skillInstallRequestSchema,
+  skillInstallResponseSchema,
+  skillRemoveResponseSchema,
+  skillListResponseSchema,
   agentContextSizeResponseSchema,
   agentPauseRequestSchema,
   agentPauseResponseSchema,
@@ -247,6 +251,19 @@ export class WorkerDaemon<TEntry = unknown> {
       const doc = decodeURIComponent(homeMatch[2]);
       if (req.method === 'GET') return this.handleHomeRead(agentId, doc, res);
       if (req.method === 'PUT') return this.handleHomeWrite(agentId, doc, req, res);
+    }
+
+    // /agents/:id/skills/:name  (DELETE remove one)
+    const skillOneMatch = url.match(/^\/v1\/agents\/([^/]+)\/skills\/([^/]+)$/);
+    if (skillOneMatch && req.method === 'DELETE') {
+      return this.handleSkillRemove(decodeURIComponent(skillOneMatch[1]), decodeURIComponent(skillOneMatch[2]), res);
+    }
+    // /agents/:id/skills  (GET list, POST install)
+    const skillsMatch = url.match(/^\/v1\/agents\/([^/]+)\/skills$/);
+    if (skillsMatch) {
+      const agentId = decodeURIComponent(skillsMatch[1]);
+      if (req.method === 'GET') return this.handleSkillList(agentId, res);
+      if (req.method === 'POST') return this.handleSkillInstall(agentId, req, res);
     }
 
     // /agents/:id/{spec,status,snapshot,context-size,pause,interject}
@@ -472,6 +489,28 @@ export class WorkerDaemon<TEntry = unknown> {
       skills: snap.skills.map((s) => ({ name: s.name, description: s.description })),
       tools: snap.tools.map((t) => t.name),
     }));
+  }
+
+  private async handleSkillList(agentId: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const names = await mount.runtime.listInstalledSkills();
+    writeJson(res, 200, skillListResponseSchema.parse({ names }));
+  }
+
+  private async handleSkillInstall(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const input = skillInstallRequestSchema.parse(await readJson(req));
+    await mount.runtime.installSkill(input);
+    writeJson(res, 200, skillInstallResponseSchema.parse({ ok: true, name: input.name }));
+  }
+
+  private async handleSkillRemove(agentId: string, name: string, res: ServerResponse): Promise<void> {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const removed = await mount.runtime.removeSkill(name);
+    writeJson(res, 200, skillRemoveResponseSchema.parse({ removed }));
   }
 
   private async handleContextSize(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
