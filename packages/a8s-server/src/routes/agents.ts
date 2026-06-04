@@ -115,6 +115,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
     proxyRoute(deps, 'PUT', '/v1/agents/:agentId/home/:doc'),
     proxyRoute(deps, 'PATCH', '/v1/agents/:agentId/spec'),
     proxyRoute(deps, 'GET', '/v1/agents/:agentId/status'),
+    proxyRoute(deps, 'GET', '/v1/agents/:agentId/snapshot'),
     proxyRoute(deps, 'GET', '/v1/agents/:agentId/context-size'),
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/pause'),
     proxyRoute(deps, 'POST', '/v1/agents/:agentId/interject'),

@@ -50,6 +50,7 @@ import {
   agentHomeWriteResponseSchema,
   agentSpecPatchResponseSchema,
   agentStatusResponseSchema,
+  agentSnapshotResponseSchema,
   agentContextSizeResponseSchema,
   agentPauseResponseSchema,
   agentInterjectResponseSchema,
@@ -59,6 +60,7 @@ import {
   type AgentSpecPatchRequest,
   type AgentSpecPatchResponse,
   type AgentStatusResponse,
+  type AgentSnapshotResponse,
   type AgentContextSizeResponse,
   type AgentPauseResponse,
   type AgentInterjectResponse,
@@ -325,6 +327,11 @@ export class A8sClient {
 
   agentStatus(agentId: string): Promise<AgentStatusResponse> {
     return this.request('GET', A8S_PATHS.agentStatus(agentId), agentStatusResponseSchema);
+  }
+
+  /** Product-facing agent snapshot: Hands (4+1-native), skills, tools, model. */
+  agentSnapshot(agentId: string): Promise<AgentSnapshotResponse> {
+    return this.request('GET', A8S_PATHS.agentSnapshot(agentId), agentSnapshotResponseSchema);
   }
 
   agentContextSize(agentId: string, sessionId?: string): Promise<AgentContextSizeResponse> {

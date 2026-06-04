@@ -493,6 +493,35 @@ export const agentContextSizeResponseSchema = z.object({
 }).strict();
 export type AgentContextSizeResponse = z.infer<typeof agentContextSizeResponseSchema>;
 
+/**
+ * Product-facing slice of the SDK AgentSnapshot. The snapshot lives on the
+ * worker (the agent's runtime); this exposes what a product BFF needs to
+ * show an agent 4+1-natively: its Hands (id/kind/displayName/capabilities),
+ * loaded skills, the flattened tool names (model projection), and the live
+ * model/provider + status. The full SDK snapshot has more (compaction,
+ * middleware, etc.) — those stay SDK-internal; the wire carries only the
+ * product view. Hands are the structural truth; `tools` is their projection.
+ */
+export const agentSnapshotResponseSchema = z.object({
+  model: z.string(),
+  provider: z.string(),
+  status: z.string(),
+  statusDetail: z.string().optional(),
+  hands: z.array(z.object({
+    id: z.string(),
+    kind: z.string(),
+    displayName: z.string().optional(),
+    capabilities: z.array(z.string()),
+  }).strict()),
+  skills: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+  }).strict()),
+  /** Flattened tool names the model sees (projection of all hands). */
+  tools: z.array(z.string()),
+}).strict();
+export type AgentSnapshotResponse = z.infer<typeof agentSnapshotResponseSchema>;
+
 /** Pause the current turn. */
 export const agentPauseRequestSchema = z.object({
   reason: z.string().optional(),
@@ -1004,6 +1033,8 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/spec`,
   agentStatus: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
+  agentSnapshot: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/snapshot`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
   agentPause: (agentId: string) =>
@@ -1064,6 +1095,8 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/spec`,
   agentStatus: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/status`,
+  agentSnapshot: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/snapshot`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
   agentPause: (agentId: string) =>

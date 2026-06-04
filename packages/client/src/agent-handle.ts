@@ -77,6 +77,7 @@ export class AgentHandle {
   writeHome(doc: AgentHomeDoc, content: string) { return this.client.writeAgentHome(this.agentId, doc, content); }
   patchSpec(patch: AgentSpecPatchRequest) { return this.client.patchAgentSpec(this.agentId, patch); }
   status() { return this.client.agentStatus(this.agentId); }
+  snapshot() { return this.client.agentSnapshot(this.agentId); }
   contextSize(sessionId?: string) { return this.client.agentContextSize(this.agentId, sessionId); }
   pause(reason?: string) { return this.client.pauseAgent(this.agentId, reason); }
   interject(text: string) { return this.client.interjectAgent(this.agentId, text); }

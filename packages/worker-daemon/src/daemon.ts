@@ -48,6 +48,7 @@ import {
   agentSpecPatchRequestSchema,
   agentSpecPatchResponseSchema,
   agentStatusResponseSchema,
+  agentSnapshotResponseSchema,
   agentContextSizeResponseSchema,
   agentPauseRequestSchema,
   agentPauseResponseSchema,
@@ -248,13 +249,14 @@ export class WorkerDaemon<TEntry = unknown> {
       if (req.method === 'PUT') return this.handleHomeWrite(agentId, doc, req, res);
     }
 
-    // /agents/:id/{spec,status,context-size,pause,interject}
-    const configMatch = url.match(/^\/v1\/agents\/([^/]+)\/(spec|status|context-size|pause|interject)$/);
+    // /agents/:id/{spec,status,snapshot,context-size,pause,interject}
+    const configMatch = url.match(/^\/v1\/agents\/([^/]+)\/(spec|status|snapshot|context-size|pause|interject)$/);
     if (configMatch) {
       const agentId = decodeURIComponent(configMatch[1]);
       const action = configMatch[2];
       if (action === 'spec' && req.method === 'PATCH') return this.handleSpecPatch(agentId, req, res);
       if (action === 'status' && req.method === 'GET') return this.handleStatus(agentId, res);
+      if (action === 'snapshot' && req.method === 'GET') return this.handleSnapshot(agentId, res);
       if (action === 'context-size' && req.method === 'GET') return this.handleContextSize(agentId, req, res);
       if (action === 'pause' && req.method === 'POST') return this.handlePause(agentId, req, res);
       if (action === 'interject' && req.method === 'POST') return this.handleInterject(agentId, req, res);
@@ -450,6 +452,26 @@ export class WorkerDaemon<TEntry = unknown> {
     if (!mount) return;
     const s = mount.runtime.getStatus();
     writeJson(res, 200, agentStatusResponseSchema.parse({ status: s.status, detail: s.detail }));
+  }
+
+  private handleSnapshot(agentId: string, res: ServerResponse): void {
+    const mount = this.mountOr404(agentId, res);
+    if (!mount) return;
+    const snap = mount.runtime.snapshot();
+    writeJson(res, 200, agentSnapshotResponseSchema.parse({
+      model: snap.provider.model,
+      provider: snap.provider.type,
+      status: snap.status,
+      statusDetail: snap.statusDetail,
+      hands: snap.hands.map((h) => ({
+        id: h.id,
+        kind: h.kind,
+        displayName: h.displayName,
+        capabilities: h.capabilities,
+      })),
+      skills: snap.skills.map((s) => ({ name: s.name, description: s.description })),
+      tools: snap.tools.map((t) => t.name),
+    }));
   }
 
   private async handleContextSize(agentId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -17,6 +17,7 @@ import {
   createAgentRequestSchema,
   createAgentResponseSchema,
   listAgentsResponseSchema,
+  agentSnapshotResponseSchema,
   operatorClusterReportSchema,
   operatorLeaseListResponseSchema,
   operatorWorkerListResponseSchema,
@@ -976,6 +977,17 @@ describe('a8s-server + worker-daemon E2E', () => {
     // ---- First-boot seeded both ops skills into the agent home ----
     expect(existsSync(join(agentsRoot, 'berry-admin', 'skills', 'a8s-ops', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(agentsRoot, 'berry-admin', 'skills', 'install-worker', 'SKILL.md'))).toBe(true);
+
+    // ---- Snapshot endpoint reports the agent 4+1-natively (hands, not just
+    // flat tools) — proxied a8s → worker. This is what a product BFF reads to
+    // show "this agent has these Hands". ----
+    const snapResp = await fetch(`${a8sInfo.url}${A8S_PATHS.agentSnapshot('berry-admin')}`, { headers: adminHeaders });
+    expect(snapResp.status).toBe(200);
+    const snap = agentSnapshotResponseSchema.parse(await snapResp.json());
+    expect(Array.isArray(snap.hands)).toBe(true);
+    // The admin agent has a workspace hand (file/shell/search) at minimum.
+    expect(snap.hands.some((h) => h.capabilities.includes('shell'))).toBe(true);
+    expect(typeof snap.model).toBe('string');
 
     // ---- Idempotent: calling ensureAdminAgent again is a no-op ----
     await ensureAdminAgent(a8s.plane);
