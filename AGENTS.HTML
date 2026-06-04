@@ -92,11 +92,14 @@
     <li><strong>配置单向流动</strong>:operator 在 a8s UI 配一次 models template → 每个新 worker 在 register 时拉取并落到本机。没有反向:worker 不回写配置到 a8s,a8s 不 push 配置到 worker。新 worker 加入 = 主动出网 register + pull,a8s 永远是被连接方。</li>
     <li><strong>能力注入靠 label,不靠耦合</strong>:<code>berry-admin</code> 不是 a8s-server 直接 <code>addHand</code> 的。a8s-server 只在 spec 上盖 <code>labels.role='a8s-admin'</code>;真正 mount agent 的 worker 在自己的 <code>resolveSpec</code> 里看到这个 label,seed 默认 AGENTS.md + ops skills 并把 a8s URL/token 注入该 agent 的执行环境(让它的 <code>berry-a8s-ops</code> CLI 能认证)。a8s-server 不 import 任何运维代码 — 它是基础设施,<code>berry-admin</code> 是跑在它上面的产品。同一机制服务于 team-mode(<code>labels.team</code>)和 machine-mode(<code>labels.machines</code>)。</li>
     <li><strong>运维是知识不是内建工具</strong>:操作集群(看状态、drain/evict、加 worker/机器)走 <code>berry-a8s-ops</code> CLI + <code>a8s-ops</code> skill,不做成每个 agent 的硬编码 tool。执行层(Hand/env)不背运维语义;<code>berry-admin</code> 用通用 shell Hand 跑 CLI。加一个运维操作 = CLI 加一个子命令 + skill 加一行,agent 的 tool 面不变。</li>
+    <li><strong>协作也是知识不是工具(team / agents 集群)</strong>:a8s 只出**中性协作基座原语**(spawn = createAgent+lease、wake、给 agent 发消息、读 peer 状态),<strong>不懂 leader/teammate/集群</strong>。team 和无层级的 agents 集群都做成 <strong>CLI + skill</strong> 给 agent 用(同运维),不往 live runtime 注入 leader Hand、不进 tool list。三形态 = 同一套原语 + 不同 skill:单 agent(无协作 skill)/ team(层级协作 skill)/ agents 集群(扁平协作 skill:谁都能 spawn、广播、认领)。a8s 一行不为"集群"特殊改。</li>
+    <li><strong>系统内置 skill 极少且由产品负责</strong>:a8s 作为基础设施本身只需要"维护 a8s 自己"这一类知识(<code>a8s-ops</code> / <code>install-worker</code>),但 <strong>seed 与归属走产品</strong>(a8s admin agent 当产品看待)。a8s 不主动塞 skill,产品决定给哪个 agent 挂哪份。</li>
     <li><strong>env 只属于"落地机器"的工具</strong>:workspace 工具(file/shell/search)+ machine exec 绑 ExecutionEnvironment 的 executor;web / API / skill / cli <strong>不持 env</strong>(web 是无 env Hand;cli 寄生在执行它的 Hand 的 env 子进程里)。本机不是特殊装配,只是一台贴了 <code>primary</code> 标记的普通 env,agent 不感知 env。</li>
     <li><strong>skill 格式是统一契约,产品不转译</strong>:SKILL.md(frontmatter + 正文)由 SDK 定义,a8s 存储(物理在 worker 的 agent home),所有产品共同遵循。产品在 skill 之上挂 market 视图(分类/评分),但<strong>不转译 skill 本体</strong> —— 否则 agent 自蒸馏的、a8s 侧 seed 的 skill 会和产品格式打架(最隐蔽的多事实源)。</li>
     <li><strong>新增持久化/transport/domain 数据结构</strong>:先写 <code>zod</code> schema,再推导类型。</li>
     <li><strong>直接 tool 会被包成 SDK-owned Hand</strong>;能力暴露和执行走统一 policy/audit。</li>
     <li><strong>默认 command/MCP stdio 环境不带长期密钥</strong>;密钥通过 <code>CredentialStore</code> 或显式 scoped env。<code>berry-admin</code> 的 a8s token 是显式 scoped env 的一例(仅注入 a8s-admin label 的 agent)。</li>
+    <li><strong>上帝钥匙由 a8s 颁发,skill 是知识 token 才是权力</strong>:只有运营者接触 a8s。operator token 能调运维端点 + 建任意 label 的 agent;它只注入给那个维护 a8s 的 admin agent。一份 <code>a8s-ops</code> skill 只是"去敲 <code>berry-a8s-ops</code>"——没有 admin token,CLI 直接退出。所以即便 skill 随便发,没拿到 token 的 agent 啥也干不了。<strong>多租户暂不做</strong>(单用户用不上),但设计 tenancy-ready:将来加多租户 = a8s 发"作用域 token + 资产 owner 标记",特权 label 和 operator 端点只有 operator token 能碰;不回头改 skill/CLI 这套。</li>
   </ul>
 
   <h2>包职责</h2>
