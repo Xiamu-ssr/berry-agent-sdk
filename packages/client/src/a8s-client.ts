@@ -31,6 +31,11 @@ import {
   operatorMachineListResponseSchema,
   operatorOkResponseSchema,
   operatorWorkerListResponseSchema,
+  modelsTemplateGetResponseSchema,
+  modelsTemplatePutRequestSchema,
+  modelsPresetListResponseSchema,
+  modelsProbeRequestSchema,
+  modelsProbeResponseSchema,
   machineExecReplySchema,
   machineExecRequestSchema,
   machineMcpInvokeReplySchema,
@@ -88,6 +93,11 @@ import {
   type OperatorMachineJoinScriptResponse,
   type OperatorMachineListResponse,
   type OperatorWorkerListResponse,
+  type ModelsTemplate,
+  type ModelsTemplateGetResponse,
+  type ModelsPresetListResponse,
+  type ModelsProbeRequest,
+  type ModelsProbeResponse,
   type SendRequest,
   type SendResponse,
   type SessionEventsResponse,
@@ -374,6 +384,33 @@ export class A8sClient {
   /** Raw models template GET (provider/model/tier config). */
   modelsTemplate(): Promise<unknown> {
     return this.requestRaw('GET', A8S_PATHS.operatorModelsTemplate);
+  }
+
+  /** Typed models template GET. The template is the cluster's model config
+   *  (providers/models/tiers) — a8s owns it; products read/write it here. */
+  getModelsTemplate(): Promise<ModelsTemplateGetResponse> {
+    return this.request('GET', A8S_PATHS.operatorModelsTemplate, modelsTemplateGetResponseSchema);
+  }
+
+  /** Replace the cluster models template. Workers pull it at register time. */
+  putModelsTemplate(template: ModelsTemplate): Promise<void> {
+    return this.request(
+      'PUT', A8S_PATHS.operatorModelsTemplate, operatorOkResponseSchema,
+      modelsTemplatePutRequestSchema.parse({ template }),
+    ).then(() => undefined);
+  }
+
+  /** Built-in provider presets for the "add provider" UI. */
+  modelsPresets(): Promise<ModelsPresetListResponse> {
+    return this.request('GET', A8S_PATHS.operatorModelsPresets, modelsPresetListResponseSchema);
+  }
+
+  /** Pull a provider's live model list (a8s proxies; key never hits the browser). */
+  probeModels(input: ModelsProbeRequest): Promise<ModelsProbeResponse> {
+    return this.request(
+      'POST', A8S_PATHS.operatorModelsProbe, modelsProbeResponseSchema,
+      modelsProbeRequestSchema.parse(input),
+    );
   }
 
   // ----- Machines (machine layer) -----
