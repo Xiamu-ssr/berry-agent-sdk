@@ -71,6 +71,17 @@
     </div>
   </div>
 
+  <h2>平台定位(2026-06-04 拍定的北极星)</h2>
+  <section class="figure">
+    <div>
+      <p><strong>a8s = 完整的 agent 平台后端(自部署的"雪山引擎"),不是一个轻量分布式调度器。</strong> agent 的全部语义都归 a8s:4+1(session / hand / sandbox / orchestration)+ skill 市场 + Hand 注册表 + 协作底座 + observe/计费/cache/日志 + 类多租户。产品(berry-claw 及未来产品)<strong>直接对接 a8s</strong> 拿 agent/session/skill/Hand,中间<strong>没有翻译 agent 语义的 BFF 层</strong>。</p>
+      <p><strong>为什么</strong>:一旦 BFF 还在"两边转译 agent 语义",它就是多余的一层、迟早出多事实源。解法不是把转译做薄,是让 agent 语义<strong>完整待在 a8s,产品直连</strong>。BFF 概念保留,但<strong>剥离 agent</strong>——若产品需要后端,只做和 agent 语义零关系的纯业务(看板、账单页等新功能)。</p>
+      <p><strong>取舍(已接受)</strong>:a8s 因此从"小而克制"长成"完整平台后端",体量变大。4+1 的"克制"让位给"平台完整性"——因为做的是自部署 agent 平台,不是一个库。<strong>内部代码分包清晰(调度 / 4+1 / 市场 / observe / 租户 各模块),对外是一个 a8s。</strong></p>
+      <p><strong>类多租户 = 作用域 token</strong>:a8s 维护 <code>product → scoped token</code> 凭证(类 JWT,内含 product 作用域)。资源 API 按作用域<strong>强制</strong>过滤——产品 A 的 token 看不到产品 B 的 agent/资产。每个 agent/资产打 <code>owner</code>(product)标记。不做用户级配额/计费归属(SaaS 级)那么复杂,够"单运营者 + 多产品资源区分"。</p>
+      <p><strong>产品形态(berry-claw)</strong>:① 前台 client(操作台 + 用户本机的 Hand 宿主)直连 a8s;② 后端若有,纯业务薄层。client 是连接器,把本地能力(MCP/文件/shell)reverse 注册成 Hand 给云端 agent。</p>
+    </div>
+  </section>
+
   <h2>和 Anthropic 4+1 图的映射</h2>
   <section class="figure">
     <img src="../docs/assets/anthropic-managed-agents-architecture.webp" alt="Anthropic managed agents architecture">
@@ -88,7 +99,7 @@
     <li><strong>Hand 配置不绑机器</strong>:Hand 的"在哪里跑"由 ExecutionEnvironment 决定,跟 brain 跑哪儿无关。Brain 在云、hand 在本地完全合法。</li>
     <li><strong>Lease 单点持有</strong>:每个 agent 同一时刻只有一个 brain 持有它的 lease,数据库保证。Failover 通过"老 worker 死了 → lease 过期 → 新 worker 抢到"实现,不需要 brain 间通信。</li>
     <li><strong>Agent 间通信走 control plane,不走 brain 直连</strong>。Team / 跨 agent 调用 / 共享数据,3 种方式全部不要求 agent 同 worker。</li>
-    <li><strong>a8s 只存元数据,不存机密</strong>:a8s <strong>不持有 SSH key、不持有 LLM API key、不当密钥网关</strong>。它存 orchestration 元数据 + 集群级<strong>配置</strong>(models template 的 provider/model/tier 形状)。API key 物理上由每个 worker 自己持有(worker.json 内联,或 worker 启动时从 a8s 拉 template 后存在自己机器上)。a8s 被攻破 ≠ 所有 worker 的密钥泄漏。</li>
+    <li><strong>a8s 拥有 agent 平台数据,但不当密钥网关</strong>:a8s 存 orchestration 元数据 + agent/session/skill/Hand 注册表 + observe/计费/日志 + 集群级 models 配置形状。但它<strong>不持有 SSH key、不持有 LLM API key、不代理密钥</strong>。LLM API key 物理上由每个 worker 自己持有(worker.json 内联,或 register 时从 a8s 拉 models template 后存本机);machine 凭证由 connector 本地持有。a8s 被攻破 ≠ 所有 worker/machine 的密钥泄漏。</li>
     <li><strong>配置单向流动</strong>:operator 在 a8s UI 配一次 models template → 每个新 worker 在 register 时拉取并落到本机。没有反向:worker 不回写配置到 a8s,a8s 不 push 配置到 worker。新 worker 加入 = 主动出网 register + pull,a8s 永远是被连接方。</li>
     <li><strong>能力注入靠 label,不靠耦合</strong>:<code>berry-admin</code> 不是 a8s-server 直接 <code>addHand</code> 的。a8s-server 只在 spec 上盖 <code>labels.role='a8s-admin'</code>;真正 mount agent 的 worker 在自己的 <code>resolveSpec</code> 里看到这个 label,seed 默认 AGENTS.md + ops skills 并把 a8s URL/token 注入该 agent 的执行环境(让它的 <code>berry-a8s-ops</code> CLI 能认证)。a8s-server 不 import 任何运维代码 — 它是基础设施,<code>berry-admin</code> 是跑在它上面的产品。同一机制服务于 team-mode(<code>labels.team</code>)和 machine-mode(<code>labels.machines</code>)。</li>
     <li><strong>运维是知识不是内建工具</strong>:操作集群(看状态、drain/evict、加 worker/机器)走 <code>berry-a8s-ops</code> CLI + <code>a8s-ops</code> skill,不做成每个 agent 的硬编码 tool。执行层(Hand/env)不背运维语义;<code>berry-admin</code> 用通用 shell Hand 跑 CLI。加一个运维操作 = CLI 加一个子命令 + skill 加一行,agent 的 tool 面不变。</li>
