@@ -43,6 +43,8 @@ export interface CreateAgentResult {
 export interface AgentLocation {
   agentId: string;
   workerId: string | null;
+  /** Owning product (from labels.owner). null = unowned (legacy/operator-created). */
+  owner?: string | null;
 }
 
 export interface HydrateAssignmentsResult {
@@ -56,6 +58,7 @@ export interface HydrateAssignmentsResult {
 export class ControlPlane<TEntry = unknown> {
   private readonly workers = new Map<string, WorkerNode<TEntry>>();
   private readonly assignments = new Map<string, string>(); // agentId → workerId
+  private readonly agentOwners = new Map<string, string>(); // agentId → owning product (from labels.owner)
   private readonly scheduler: Scheduler<TEntry>;
   /**
    * Durable orchestration store. Exposed (read-only via TS) so a8s-server
@@ -80,8 +83,11 @@ export class ControlPlane<TEntry = unknown> {
   /** Remove a worker. Caller is responsible for stopping its agents first. */
   removeWorker(workerId: string): void {
     this.workers.delete(workerId);
-    for (const [agentId, owner] of [...this.assignments]) {
-      if (owner === workerId) this.assignments.delete(agentId);
+    for (const [agentId, assignedWorker] of [...this.assignments]) {
+      if (assignedWorker === workerId) {
+        this.assignments.delete(agentId);
+        this.agentOwners.delete(agentId);
+      }
     }
   }
 
@@ -132,6 +138,8 @@ export class ControlPlane<TEntry = unknown> {
       throw error;
     }
     this.assignments.set(spec.agentId, node.workerId);
+    const owner = spec.labels?.owner;
+    if (owner) this.agentOwners.set(spec.agentId, owner);
     return { agentId: spec.agentId, workerId: node.workerId };
   }
 
@@ -148,6 +156,7 @@ export class ControlPlane<TEntry = unknown> {
       }
     }
     this.assignments.delete(agentId);
+    this.agentOwners.delete(agentId);
   }
 
   /**
@@ -200,13 +209,18 @@ export class ControlPlane<TEntry = unknown> {
   }
 
   getAgentLocation(agentId: string): AgentLocation {
-    return { agentId, workerId: this.assignments.get(agentId) ?? null };
+    return {
+      agentId,
+      workerId: this.assignments.get(agentId) ?? null,
+      owner: this.agentOwners.get(agentId) ?? null,
+    };
   }
 
   listAgents(): AgentLocation[] {
     return [...this.assignments.entries()].map(([agentId, workerId]) => ({
       agentId,
       workerId,
+      owner: this.agentOwners.get(agentId) ?? null,
     }));
   }
 
@@ -244,6 +258,8 @@ export class ControlPlane<TEntry = unknown> {
       if (!lease.workerId) continue;
       if (this.workers.has(lease.workerId)) {
         this.assignments.set(lease.agentId, lease.workerId);
+        const owner = (lease.metadata as { owner?: unknown } | undefined)?.owner;
+        if (typeof owner === 'string' && owner) this.agentOwners.set(lease.agentId, owner);
         restored.push({ agentId: lease.agentId, workerId: lease.workerId });
       } else {
         unowned.push({ agentId: lease.agentId, workerId: lease.workerId });

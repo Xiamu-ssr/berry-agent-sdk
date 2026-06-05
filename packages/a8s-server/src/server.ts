@@ -149,6 +149,15 @@ export class A8sServer<TEntry = unknown> {
     return this.options.port;
   }
 
+  /**
+   * The product credential store. Operators issue/rotate/revoke product
+   * tokens through this (a product authenticates with its token and is
+   * scoped to its own resources). Also used by the operator API + tests.
+   */
+  get products(): ProductCredentialStore {
+    return this.productCredentials;
+  }
+
   async start(): Promise<{ port: number; url: string }> {
     this.deps = {
       plane: this.plane,

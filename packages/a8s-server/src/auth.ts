@@ -83,6 +83,27 @@ export function scopeCanAccess(scope: RouteContext['scope'], owner: string | und
 }
 
 /**
+ * Middleware for per-agent routes (`/v1/agents/:agentId/...`): resolve scope
+ * (like requireProductScope), then verify the scope may access THIS agent by
+ * its owner. A product cannot drive another product's agent — it gets a 404
+ * (not 403, to avoid leaking existence across products). Operator sees all.
+ */
+export function requireAgentScope(deps: ServerDeps): Middleware {
+  const scopeGate = requireProductScope(deps);
+  return async (ctx, next) => {
+    await scopeGate(ctx, async () => {
+      const agentId = ctx.params.agentId;
+      if (!agentId) throw httpError(400, 'invalid_request', 'agentId param missing');
+      const owner = deps.plane.getAgentLocation(agentId).owner ?? undefined;
+      if (!scopeCanAccess(ctx.scope, owner)) {
+        throw httpError(404, 'agent_not_found', `agent "${agentId}" not found`);
+      }
+      return next();
+    });
+  };
+}
+
+/**
  * Middleware that requires the per-machine token issued at registration.
  * Reads machineId from ctx.params.machineId. Symmetric to
  * requireWorkerToken but backed by the MachineRegistry.

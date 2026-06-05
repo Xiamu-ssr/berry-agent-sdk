@@ -22,9 +22,9 @@ import {
 } from '@berry-agent/cluster-protocol';
 import type { WireWorkerAgentSpec } from '@berry-agent/a8s';
 import { readJsonBody, writeJson } from '../http-helpers.js';
-import { httpError, type RouteDefinition } from '../router.js';
+import { httpError, type RouteDefinition, type RouteContext } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireAdminToken, requireProductScope, requireAgentScope, scopeCanAccess } from '../auth.js';
 import { withAudit } from '../middleware.js';
 
 export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -33,11 +33,11 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       method: 'GET',
       pattern: A8S_PATHS.agents,
       name: 'GET /v1/agents',
-      middleware: [requireAdminToken(deps)],
-      handler: ({ res }) => {
-        const agents = deps.plane.listAgents().map((entry) =>
-          agentLocationSchema.parse({ agentId: entry.agentId, workerId: entry.workerId }),
-        );
+      middleware: [requireProductScope(deps)],
+      handler: ({ res, scope }) => {
+        const agents = deps.plane.listAgents()
+          .filter((loc) => scopeCanAccess(scope, loc.owner ?? undefined))
+          .map((loc) => agentLocationSchema.parse({ agentId: loc.agentId, workerId: loc.workerId, owner: loc.owner ?? null }));
         writeJson(res, 200, listAgentsResponseSchema.parse({ agents }));
       },
     },
@@ -46,7 +46,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       pattern: A8S_PATHS.agents,
       name: 'POST /v1/agents',
       middleware: [
-        requireAdminToken(deps),
+        requireProductScope(deps),
         withAudit(deps.audit, {
           action: 'agent.create',
           target: (ctx) => {
@@ -58,15 +58,18 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
           },
         }),
       ],
-      handler: async ({ req, res }) => handleCreateAgent(deps, req, res),
+      handler: async ({ req, res, scope }) => handleCreateAgent(deps, req, res, scope),
     },
     {
       method: 'GET',
       pattern: '/v1/agents/:agentId',
       name: 'GET /v1/agents/:id',
-      middleware: [requireAdminToken(deps)],
-      handler: ({ params, res }) => {
+      middleware: [requireProductScope(deps)],
+      handler: ({ params, res, scope }) => {
         const loc = deps.plane.getAgentLocation(params.agentId);
+        if (!scopeCanAccess(scope, loc.owner ?? undefined)) {
+          throw httpError(404, 'agent_not_found', `agent "${params.agentId}" not found`);
+        }
         writeJson(res, 200, agentLocationSchema.parse(loc));
       },
     },
@@ -75,7 +78,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       pattern: '/v1/agents/:agentId',
       name: 'DELETE /v1/agents/:id',
       middleware: [
-        requireAdminToken(deps),
+        requireAgentScope(deps),
         withAudit(deps.audit, { action: 'agent.delete', target: (ctx) => ctx.params.agentId }),
       ],
       handler: async ({ params, res }) => {
@@ -87,7 +90,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       method: 'POST',
       pattern: '/v1/agents/:agentId/send',
       name: 'POST /v1/agents/:id/send',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireAgentScope(deps)],
       handler: async ({ params, req, res }) => {
         // /send streams the turn back (SSE): validate the body, then pipe
         // the worker's event-stream response straight through. a8s holds no
@@ -149,7 +152,7 @@ function proxyRoute<TEntry>(
     method,
     pattern,
     name: `${method} ${pattern}`,
-    middleware: [requireAdminToken(deps)],
+    middleware: [requireAgentScope(deps)],
     handler: async ({ params, req, res }) => {
       const entry = resolveAgentWorker(deps, params.agentId);
       const hasBody = method === 'PUT' || method === 'PATCH' || method === 'POST';
@@ -246,9 +249,16 @@ async function handleCreateAgent<TEntry>(
   deps: ServerDeps<TEntry>,
   req: IncomingMessage,
   res: ServerResponse,
+  scope: RouteContext['scope'],
 ): Promise<void> {
   const body = await readJsonBody(req);
   const parsed = createAgentRequestSchema.parse(body);
+
+  // Stamp the owning product onto the agent's labels so the cluster can
+  // scope-filter it. A product-scoped caller owns what it creates; the
+  // operator ('*') may pass an explicit labels.owner or leave it unowned.
+  const owner = scope && scope !== '*' ? scope.product : parsed.spec.labels?.owner;
+  const labels = owner ? { ...parsed.spec.labels, owner } : parsed.spec.labels;
 
   // Forward the wire spec straight to the plane — no fake AgentHome
   // construction here. Each WorkerNode (InProcess or Http) rehydrates
@@ -261,7 +271,7 @@ async function handleCreateAgent<TEntry>(
     reasoningEffort: parsed.spec.reasoningEffort,
     toolDenylist: parsed.spec.toolDenylist,
     ensureDefaultMcpConfig: parsed.spec.ensureDefaultMcpConfig,
-    labels: parsed.spec.labels,
+    labels,
   };
 
   const result = await deps.plane.createAgent(
@@ -275,6 +285,7 @@ async function handleCreateAgent<TEntry>(
     holderId: result.workerId,
     workerId: result.workerId,
     ttlMs: 5 * 60_000,
+    ...(owner ? { metadata: { owner } } : {}),
   });
   if (!acquired.acquired) {
     deps.logger.warn?.(

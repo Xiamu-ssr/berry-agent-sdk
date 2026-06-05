@@ -12,7 +12,7 @@ import { SSE_LAST_EVENT_ID_HEADER, WORKER_AUTH_HEADER, workerAuthHeader } from '
 import { writeJson } from '../http-helpers.js';
 import type { RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireAgentScope } from '../auth.js';
 import { resolveAgentWorker } from './agents.js';
 
 export function sessionRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -21,7 +21,7 @@ export function sessionRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       method: 'GET',
       pattern: '/v1/agents/:agentId/sessions',
       name: 'GET /v1/agents/:id/sessions',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireAgentScope(deps)],
       handler: async ({ params, req, res }) => {
         await proxyGetToWorker(deps, params.agentId, sessionsSubpath(params.agentId, req.url), res);
       },
@@ -30,7 +30,7 @@ export function sessionRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       method: 'GET',
       pattern: '/v1/agents/:agentId/sessions/:sessionId/events',
       name: 'GET /v1/agents/:id/sessions/:sid/events',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireAgentScope(deps)],
       handler: async ({ params, req, res }) => {
         await proxyGetToWorker(
           deps,
@@ -44,7 +44,7 @@ export function sessionRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       method: 'GET',
       pattern: '/v1/agents/:agentId/events/stream',
       name: 'GET /v1/agents/:id/events/stream',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireAgentScope(deps)],
       handler: async ({ params, req, res }) => {
         await proxyStreamToWorker(
           deps,

@@ -1662,6 +1662,57 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
+  it('scoped tenancy: a product only sees/drives its own agents; operator sees all', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({ port: a8sPort, controlPlane: { orchestrator }, adminToken: 'op-secret' });
+    const a8sInfo = await a8s.start();
+    const root = mkdtempSync(join(tmpdir(), 'wd-tenancy-'));
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'op-secret', workerId: 'w-ten', root });
+
+    // Operator issues two product tokens.
+    const tokenA = a8s.products.issue('prod-a').token;
+    const tokenB = a8s.products.issue('prod-b').token;
+    const hdr = (t: string) => ({ headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' } });
+
+    // Product A creates an agent (owner stamped from its scope).
+    const createA = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      ...hdr(tokenA),
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: { agentId: 'a-of-A', workspace: 'a-of-A', model: 'tier:strong', ensureDefaultMcpConfig: false },
+        entry: { tag: 'A' },
+      })),
+    });
+    expect(createA.status).toBe(200);
+
+    // A sees its agent; B sees none; operator sees it.
+    const listA = listAgentsResponseSchema.parse(await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, hdr(tokenA)).then((r) => r.json()));
+    expect(listA.agents.map((x) => x.agentId)).toContain('a-of-A');
+    const listB = listAgentsResponseSchema.parse(await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, hdr(tokenB)).then((r) => r.json()));
+    expect(listB.agents.map((x) => x.agentId)).not.toContain('a-of-A');
+    const listOp = listAgentsResponseSchema.parse(await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: { authorization: 'Bearer op-secret' } }).then((r) => r.json()));
+    expect(listOp.agents.map((x) => x.agentId)).toContain('a-of-A');
+
+    // B cannot read or delete A's agent (404, not 403 — no existence leak).
+    const getB = await fetch(`${a8sInfo.url}${A8S_PATHS.agent('a-of-A')}`, hdr(tokenB));
+    expect(getB.status).toBe(404);
+    const delB = await fetch(`${a8sInfo.url}${A8S_PATHS.agent('a-of-A')}`, { method: 'DELETE', ...hdr(tokenB) });
+    expect(delB.status).toBe(404);
+
+    // A can read its own agent, and the owner is reported.
+    const getA = await fetch(`${a8sInfo.url}${A8S_PATHS.agent('a-of-A')}`, hdr(tokenA));
+    expect(getA.status).toBe(200);
+    expect((await getA.json()).owner).toBe('prod-a');
+
+    // An unknown token is rejected outright.
+    const bad = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: { authorization: 'Bearer bp_nope' } });
+    expect(bad.status).toBe(401);
+
+    await w.stop();
+    await a8s.stop();
+  });
+
   it('machine join-script: refuses in dev mode, embeds admin token + connector install otherwise', async () => {
     // Dev mode → refuse.
     const orchA = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });

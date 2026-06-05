@@ -310,6 +310,8 @@ export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 export const agentLocationSchema = z.object({
   agentId: z.string().min(1),
   workerId: z.string().nullable(),
+  /** Owning product (from labels.owner). Null/absent = unowned (legacy/operator). */
+  owner: z.string().nullable().optional(),
 }).strict();
 export type AgentLocation = z.infer<typeof agentLocationSchema>;
 
