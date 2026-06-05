@@ -31,6 +31,7 @@ import { A8sMetrics } from './metrics.js';
 import { withMetrics, withRateLimit } from './middleware.js';
 import { ModelsTemplateStore } from './models-template-store.js';
 import { MachineRegistry } from './machine-registry.js';
+import { ProductCredentialStore } from './product-credentials.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
 
@@ -106,6 +107,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly metrics = new A8sMetrics();
   private readonly modelsTemplate: ModelsTemplateStore;
   private readonly machines = new MachineRegistry();
+  private readonly productCredentials = new ProductCredentialStore();
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
   private router: Router | null = null;
@@ -155,6 +157,7 @@ export class A8sServer<TEntry = unknown> {
       metrics: this.metrics,
       modelsTemplate: this.modelsTemplate,
       machines: this.machines,
+      productCredentials: this.productCredentials,
       logger: this.logger,
       adminToken: this.adminToken,
       advertiseUrl: this.options.advertiseUrl,

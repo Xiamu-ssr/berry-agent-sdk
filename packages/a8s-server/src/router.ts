@@ -24,6 +24,13 @@ export interface RouteContext {
   params: Record<string, string>;
   /** Decoded URL search params for read-only inspection. */
   query: URLSearchParams;
+  /**
+   * Auth scope resolved by requireProductScope (when applied). `'*'` = the
+   * cluster operator (admin token — sees everything); `{product}` = a single
+   * product scope (sees only its own resources). Undefined when no scope
+   * middleware ran (operator-only routes guarded by requireAdminToken).
+   */
+  scope?: '*' | { product: string };
 }
 
 export type RouteHandler = (ctx: RouteContext) => Promise<void> | void;

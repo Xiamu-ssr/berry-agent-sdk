@@ -9,7 +9,7 @@ import {
   parseWorkerAuthHeader,
 } from '@berry-agent/cluster-protocol';
 import type { ServerDeps } from './deps.js';
-import { httpError, type Middleware } from './router.js';
+import { httpError, type Middleware, type RouteContext } from './router.js';
 
 /** Length-independent timing-safe compare for short secrets. */
 export function constantTimeEqual(a: string, b: string): boolean {
@@ -37,6 +37,49 @@ export function requireAdminToken(deps: ServerDeps): Middleware {
     }
     return next();
   };
+}
+
+/**
+ * Middleware for product-facing resource routes (agents/sessions/skills/…).
+ * Resolves the caller's scope onto `ctx.scope`:
+ *   - admin token  → '*'  (cluster operator, sees everything)
+ *   - product token → { product }  (sees only its own resources)
+ *   - otherwise     → 401
+ *
+ * Dev mode (no admin token configured AND no product credentials issued) is a
+ * no-op that grants operator scope, mirroring requireAdminToken's dev bypass.
+ * Operator-only routes keep using requireAdminToken instead of this.
+ */
+export function requireProductScope(deps: ServerDeps): Middleware {
+  return async (ctx, next) => {
+    const presented = parseAdminAuthHeader(
+      ctx.req.headers[ADMIN_AUTH_HEADER.toLowerCase()] as string | undefined,
+    );
+    // Admin token → operator scope.
+    if (deps.adminToken && presented && constantTimeEqual(presented, deps.adminToken)) {
+      ctx.scope = '*';
+      return next();
+    }
+    // Product token → product scope.
+    const product = deps.productCredentials.verify(presented);
+    if (product) {
+      ctx.scope = { product };
+      return next();
+    }
+    // Dev bypass: no admin token AND no products issued → open operator scope.
+    if (!deps.adminToken && deps.productCredentials.list().length === 0) {
+      ctx.scope = '*';
+      return next();
+    }
+    throw httpError(401, 'unauthorized', 'missing or invalid token');
+  };
+}
+
+/** True when the scope may access a resource owned by `owner` (undefined owner = legacy/unowned, operator-only). */
+export function scopeCanAccess(scope: RouteContext['scope'], owner: string | undefined): boolean {
+  if (scope === '*') return true;
+  if (!scope) return false;
+  return owner !== undefined && owner === scope.product;
 }
 
 /**

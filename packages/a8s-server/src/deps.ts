@@ -12,6 +12,7 @@ import type { AuditLog } from './audit.js';
 import type { A8sMetrics } from './metrics.js';
 import type { ModelsTemplateStore } from './models-template-store.js';
 import type { MachineRegistry } from './machine-registry.js';
+import type { ProductCredentialStore } from './product-credentials.js';
 
 export interface WorkerTokenEntry {
   workerId: string;
@@ -30,6 +31,8 @@ export interface ServerDeps<TEntry = unknown> {
   readonly modelsTemplate: ModelsTemplateStore;
   /** Registered machines (machine layer) — in-memory, like `tokens`. */
   readonly machines: MachineRegistry;
+  /** product → scoped token credentials for product-level resource isolation. */
+  readonly productCredentials: ProductCredentialStore;
   readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   readonly adminToken: string | undefined;
   readonly advertiseUrl: string | undefined;
