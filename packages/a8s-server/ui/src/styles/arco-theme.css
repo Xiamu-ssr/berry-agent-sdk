@@ -1,0 +1,53 @@
+/* ============================================================
+   Arco theme — 雪山引擎 / Snow Mountain
+   ============================================================
+   Arco's whole palette is driven by CSS custom properties — comma-separated
+   RGB triplets consumed via rgb(var(--arcoblue-6)). We remap the primary blue
+   ramp (--arcoblue-1..10) onto the existing `snow` brand (Tailwind `sky`), so
+   Arco's primary == our brand color and the cold-alpine identity carries
+   through every Arco component (Button/Menu/Tag/...). --primary-N / --link-N
+   alias --arcoblue-N upstream, so this one remap recolors everything.
+
+   Loaded AFTER Arco's component CSS (imported in main.tsx) so it wins.
+   Danger/error keeps Arco's red ramp as-is — it already aligns with our
+   `berry` (Tailwind red), so Button status="danger" / Tag color="red" match
+   the old .btn-danger / .pill-danger.
+
+   Two scopes because Arco redefines arcoblue under the dark selector (which is
+   more specific than :root): `:root` for light, `body[arco-theme=dark]` for
+   dark. Dark inverts the ramp (1 = darkest, 10 = lightest) per Arco's
+   convention, keeping a vivid primary at step 6.
+   `arco-theme` is set in main.tsx from prefers-color-scheme (matches Tailwind
+   darkMode:'media'). */
+
+:root {
+  /* light: arcoblue 1..10 = sky 50..900 (light → dark); primary == step 6 */
+  --arcoblue-1: 240, 249, 255;  /* sky-50  */
+  --arcoblue-2: 224, 242, 254;  /* sky-100 */
+  --arcoblue-3: 186, 230, 253;  /* sky-200 */
+  --arcoblue-4: 125, 211, 252;  /* sky-300 */
+  --arcoblue-5: 56, 189, 248;   /* sky-400 */
+  --arcoblue-6: 14, 165, 233;   /* sky-500  ← primary */
+  --arcoblue-7: 2, 132, 199;    /* sky-600  ← hover/active */
+  --arcoblue-8: 3, 105, 161;    /* sky-700  */
+  --arcoblue-9: 7, 89, 133;     /* sky-800  */
+  --arcoblue-10: 12, 74, 110;   /* sky-900  */
+
+  /* Match the old .card / .card-elevated corner radii (Arco defaults 4/8px). */
+  --border-radius-medium: 8px;
+  --border-radius-large: 12px;
+}
+
+body[arco-theme='dark'] {
+  /* dark: invert the ramp (1 = darkest, 10 = lightest); primary brighter */
+  --arcoblue-1: 12, 74, 110;    /* sky-900 */
+  --arcoblue-2: 7, 89, 133;     /* sky-800 */
+  --arcoblue-3: 3, 105, 161;    /* sky-700 */
+  --arcoblue-4: 2, 132, 199;    /* sky-600 */
+  --arcoblue-5: 14, 165, 233;   /* sky-500 */
+  --arcoblue-6: 56, 189, 248;   /* sky-400  ← primary (vivid on dark) */
+  --arcoblue-7: 125, 211, 252;  /* sky-300 */
+  --arcoblue-8: 186, 230, 253;  /* sky-200 */
+  --arcoblue-9: 224, 242, 254;  /* sky-100 */
+  --arcoblue-10: 240, 249, 255; /* sky-50  */
+}
