@@ -7,7 +7,7 @@
 // HTTP layer — verifies the wire protocol round-trips correctly.
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1601,6 +1601,77 @@ describe('a8s-server + worker-daemon E2E', () => {
       body: JSON.stringify({ command: 'echo x', cwd: process.cwd(), env: {} }),
     });
     expect(ghost.status).toBe(404);
+
+    await reg.withdraw();
+    await connector.stop();
+    await a8s.stop();
+  });
+
+  it('machine layer: operator lands a Hand recipe — a8s merges .mcp.json over exec + reloads (B4)', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'recipe-secret',
+    });
+    const a8sInfo = await a8s.start();
+    const adminHeaders = { authorization: 'Bearer recipe-secret', 'content-type': 'application/json' };
+
+    // Connector reports where its .mcp.json lives so a8s knows where to land.
+    const machineDir = mkdtempSync(join(tmpdir(), 'a8s-land-'));
+    const mcpConfigPath = join(machineDir, '.mcp.json');
+    const machinePort = await pickPort();
+    const connector = new MachineConnectorDaemon({
+      machineId: 'land-1',
+      port: machinePort,
+      bindHost: '127.0.0.1',
+    });
+    const cInfo = await connector.start();
+    const reg = new MachineRegistrationClient({
+      a8sUrl: a8sInfo.url,
+      machineId: 'land-1',
+      callbackUrl: cInfo.callbackUrl,
+      heartbeatTtlMs: 30_000,
+      adminToken: 'recipe-secret',
+      mcpConfigPath,
+    });
+    connector.setAuthToken((await reg.register()).machineToken);
+
+    // ---- The built-in playwright recipe is in the registry ----
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorHandRecipes}`, { headers: adminHeaders });
+    expect(listResp.status).toBe(200);
+    const { recipes } = await listResp.json() as { recipes: Array<{ id: string }> };
+    expect(recipes.some((r) => r.id === 'playwright')).toBe(true);
+
+    // ---- Land it onto the machine ----
+    const landResp = await fetch(
+      `${a8sInfo.url}/v1/operator/machines/land-1/hand-recipes/playwright`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify({}) },
+    );
+    expect(landResp.status).toBe(200);
+    const land = await landResp.json() as { configPath: string; recipeId: string };
+    expect(land.recipeId).toBe('playwright');
+    expect(land.configPath).toBe(mcpConfigPath);
+
+    // ---- a8s wrote the merged .mcp.json on the machine over the exec broker ----
+    expect(existsSync(mcpConfigPath)).toBe(true);
+    const written = JSON.parse(readFileSync(mcpConfigPath, 'utf-8')) as { mcpServers: Record<string, unknown> };
+    expect(written.mcpServers.playwright).toBeDefined();
+
+    // ---- Landing onto an unknown machine → 404 ----
+    const ghost = await fetch(
+      `${a8sInfo.url}/v1/operator/machines/ghost/hand-recipes/playwright`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify({}) },
+    );
+    expect(ghost.status).toBe(404);
+
+    // ---- Landing an unknown recipe → 404 ----
+    const noRecipe = await fetch(
+      `${a8sInfo.url}/v1/operator/machines/land-1/hand-recipes/nope`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify({}) },
+    );
+    expect(noRecipe.status).toBe(404);
 
     await reg.withdraw();
     await connector.stop();

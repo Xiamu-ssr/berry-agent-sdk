@@ -32,6 +32,8 @@ export interface MachineEntry {
    * never interprets MCP structure itself.
    */
   mcpTools: MachineMcpTool[];
+  /** Where the connector reads its .mcp.json — a8s lands Hand recipes here. */
+  mcpConfigPath?: string;
   heartbeatTtlMs: number;
   registeredAt: number;
   heartbeatAt: number;
@@ -59,6 +61,7 @@ export class MachineRegistry {
       labels: req.labels ? { ...req.labels } : undefined,
       mcpServers: [...(req.mcpServers ?? [])],
       mcpTools: [...(req.mcpManifest?.tools ?? [])],
+      mcpConfigPath: req.mcpConfigPath ?? existing?.mcpConfigPath,
       heartbeatTtlMs: req.heartbeatTtlMs,
       registeredAt: existing?.registeredAt ?? now,
       heartbeatAt: now,

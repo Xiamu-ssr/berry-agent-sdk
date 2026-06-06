@@ -40,6 +40,8 @@ export interface MachineRegistrationClientOptions {
   mcpServers?: string[];
   /** Full MCP tool manifest the connector reports at registration. */
   mcpManifest?: MachineMcpManifest;
+  /** Absolute path to the machine's .mcp.json, so a8s knows where to land recipes. */
+  mcpConfigPath?: string;
   /** How often to heartbeat. Defaults to TTL/3. */
   heartbeatIntervalMs?: number;
   /** Bootstrap secret (a8s --admin-token). After register, switches to machine token. */
@@ -89,6 +91,7 @@ export class MachineRegistrationClient {
       labels: this.options.labels,
       mcpServers: this.mcpServers,
       mcpManifest: this.mcpManifest,
+      mcpConfigPath: this.options.mcpConfigPath,
     });
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.options.adminToken) {

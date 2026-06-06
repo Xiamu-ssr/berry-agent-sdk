@@ -135,6 +135,7 @@ export async function startMachineConnector(
     adminToken,
     mcpServers: mcpHost?.serverIds(),
     mcpManifest: mcpHost?.manifest(),
+    mcpConfigPath: mcpConfigPath,
     logger,
   });
 
