@@ -208,6 +208,41 @@ describe('createManagedRuntime', () => {
       },
     })).toThrow(/createManagedRuntimeAsync/);
   });
+
+  it('toggles built-in Hands live and persists the selection to agent.json (B2)', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'berry-runtime-hands-'));
+    const built = createManagedRuntime({
+      agentId: 'agent-hands',
+      workspace,
+      home: new AgentHome(workspace),
+      registry,
+      credentials: new MemoryCredentialStore(),
+      model: 'gpt-test',
+      // Both built-in hands on (the default — no false flags).
+    });
+    const runtime = built.runtime;
+    const metaPath = new AgentHome(workspace).metadataPath;
+
+    // Both built-ins present at start; agent.json seeded with both.
+    expect(runtime.getBuiltinHands().sort()).toEqual(['web', 'workspace']);
+    expect(runtime.snapshot().tools.some((t) => t.name === 'web_search')).toBe(true);
+    expect(JSON.parse(readFileSync(metaPath, 'utf-8')).hands.builtin.sort())
+      .toEqual(['web', 'workspace']);
+
+    // Drop web live — its tools vanish and the on-disk selection updates.
+    await runtime.setBuiltinHands(['workspace']);
+    expect(runtime.getBuiltinHands()).toEqual(['workspace']);
+    expect(runtime.snapshot().tools.some((t) => t.name === 'web_search')).toBe(false);
+    expect(JSON.parse(readFileSync(metaPath, 'utf-8')).hands.builtin).toEqual(['workspace']);
+
+    // Re-add web live from the captured builder — no recreate needed.
+    await runtime.setBuiltinHands(['workspace', 'web']);
+    expect(runtime.snapshot().tools.some((t) => t.name === 'web_search')).toBe(true);
+    expect(JSON.parse(readFileSync(metaPath, 'utf-8')).hands.builtin.sort())
+      .toEqual(['web', 'workspace']);
+
+    await runtime.dispose();
+  });
 });
 
 describe('environment prompt helpers', () => {

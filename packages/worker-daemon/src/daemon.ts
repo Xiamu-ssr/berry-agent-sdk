@@ -461,6 +461,7 @@ export class WorkerDaemon<TEntry = unknown> {
       mount.runtime.setReasoningEffort(patch.reasoningEffort as Parameters<typeof mount.runtime.setReasoningEffort>[0]);
     }
     if (patch.toolDenylist !== undefined) mount.runtime.setToolDenylist(patch.toolDenylist);
+    if (patch.hands !== undefined) await mount.runtime.setBuiltinHands(patch.hands);
     writeJson(res, 200, agentSpecPatchResponseSchema.parse({ ok: true }));
   }
 

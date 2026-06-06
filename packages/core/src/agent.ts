@@ -94,6 +94,9 @@ export class Agent {
   private hands: HandRegistry;
   private handToolNames = new Map<string, Set<string>>();
   private handAdapterOptions: HandToolAdapterOptions;
+  /** Rebuild thunks for toggleable built-in hands (workspace/web), keyed by
+   *  id. Captured from config so setBuiltinHands() can re-add live. */
+  private builtinHandBuilders: Record<string, () => Hand>;
   /**
    * Skill bookkeeping — lazy loading and index rendering.
    * Agent delegates to this manager; skill-dir state lives on the manager,
@@ -215,6 +218,7 @@ export class Agent {
     this.hands = boot.hands;
     this.handToolNames = boot.handToolNames;
     this.handAdapterOptions = boot.handAdapterOptions;
+    this.builtinHandBuilders = config.builtinHandBuilders ?? {};
     this.skills = boot.skills;
     this.cwd = boot.cwd;
     this.sessionStore = boot.sessionStore;
@@ -557,6 +561,34 @@ export class Agent {
   /** Current instance-level tool deny-list (read-only). */
   getToolDenylist(): string[] {
     return [...this._toolDenylist];
+  }
+
+  /**
+   * Set the built-in Hand selection live, then persist it to agent.json.
+   * Adding or removing a Hand is just a config edit — the live runtime gains
+   * or loses the Hand's tools immediately (no recreate, no session loss), and
+   * the on-disk `hands.builtin` is the single source of truth a restart reads.
+   *
+   * Only ids with a known builder (workspace/web) can be toggled on; unknown
+   * ids are ignored (machine hands are selected via labels, not here). Other
+   * hands the agent has (env-provisioned, host, machine) are left untouched.
+   */
+  async setBuiltinHands(ids: string[]): Promise<void> {
+    this.assertNotDisposed('setBuiltinHands');
+    const builderIds = Object.keys(this.builtinHandBuilders);
+    const desired = new Set(ids.filter((id) => builderIds.includes(id)));
+    for (const id of builderIds) {
+      const want = desired.has(id);
+      const have = this.hasHand(id);
+      if (want && !have) this.addHand(this.builtinHandBuilders[id]());
+      else if (!want && have) await this.removeHand(id);
+    }
+    saveAgentConfigSync(this._home.root, { hands: { builtin: [...desired] } });
+  }
+
+  /** Built-in Hand ids currently mounted (workspace/web), in stable order. */
+  getBuiltinHands(): string[] {
+    return Object.keys(this.builtinHandBuilders).filter((id) => this.hasHand(id));
   }
 
   // ===== Lifecycle =====

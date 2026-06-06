@@ -337,7 +337,7 @@ export class A8sClient {
     return this.request('PUT', A8S_PATHS.agentHomeDoc(agentId, doc), agentHomeWriteResponseSchema, { content });
   }
 
-  /** Patch live spec fields (model / reasoning / toolDenylist). */
+  /** Patch live spec fields (model / reasoning / toolDenylist / hands). */
   patchAgentSpec(agentId: string, patch: AgentSpecPatchRequest): Promise<AgentSpecPatchResponse> {
     return this.request('PATCH', A8S_PATHS.agentSpec(agentId), agentSpecPatchResponseSchema, patch);
   }

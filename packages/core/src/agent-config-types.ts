@@ -40,6 +40,14 @@ export interface AgentConfig {
    * normally don't set this directly.
    */
   builtinHandSelection?: string[];
+  /**
+   * Rebuild thunks for the toggleable built-in Hands, keyed by id
+   * (`workspace`, `web`). Lets the runtime re-add a Hand that was removed at
+   * runtime without a full rebuild — the runtime builder captures the same
+   * scope/env/credentials it used at construction. `setBuiltinHands()` uses
+   * these; absent → that built-in cannot be toggled back on live.
+   */
+  builtinHandBuilders?: Record<string, () => Hand>;
   /** SDK-owned long-lived capability policy for hands, MCP, and direct tools. */
   handPolicy?: HandCapabilityPolicy;
   /** Audit sink for hand capability expose/execute decisions. */

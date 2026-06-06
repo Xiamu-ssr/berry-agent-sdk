@@ -164,6 +164,16 @@ export class ManagedAgentRuntime {
     this.agent.setToolDenylist(names);
   }
 
+  /** Toggle built-in Hands (workspace/web) live + persist to agent.json. */
+  setBuiltinHands(ids: string[]): Promise<void> {
+    return this.agent.setBuiltinHands(ids);
+  }
+
+  /** Built-in Hand ids currently mounted. */
+  getBuiltinHands(): string[] {
+    return this.agent.getBuiltinHands();
+  }
+
   hasHand(id: string): boolean {
     return this.agent.hasHand(id);
   }

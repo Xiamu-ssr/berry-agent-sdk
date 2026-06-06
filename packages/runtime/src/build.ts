@@ -98,6 +98,8 @@ function assembleManagedRuntime(
       // Persist which built-in Hands are on so agent.json is the single source
       // of truth — a restart reads this back instead of reverting to all-on.
       builtinHandSelection: builtinHandIds(options),
+      // Rebuild thunks so setBuiltinHands() can re-add a toggled-off Hand live.
+      builtinHandBuilders: builtinHandBuilders(scope, options, executionEnvironment),
       cwd: options.projectRoot ?? options.workspace,
       home: options.home,
       project: options.projectRoot,
@@ -177,27 +179,18 @@ function buildHands(
   // distinct from the workspace tools below. Most envs supply none.
   hands.push(...(executionEnvironment?.createHands?.(scope) ?? []));
 
+  const builders = builtinHandBuilders(scope, options, executionEnvironment);
+
   // Workspace tools (file/shell/search) are bound to the resolved execution
   // environment's executor — the same shape a remote machine's exec hand
   // has, just for the primary/local env. The brain doesn't know which pipe
   // sits behind `shell`. This is the single, machine-agnostic assembly path
   // (新-1: localWorkspace's special-case branch is gone).
-  if (options.workspaceTools !== false) {
-    hands.push(createWorkspaceToolsHand({
-      scope,
-      environment: executionEnvironment,
-      ...(options.workspaceTools ?? {}),
-    }));
-  }
+  if (options.workspaceTools !== false) hands.push(builders.workspace());
 
   // Web tools are env-less: outbound HTTP, no executor, agent-level. Kept
   // even when no machine is reachable. Never packed with workspace tools.
-  if (options.webTools !== false) {
-    hands.push(createWebHand({
-      credentials: options.credentials,
-      ...(options.webTools ?? {}),
-    }));
-  }
+  if (options.webTools !== false) hands.push(builders.web());
 
   if (options.hostHand !== false && options.hostHand?.tools.length) {
     hands.push(createToolRegistrationHand({
@@ -209,6 +202,30 @@ function buildHands(
   }
 
   return hands;
+}
+
+/**
+ * Rebuild thunks for the toggleable built-in Hands, capturing the same
+ * scope/env/credentials buildHands used. Handed to the runtime so
+ * `setBuiltinHands()` can re-add a Hand removed at runtime — single
+ * construction path, no divergence between create-time and toggle-time hands.
+ */
+function builtinHandBuilders(
+  scope: AgentScope,
+  options: ManagedRuntimeBuildOptions,
+  executionEnvironment: ExecutionEnvironment | undefined,
+): Record<string, () => Hand> {
+  return {
+    workspace: () => createWorkspaceToolsHand({
+      scope,
+      environment: executionEnvironment,
+      ...(options.workspaceTools !== false ? options.workspaceTools ?? {} : {}),
+    }),
+    web: () => createWebHand({
+      credentials: options.credentials,
+      ...(options.webTools !== false ? options.webTools ?? {} : {}),
+    }),
+  };
 }
 
 function resolveExecutionEnvironmentSync(

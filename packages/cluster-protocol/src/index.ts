@@ -473,6 +473,13 @@ export const agentSpecPatchRequestSchema = z.object({
   reasoningEffort: z.string().optional(),
   /** Tool names refused regardless of safety guard. Empty array clears. */
   toolDenylist: z.array(z.string()).optional(),
+  /**
+   * Built-in Hand selection (e.g. ['workspace','web']). Writes through to
+   * agent.json's hands.builtin and re-resolves the live Hand set, so adding
+   * or removing a Hand is just a config edit — no recreate, no restart.
+   * Empty array = a pure-API/collaboration agent (no built-in Hands).
+   */
+  hands: z.array(z.string()).optional(),
 }).strict();
 export type AgentSpecPatchRequest = z.infer<typeof agentSpecPatchRequestSchema>;
 
