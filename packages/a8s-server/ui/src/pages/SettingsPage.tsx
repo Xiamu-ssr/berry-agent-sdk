@@ -14,7 +14,7 @@ import { PageHeader, ErrorBanner, Spinner } from '../components/Page.js';
 export function SettingsPage() {
   return (
     <div className="animate-fade-in space-y-6">
-      <PageHeader title="Settings" subtitle="Cluster-wide configuration" />
+      <PageHeader title="Models" subtitle="Providers, models & tiers — the cluster-wide template every worker pulls" />
       <ModelsCard />
       <AdminAgentCard />
     </div>
@@ -43,7 +43,6 @@ interface DraftProvider {
 }
 
 const TIER_SLOTS = ['strong', 'fast', 'cheap'] as const;
-type TierSlot = typeof TIER_SLOTS[number];
 
 function ModelsCard() {
   const template = useModelsTemplate();
