@@ -270,16 +270,22 @@ export const operatorMachineListResponseSchema = z.object({
 export type OperatorMachineListResponse = z.infer<typeof operatorMachineListResponseSchema>;
 
 // ============================================================
-// Hand recipes — env-agnostic capability blueprints (B4)
+// Hand recipes — machine-bound capability bundles (B4 / 甲1)
 // ============================================================
 //
-// A Hand recipe is the answer to lanxuan's option C: a machine offers only
-// an *environment* (shell exec); the *capabilities* a Hand grasps are
-// configured remotely from a8s. The recipe is the env-agnostic blueprint —
-// "what this Hand is made of" — held in a8s's registry. Landing a recipe
-// onto a machine writes config + runs install over the exec broker, then
-// asks the connector to /reload. The recipe is the product; the machine is
-// the factory floor it lands on.
+// A Hand recipe is one Hand in the market: a group of capabilities (shell
+// exec + a group of MCP servers) bound to ONE machine. The binding is
+// machine-inborn — chosen when the recipe is authored (`machineId`), not at
+// selection time. A market card == one Hand == "this group of capabilities on
+// that machine."
+//
+// Two distinct actions, deliberately decoupled:
+//   - SELECT a Hand onto an agent → grants the machine (merges `machineId`
+//     into the agent's `labels.machines`; the agent gets `machine_<id>_exec`
+//     and reaches the machine's MCP via berry-mcp). Reference only.
+//   - LAND a recipe onto a machine → writes the `.mcp.json` fragment over the
+//     exec broker + runs install + asks the connector to /reload. This is a
+//     separate operator step (Machines / Hand-market "land" button).
 //
 // Secrets never live in a recipe. A recipe references env var *names*
 // (`GITHUB_TOKEN`), and the value is the machine owner's asset, present in
@@ -306,14 +312,38 @@ export const handRecipeMcpServerSchema = z.object({
 export type HandRecipeMcpServer = z.infer<typeof handRecipeMcpServerSchema>;
 
 /**
- * An env-agnostic Hand blueprint. `kind: 'mcp'` is the only kind today: the
- * recipe lands as a `.mcp.json` fragment the connector picks up on reload.
+ * A Hand blueprint: "a group of capabilities (exec + a group of MCP servers)
+ * on ONE machine." A Hand is bound to its machine at recipe-creation time
+ * (machine-inborn) — `machineId` names the env it grasps. Selecting this Hand
+ * onto an agent grants that machine (the agent gets `machine_<id>_exec` +
+ * reaches its MCP via berry-mcp); it does NOT itself land config — landing the
+ * `.mcp.json` onto the machine stays a separate operator step.
+ *
+ * `kind` is read-permissive for back-compat: legacy recipes persisted as
+ * `'mcp'` parse fine; the store normalizes them to `'machine'` on read and
+ * always writes `'machine'`. `machineId` is optional only to leave room for a
+ * future env-less Hand (web/api) — per invariant 1, env belongs only to
+ * machine-bound Hands. (See env-hand-skill-cli-memo.)
  */
 export const handRecipeSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'recipe id must be kebab-case'),
   name: z.string().min(1),
   description: z.string().optional(),
-  kind: z.literal('mcp'),
+  /** 'machine' = a machine-bound Hand. 'mcp' is accepted on read for legacy
+   *  disk files; normalized to 'machine' (see HandRecipeStore). */
+  kind: z.enum(['machine', 'mcp']).default('machine'),
+  /**
+   * The machine this Hand is bound to (machine-inborn). Required in practice
+   * for a machine-bound Hand; optional in the schema to leave room for a
+   * future env-less Hand. Selecting the Hand merges this into the agent's
+   * `labels.machines`.
+   */
+  machineId: z.string().min(1).optional(),
+  /**
+   * Free-assembly convenience grouping for the market view (e.g. `系统预装`).
+   * A label only — it never restricts a recipe's source or contents.
+   */
+  group: z.string().min(1).optional(),
   /** `mcpServers` map merged into the machine's .mcp.json when landed. */
   mcpServers: z.record(handRecipeMcpServerSchema),
   /** Shell commands run on the machine before reload (e.g. `npm i -g ...`). */

@@ -33,7 +33,8 @@ export const BUILTIN_HAND_RECIPES: HandRecipe[] = [
     id: 'playwright',
     name: 'Playwright 浏览器',
     description: '一个由 Playwright 驱动的浏览器 Hand:导航、点击、抓取页面。无需密钥,落地即用。',
-    kind: 'mcp',
+    kind: 'machine',
+    group: '系统预装',
     mcpServers: {
       playwright: {
         command: 'npx',
@@ -48,7 +49,8 @@ export const BUILTIN_HAND_RECIPES: HandRecipe[] = [
     id: 'github',
     name: 'GitHub',
     description: 'GitHub MCP Hand:读写 issue/PR/仓库。需要机器本机环境里存在 GITHUB_TOKEN。',
-    kind: 'mcp',
+    kind: 'machine',
+    group: '系统预装',
     mcpServers: {
       github: {
         command: 'npx',
@@ -96,6 +98,9 @@ export class HandRecipeStore {
       const next = new Map<string, HandRecipe>();
       for (const entry of parsed.recipes ?? []) {
         const recipe = handRecipeSchema.parse(entry);
+        // Legacy disk files persisted kind:'mcp'; normalize to 'machine' (the
+        // schema accepts 'mcp' on read only for this back-compat).
+        if (recipe.kind === 'mcp') recipe.kind = 'machine';
         // A disk file can't override a built-in id (built-ins are read-only).
         if (this.builtins.has(recipe.id)) continue;
         next.set(recipe.id, recipe);
@@ -138,6 +143,8 @@ export class HandRecipeStore {
       throw new Error(`recipe id "${req.id}" is built-in and cannot be overwritten`);
     }
     const recipe = handRecipeSchema.parse({ ...req, builtin: false });
+    // Always persist as 'machine' — 'mcp' is a read-only legacy alias.
+    if (recipe.kind === 'mcp') recipe.kind = 'machine';
     this.custom.set(recipe.id, recipe);
     await this.persist();
     return recipe;

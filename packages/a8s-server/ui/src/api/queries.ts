@@ -112,7 +112,12 @@ export interface HandRecipe {
   id: string;
   name: string;
   description?: string;
-  kind: 'mcp';
+  /** 'machine' = a machine-bound Hand. ('mcp' may appear from legacy data.) */
+  kind: 'machine' | 'mcp';
+  /** The machine this Hand is bound to (machine-inborn). */
+  machineId?: string;
+  /** Free-assembly convenience grouping for the market view (e.g. 系统预装). */
+  group?: string;
   mcpServers: Record<string, Record<string, unknown>>;
   installCommands: string[];
   envVarNames: string[];
