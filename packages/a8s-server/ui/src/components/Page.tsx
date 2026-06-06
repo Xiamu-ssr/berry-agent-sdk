@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Spin, Empty, Alert } from '@arco-design/web-react';
 
 export function PageHeader({
   title,
@@ -10,10 +11,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-end justify-between mb-6 pb-3 border-b border-ink-200 dark:border-ink-800">
+    <div
+      className="flex items-end justify-between mb-6 pb-3"
+      style={{ borderBottom: '1px solid var(--color-border-2)' }}
+    >
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="text-sm text-ink-500 dark:text-ink-400 mt-1">{subtitle}</p>}
+        <h1 className="text-2xl font-semibold tracking-tight" style={{ color: 'var(--color-text-1)' }}>{title}</h1>
+        {subtitle && <p className="text-sm mt-1" style={{ color: 'var(--color-text-3)' }}>{subtitle}</p>}
       </div>
       {actions && <div className="flex gap-2">{actions}</div>}
     </div>
@@ -22,28 +26,24 @@ export function PageHeader({
 
 export function EmptyState({ icon, title, hint }: { icon: string; title: string; hint?: string }) {
   return (
-    <div className="card text-center py-12">
-      <div className="text-4xl mb-2">{icon}</div>
-      <div className="font-medium text-ink-700 dark:text-ink-200">{title}</div>
-      {hint && <div className="text-sm text-ink-500 dark:text-ink-400 mt-1">{hint}</div>}
-    </div>
+    <Empty
+      icon={<span className="text-4xl">{icon}</span>}
+      description={
+        <div>
+          <div className="font-medium" style={{ color: 'var(--color-text-1)' }}>{title}</div>
+          {hint && <div className="text-sm mt-1" style={{ color: 'var(--color-text-3)' }}>{hint}</div>}
+        </div>
+      }
+      style={{ padding: '3rem 0' }}
+    />
   );
 }
 
 export function ErrorBanner({ error }: { error: unknown }) {
   const msg = error instanceof Error ? error.message : String(error);
-  return (
-    <div className="card border-berry-300 dark:border-berry-900 bg-berry-50 dark:bg-berry-950/30 text-berry-700 dark:text-berry-300 text-sm">
-      <strong className="font-semibold">Error:</strong> {msg}
-    </div>
-  );
+  return <Alert type="error" title="Error" content={msg} />;
 }
 
 export function Spinner() {
-  return (
-    <div className="flex items-center gap-2 text-sm text-ink-500 dark:text-ink-400">
-      <div className="w-3 h-3 border-2 border-ink-300 border-t-berry-500 rounded-full animate-spin" />
-      Loading…
-    </div>
-  );
+  return <Spin tip="Loading…" style={{ display: 'block', padding: '2rem 0', textAlign: 'center' }} />;
 }

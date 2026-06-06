@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Card } from '@arco-design/web-react';
 
 export interface StatPillProps {
   label: string;
@@ -7,21 +8,26 @@ export interface StatPillProps {
   tone?: 'default' | 'success' | 'warn' | 'danger';
 }
 
-const TONE_RING: Record<NonNullable<StatPillProps['tone']>, string> = {
-  default: 'border-ink-200 dark:border-ink-800',
-  success: 'border-emerald-200 dark:border-emerald-900',
-  warn: 'border-amber-200 dark:border-amber-900',
-  danger: 'border-berry-200 dark:border-berry-900',
+// Tone tints the left border so a card can flag attention without shouting.
+const TONE_BORDER: Record<NonNullable<StatPillProps['tone']>, string> = {
+  default: 'var(--color-border-2)',
+  success: 'rgb(var(--green-6))',
+  warn: 'rgb(var(--orange-6))',
+  danger: 'rgb(var(--red-6))',
 };
 
 export function StatCard({ label, value, hint, tone = 'default' }: StatPillProps) {
   return (
-    <div className={`card border ${TONE_RING[tone]}`}>
-      <div className="text-xs font-medium uppercase tracking-wider text-ink-500 dark:text-ink-400">
+    <Card
+      bordered
+      style={{ borderLeft: `3px solid ${TONE_BORDER[tone]}` }}
+      bodyStyle={{ padding: '16px 18px' }}
+    >
+      <div className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-3)' }}>
         {label}
       </div>
-      <div className="mt-2 text-3xl font-semibold tabular-nums">{value}</div>
-      {hint && <div className="mt-1 text-xs text-ink-500 dark:text-ink-500">{hint}</div>}
-    </div>
+      <div className="mt-2 text-3xl font-semibold tabular-nums" style={{ color: 'var(--color-text-1)' }}>{value}</div>
+      {hint && <div className="mt-1 text-xs" style={{ color: 'var(--color-text-3)' }}>{hint}</div>}
+    </Card>
   );
 }

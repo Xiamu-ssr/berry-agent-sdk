@@ -1,24 +1,27 @@
+import { Tag } from '@arco-design/web-react';
+
 export type WorkerState = 'active' | 'draining' | 'evicted' | 'withdrawn';
 
-const STATE_CLASS: Record<WorkerState, string> = {
-  active: 'pill pill-success',
-  draining: 'pill pill-warn',
-  evicted: 'pill pill-danger',
-  withdrawn: 'pill pill-muted',
+// Arco Tag colors. 'gray' is the muted/neutral default.
+const STATE_COLOR: Record<WorkerState, string> = {
+  active: 'green',
+  draining: 'orange',
+  evicted: 'red',
+  withdrawn: 'gray',
 };
 
 export function StatusPill({ state }: { state: WorkerState | string }) {
-  const cls = STATE_CLASS[state as WorkerState] ?? 'pill pill-muted';
-  return <span className={cls}>{state}</span>;
+  const color = STATE_COLOR[state as WorkerState] ?? 'gray';
+  return <Tag color={color} size="small">{state}</Tag>;
 }
 
 export function WakeStatePill({ state }: { state: 'pending' | 'claimed' | 'completed' | 'failed' | 'cancelled' | string }) {
-  const cls =
-    state === 'completed' ? 'pill pill-success' :
-    state === 'failed' ? 'pill pill-danger' :
-    state === 'claimed' ? 'pill pill-warn' :
-    'pill pill-muted';
-  return <span className={cls}>{state}</span>;
+  const color =
+    state === 'completed' ? 'green' :
+    state === 'failed' ? 'red' :
+    state === 'claimed' ? 'orange' :
+    'gray';
+  return <Tag color={color} size="small">{state}</Tag>;
 }
 
 export function relativeTime(ts: number | undefined): string {
