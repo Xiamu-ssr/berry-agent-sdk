@@ -13,6 +13,7 @@ import type { A8sMetrics } from './metrics.js';
 import type { ModelsTemplateStore } from './models-template-store.js';
 import type { MachineRegistry } from './machine-registry.js';
 import type { HandRecipeStore } from './hand-recipe-store.js';
+import type { SkillStore } from './skill-store.js';
 import type { ProductCredentialStore } from './product-credentials.js';
 
 export interface WorkerTokenEntry {
@@ -34,6 +35,8 @@ export interface ServerDeps<TEntry = unknown> {
   readonly machines: MachineRegistry;
   /** Env-agnostic Hand blueprints (the recipe market) + remote landing. */
   readonly handRecipes: HandRecipeStore;
+  /** Skill catalog (built-ins + operator-registered) + install onto agents. */
+  readonly skills: SkillStore;
   /** product → scoped token credentials for product-level resource isolation. */
   readonly productCredentials: ProductCredentialStore;
   readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;

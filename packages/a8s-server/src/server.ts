@@ -32,6 +32,7 @@ import { withMetrics, withRateLimit } from './middleware.js';
 import { ModelsTemplateStore } from './models-template-store.js';
 import { MachineRegistry } from './machine-registry.js';
 import { HandRecipeStore } from './hand-recipe-store.js';
+import { SkillStore } from './skill-store.js';
 import { ProductCredentialStore } from './product-credentials.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
@@ -40,6 +41,7 @@ import { agentRoutes } from './routes/agents.js';
 import { healthRoutes, uiRoutes } from './routes/health.js';
 import { machineRoutes } from './routes/machines.js';
 import { handRecipeRoutes } from './routes/hand-recipes.js';
+import { skillRegistryRoutes } from './routes/skills.js';
 import { modelsRoutes } from './routes/models.js';
 import { operatorRoutes } from './routes/operator.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -110,6 +112,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly modelsTemplate: ModelsTemplateStore;
   private readonly machines = new MachineRegistry();
   private readonly handRecipes: HandRecipeStore;
+  private readonly skills: SkillStore;
   private readonly productCredentials = new ProductCredentialStore();
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
@@ -137,6 +140,13 @@ export class A8sServer<TEntry = unknown> {
       : '/var/berry/a8s/hand-recipes.json';
     this.handRecipes = new HandRecipeStore({
       filePath: handRecipesFile,
+      logger: this.logger,
+    });
+    const skillsFile = options.auditRoot
+      ? `${options.auditRoot.replace(/\/audit\/?$/, '')}/skill-registry.json`
+      : '/var/berry/a8s/skill-registry.json';
+    this.skills = new SkillStore({
+      filePath: skillsFile,
       logger: this.logger,
     });
     if (!this.adminToken) {
@@ -177,6 +187,7 @@ export class A8sServer<TEntry = unknown> {
       modelsTemplate: this.modelsTemplate,
       machines: this.machines,
       handRecipes: this.handRecipes,
+      skills: this.skills,
       productCredentials: this.productCredentials,
       logger: this.logger,
       adminToken: this.adminToken,
@@ -200,6 +211,7 @@ export class A8sServer<TEntry = unknown> {
       ...modelsRoutes(this.deps),
       ...machineRoutes(this.deps),
       ...handRecipeRoutes(this.deps),
+      ...skillRegistryRoutes(this.deps),
     ];
     // Wrap each route. Metrics first (so 429s still get counted), then
     // rate limit (except for streaming and the unbounded send call).

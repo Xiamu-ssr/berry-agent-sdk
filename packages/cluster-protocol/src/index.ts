@@ -673,6 +673,64 @@ export const skillListResponseSchema = z.object({
 }).strict();
 export type SkillListResponse = z.infer<typeof skillListResponseSchema>;
 
+// ----- Skill registry (operator: a8s's catalog of installable skills) -----
+// a8s is the market: it lists skills (built-ins shipped with @berry-agent/
+// a8s-admin + operator-registered ones) and installs a chosen skill onto an
+// agent by proxying its content to the per-agent /skills endpoint. Per the
+// settled invariant, a8s carries skill content VERBATIM — it never parses,
+// translates, or rewrites the SKILL.md. `name`/`description` are display
+// metadata declared alongside the content, not derived by transforming it.
+
+/** Listing metadata for one registry skill (no content — kept light). */
+export const operatorSkillSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  /** True for skills a8s ships out of the box (read-only in the registry). */
+  builtin: z.boolean().default(false),
+  /** Count of extra files (scripts/, references/) bundled with the skill. */
+  extraFileCount: z.number().int().nonnegative().default(0),
+}).strict();
+export type OperatorSkill = z.infer<typeof operatorSkillSchema>;
+
+export const operatorSkillListResponseSchema = z.object({
+  skills: z.array(operatorSkillSchema),
+}).strict();
+export type OperatorSkillListResponse = z.infer<typeof operatorSkillListResponseSchema>;
+
+/** Full registry skill (metadata + verbatim content + extra files). */
+export const operatorSkillDetailSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  builtin: z.boolean().default(false),
+  /** Full SKILL.md content (frontmatter + body), verbatim. */
+  content: z.string(),
+  files: z.array(z.object({
+    path: z.string().min(1),
+    content: z.string(),
+  }).strict()).default([]),
+}).strict();
+export type OperatorSkillDetail = z.infer<typeof operatorSkillDetailSchema>;
+
+/** Register/update an operator skill. `builtin` is forced false server-side. */
+export const operatorSkillRegisterRequestSchema = z.object({
+  name: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'skill name must be kebab-case'),
+  description: z.string().min(1),
+  content: z.string().min(1),
+  files: z.array(z.object({
+    path: z.string().min(1),
+    content: z.string(),
+  }).strict()).optional(),
+}).strict();
+export type OperatorSkillRegisterRequest = z.infer<typeof operatorSkillRegisterRequestSchema>;
+
+/** Result of installing a registry skill onto an agent. */
+export const operatorSkillInstallResponseSchema = z.object({
+  ok: z.literal(true),
+  agentId: z.string().min(1),
+  name: z.string().min(1),
+}).strict();
+export type OperatorSkillInstallResponse = z.infer<typeof operatorSkillInstallResponseSchema>;
+
 /** Pause the current turn. */
 export const agentPauseRequestSchema = z.object({
   reason: z.string().optional(),
@@ -1223,6 +1281,13 @@ export const A8S_PATHS = {
   /** Land a recipe onto a machine: POST .../machines/:id/hand-recipes/:recipeId */
   operatorMachineLandRecipe: (machineId: string, recipeId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/${encodeURIComponent(machineId)}/hand-recipes/${encodeURIComponent(recipeId)}`,
+  /** Skill registry (a8s's catalog of installable skills). */
+  operatorSkills: `/${CLUSTER_PROTOCOL_VERSION}/operator/skills`,
+  operatorSkill: (name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/skills/${encodeURIComponent(name)}`,
+  /** Install a registry skill onto an agent: POST .../agents/:id/skills/:name */
+  operatorAgentInstallSkill: (agentId: string, name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
 } as const;
 
 export const WORKER_PATHS = {

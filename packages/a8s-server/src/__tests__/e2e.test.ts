@@ -1064,6 +1064,91 @@ describe('a8s-server + worker-daemon E2E', () => {
     await a8s.stop();
   });
 
+  it('skill registry: operator lists the catalog and installs a built-in skill onto an agent (B6)', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const root = mkdtempSync(join(tmpdir(), 'a8s-skillreg-'));
+    const a8s = new A8sServer<TestEntry>({
+      port: a8sPort,
+      controlPlane: { orchestrator },
+      adminToken: 'skill-secret',
+      auditRoot: join(root, 'audit'),
+    });
+    const a8sInfo = await a8s.start();
+    const headers = { authorization: 'Bearer skill-secret', 'content-type': 'application/json' };
+
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'skill-secret', workerId: 'w-skill', root });
+
+    // ---- Catalog lists the built-ins ----
+    const catResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, { headers });
+    expect(catResp.status).toBe(200);
+    const cat = await catResp.json() as { skills: Array<{ name: string; builtin: boolean; description: string }> };
+    const team = cat.skills.find((s) => s.name === 'team');
+    expect(team).toBeDefined();
+    expect(team!.builtin).toBe(true);
+    expect(team!.description.length).toBeGreaterThan(0);
+
+    // ---- Detail carries content verbatim ----
+    const detailResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkill('team')}`, { headers });
+    expect(detailResp.status).toBe(200);
+    const detail = await detailResp.json() as { content: string };
+    expect(detail.content).toContain('berry-team');
+
+    // ---- Create an agent, then install the 'team' skill onto it ----
+    await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ spec: { agentId: 'skilled', workspace: 'skilled', model: 'tier:strong', ensureDefaultMcpConfig: false } }),
+    }).then((r) => { expect(r.status).toBe(200); });
+
+    const installResp = await fetch(
+      `${a8sInfo.url}${A8S_PATHS.operatorAgentInstallSkill('skilled', 'team')}`,
+      { method: 'POST', headers, body: '{}' },
+    );
+    expect(installResp.status, await installResp.clone().text()).toBe(200);
+    const install = await installResp.json() as { ok: boolean; name: string };
+    expect(install.ok).toBe(true);
+    expect(install.name).toBe('team');
+
+    // ---- The agent's own /skills now lists it ----
+    const agentSkills = await fetch(`${a8sInfo.url}/v1/agents/skilled/skills`, { headers })
+      .then((r) => r.json()) as { names: string[] };
+    expect(agentSkills.names).toContain('team');
+
+    // ---- Installing an unknown skill → 404 ----
+    const unknown = await fetch(
+      `${a8sInfo.url}${A8S_PATHS.operatorAgentInstallSkill('skilled', 'nope')}`,
+      { method: 'POST', headers, body: '{}' },
+    );
+    expect(unknown.status).toBe(404);
+
+    // ---- Operator can register + remove a custom skill ----
+    const reg = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        name: 'house-style',
+        description: 'Write in the house style.',
+        content: '---\nname: house-style\ndescription: Write in the house style.\n---\n# House style',
+      }),
+    });
+    expect(reg.status).toBe(200);
+    const afterReg = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, { headers })
+      .then((r) => r.json()) as { skills: Array<{ name: string }> };
+    expect(afterReg.skills.some((s) => s.name === 'house-style')).toBe(true);
+
+    const del = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkill('house-style')}`, { method: 'DELETE', headers });
+    expect(del.status).toBe(200);
+
+    // ---- Built-ins are protected from overwrite ----
+    const clobber = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ name: 'team', description: 'evil', content: 'x' }),
+    });
+    expect(clobber.status).toBe(409);
+
+    await w.stop();
+    await a8s.stop();
+  });
+
   it('agent config plane: home read/write + spec patch + status proxy through a8s to the worker', async () => {
     const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
     const a8sPort = await pickPort();
