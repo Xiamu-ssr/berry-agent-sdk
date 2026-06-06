@@ -196,6 +196,57 @@ machine id. Pick a stable WORKER_ID (often the machine's hostname).
 `;
 
 /**
+ * The MCP skill — teaches an agent to discover and call a machine's MCP tools
+ * through the `berry-mcp` CLI. MCP is a second-class citizen: its tools are
+ * NOT in the agent's tool list (a machine can proxy dozens). The agent reaches
+ * them on demand via this CLI. Pair with a machine grant (`labels.machines`)
+ * so the agent has a machine to target. A registry built-in (installable from
+ * the Skill market); not auto-seeded into berry-admin.
+ */
+export const MCP_SKILL = `---
+name: mcp
+description: Discover and call a machine's MCP tools through the berry-mcp CLI (MCP is not in your tool list — reach it on demand).
+whenToUse: When you need a capability a machine's MCP server provides (browser automation, a database, an API) and you don't see it as a direct tool — "navigate the browser on mac-1", "query the MCP database", "what MCP tools does this machine have?".
+---
+
+# Use a machine's MCP tools with berry-mcp
+
+MCP tools are **not** in your tool list — that would bury your real tools under
+dozens of entries. Instead you reach them on demand through the **berry-mcp**
+CLI in your shell. It is preinstalled and authenticated from your environment
+(BERRY_A8S_URL + BERRY_A8S_ADMIN_TOKEN) — you don't pass credentials. Add
+\`--json\` to any command for the raw shape.
+
+## Discover
+
+- \`berry-mcp list\` — which machines proxy MCP servers, and how many tools each has. Start here.
+- \`berry-mcp tools <machine>\` — the MCP tools a machine exposes ({server, name, description}).
+- \`berry-mcp tools <machine> --server <name>\` — narrow to one MCP server.
+
+## Call
+
+- \`berry-mcp call <machine> <server> <tool> --input '<json>'\` — invoke one tool.
+  \`--input\` is a JSON object of the tool's arguments (default \`{}\`). The call
+  is brokered by a8s to the machine's local MCP server and returns its output.
+
+## Example
+
+\`\`\`
+berry-mcp tools mac-1 --server playwright
+berry-mcp call mac-1 playwright browser_navigate --input '{"url":"https://example.com"}'
+\`\`\`
+
+## Notes
+
+- You must have been granted the machine (\`labels.machines\` includes it). If
+  \`berry-mcp list\` doesn't show it, ask the operator to grant it.
+- Read the tool's description (\`berry-mcp tools …\`) for its exact input shape
+  before calling — \`--input\` must match what the MCP server expects.
+- This is the same machine you run shell commands on via \`machine_<id>_exec\`;
+  MCP is just its richer, structured capabilities.
+`;
+
+/**
  * Synchronous seed: write the default AGENTS.md and the install-worker
  * skill, each only if absent (so an operator who customized them isn't
  * clobbered on restart). Sync on purpose so callers can use it from the

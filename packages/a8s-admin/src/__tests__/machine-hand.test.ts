@@ -59,48 +59,13 @@ describe('machine Hand', () => {
     expect(result.content).toMatch(/required/);
   });
 
-  it('projects MCP manifest tools with machine + server namespaced names (M6)', () => {
+  it('projects ONLY the exec tool — MCP is second-class (reached via berry-mcp CLI)', () => {
     const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok' });
-    const tools = buildMachineTools({
-      client,
-      machineId: 'mac.office-1',
-      mcpTools: [
-        { server: 'playwright', name: 'browser_navigate', description: 'go to url' },
-        { server: 'my-corp', name: 'lookup.employee' },
-      ],
-    });
-    const names = tools.map((t) => t.definition.name);
-    // exec tool + one per MCP tool, all namespaced by machine then server.
-    expect(names).toEqual([
-      'machine_mac_office-1_exec',
-      'machine_mac_office-1__playwright_browser_navigate',
-      'machine_mac_office-1__my-corp_lookup_employee',
-    ]);
-  });
-
-  it('MCP tool routes through the a8s mcp/invoke broker with the upstream (server,name)', async () => {
-    let seenUrl = '';
-    let seenBody: unknown = null;
-    const fetchImpl = stubFetch((url, init) => {
-      seenUrl = url;
-      seenBody = init?.body;
-      return jsonResponse(200, { content: 'navigated', isError: false });
-    });
-    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok', fetch: fetchImpl });
-    const tools = buildMachineTools({
-      client,
-      machineId: 'mac-1',
-      mcpTools: [{ server: 'playwright', name: 'browser_navigate' }],
-    });
-    const mcpTool = tools.find((t) => t.definition.name === 'machine_mac-1__playwright_browser_navigate')!;
-    const result = await mcpTool.execute({ url: 'https://example.com' }, { cwd: '/' });
-    expect(seenUrl).toBe('http://a8s/v1/machines/mac-1/mcp/invoke');
-    const body = JSON.parse(String(seenBody));
-    // Dispatch key is the *upstream* server + unprefixed tool name; the
-    // model-facing prefix never leaks back to the MCP server.
-    expect(body.server).toBe('playwright');
-    expect(body.name).toBe('browser_navigate');
-    expect(body.input).toEqual({ url: 'https://example.com' });
-    expect(result.content).toContain('navigated');
+    const tools = buildMachineTools({ client, machineId: 'mac.office-1' });
+    // No per-MCP-tool projection anymore: a machine = one first-class exec
+    // tool; its MCP tools are discovered/called through the berry-mcp CLI.
+    expect(tools.map((t) => t.definition.name)).toEqual(['machine_mac_office-1_exec']);
+    // The exec tool points the agent at the CLI for this machine's MCP.
+    expect(tools[0]!.definition.description).toContain('berry-mcp');
   });
 });

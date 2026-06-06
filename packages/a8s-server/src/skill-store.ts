@@ -22,6 +22,7 @@ import { dirname } from 'node:path';
 import {
   A8S_OPS_SKILL,
   INSTALL_WORKER_SKILL,
+  MCP_SKILL,
   TEAM_SKILL,
   CLUSTER_SKILL,
   SKILL_CREATOR_SKILL,
@@ -72,6 +73,7 @@ function builtinSkill(content: string): RegistrySkill {
 export const BUILTIN_SKILLS: RegistrySkill[] = [
   builtinSkill(A8S_OPS_SKILL),
   builtinSkill(INSTALL_WORKER_SKILL),
+  builtinSkill(MCP_SKILL),
   builtinSkill(TEAM_SKILL),
   builtinSkill(CLUSTER_SKILL),
   builtinSkill(SKILL_CREATOR_SKILL),

@@ -32,6 +32,7 @@ export {
   DEFAULT_ADMIN_SYSTEM_PROMPT,
   INSTALL_WORKER_SKILL,
   A8S_OPS_SKILL,
+  MCP_SKILL,
   seedAdminAgentHome,
 } from './admin-agent-defaults.js';
 export {

@@ -16,7 +16,6 @@
 // a8s-server → a8s-admin coupling.
 
 import { createToolRegistrationHand, type Hand, type ToolRegistration } from '@berry-agent/core';
-import type { MachineMcpTool } from '@berry-agent/cluster-protocol';
 import type { A8sOperatorClient } from './operator-client.js';
 
 export interface MachineHandOptions {
@@ -26,13 +25,6 @@ export interface MachineHandOptions {
   platform?: string;
   /** Default cwd for commands when the model omits one. */
   defaultCwd?: string;
-  /**
-   * MCP tools this machine proxies, as reported in its manifest.
-   * Each becomes a model-visible tool named
-   * `machine_<id>__<server>_<tool>` that calls a8s's MCP invoke broker.
-   * Omit/empty when the machine has no local MCP.
-   */
-  mcpTools?: readonly MachineMcpTool[];
 }
 
 /**
@@ -44,36 +36,24 @@ function toolSafe(machineId: string): string {
 }
 
 /**
- * Coerce an MCP tool's reported input schema into the strict object-schema
- * shape ToolDefinition requires. MCP servers should report an object
- * schema, but be defensive: fall back to an empty object schema when the
- * shape is missing or not an object.
- */
-function coerceObjectSchema(
-  raw: Record<string, unknown> | undefined,
-): { type: 'object'; properties: Record<string, unknown>; required?: string[] } {
-  if (raw && raw.type === 'object' && typeof raw.properties === 'object' && raw.properties !== null) {
-    return {
-      type: 'object',
-      properties: raw.properties as Record<string, unknown>,
-      required: Array.isArray(raw.required) ? (raw.required as string[]) : undefined,
-    };
-  }
-  return { type: 'object', properties: {} };
-}
-
-/**
- * Build the exec tool(s) for one machine. Exposed separately so the
- * worker-daemon resolver can inject them as hostTools (no Hand wrapper).
- * Machine exec is a genuine execution-layer capability — unlike cluster
- * ops, which moved to the berry-a8s-ops CLI + skill (新-2).
+ * Build the exec tool for one machine. Exposed separately so the worker-daemon
+ * resolver can inject it as a hostTool (no Hand wrapper). Machine exec is a
+ * genuine execution-layer capability — unlike cluster ops, which moved to the
+ * berry-a8s-ops CLI + skill (新-2).
+ *
+ * MCP is deliberately NOT projected here. Per the settled model, a machine's
+ * MCP tools are second-class: they do not flatten into the agent's tool list
+ * (a machine can proxy dozens — that's the very bloat we're avoiding). The
+ * agent discovers and calls them through the `berry-mcp` CLI instead, brokered
+ * by a8s via the same machineMcpInvoke path. So one machine = one first-class
+ * `exec` tool; MCP stays on demand behind the CLI.
  */
 export function buildMachineTools(options: MachineHandOptions): ToolRegistration[] {
   const { client, machineId } = options;
   const safe = toolSafe(machineId);
   const where = options.platform ? ` (${options.platform})` : '';
   const cwdHint = options.defaultCwd ? ` Defaults to ${options.defaultCwd}.` : '';
-  const tools: ToolRegistration[] = [
+  return [
     {
       definition: {
         name: `machine_${safe}_exec`,
@@ -81,7 +61,8 @@ export function buildMachineTools(options: MachineHandOptions): ToolRegistration
           `Run a shell command on machine "${machineId}"${where}. Use this to operate that `
           + `host — install/restart services, inspect state, run setup steps. The command `
           + `runs in the machine's real shell, so OS-specific behavior is the machine's. `
-          + `Returns combined stdout/stderr.`,
+          + `Returns combined stdout/stderr. (For this machine's MCP tools, use the `
+          + `berry-mcp CLI: \`berry-mcp tools ${machineId}\`.)`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -111,44 +92,6 @@ export function buildMachineTools(options: MachineHandOptions): ToolRegistration
       },
     },
   ];
-
-  // One model-visible tool per MCP tool the machine proxies. Naming
-  // mirrors Claude Code's `mcp__server__tool` but embeds the machine so an
-  // agent driving several machines sees no ambiguity:
-  //   machine_<id>__<server>_<tool>
-  // The double underscore separates the machine namespace from the MCP
-  // namespace; the upstream (server, name) pair is the dispatch key sent
-  // to a8s's MCP invoke broker — a8s forwards to the connector, which
-  // holds the persistent stdio connection to the actual MCP server.
-  for (const mcp of options.mcpTools ?? []) {
-    const safeServer = toolSafe(mcp.server);
-    const safeTool = toolSafe(mcp.name);
-    const name = `machine_${safe}__${safeServer}_${safeTool}`;
-    tools.push({
-      definition: {
-        name,
-        description:
-          (mcp.description ? `${mcp.description}\n\n` : '')
-          + `(MCP tool "${mcp.name}" from server "${mcp.server}" on machine "${machineId}"${where}.)`,
-        inputSchema: coerceObjectSchema(mcp.inputSchema),
-      },
-      execute: async (input) => {
-        try {
-          const reply = await client.machineMcpInvoke(machineId, {
-            server: mcp.server,
-            name: mcp.name,
-            input: input ?? {},
-          });
-          return { content: reply.content || '(no output)', isError: reply.isError || undefined };
-        } catch (err) {
-          return { content: err instanceof Error ? err.message : String(err), isError: true };
-        }
-      },
-      source: { kind: 'mcp', server: `${machineId}:${mcp.server}` },
-    });
-  }
-
-  return tools;
 }
 
 /** Wrap a machine's tools as a standalone Hand (for non-worker callers). */

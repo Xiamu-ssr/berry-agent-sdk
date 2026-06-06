@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "bin": {
     "berry-a8s-ops": "dist/ops-cli.js",
-    "berry-team": "dist/team-cli.js"
+    "berry-team": "dist/team-cli.js",
+    "berry-mcp": "dist/mcp-cli.js"
   },
   "exports": {
     ".": {
