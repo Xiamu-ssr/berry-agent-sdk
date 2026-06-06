@@ -15,7 +15,8 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc && chmod +x dist/cli.js 2>/dev/null || true",
-    "dev": "tsc -w"
+    "dev": "tsc -w",
+    "test": "vitest run"
   },
   "dependencies": {
     "@berry-agent/cluster-protocol": "*",

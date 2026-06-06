@@ -16,13 +16,9 @@
 // a worker), instead of the operator copy-pasting setup scripts.
 
 import { parseArgs } from 'node:util';
-import { existsSync, readFileSync } from 'node:fs';
-import { hostname, platform as osPlatform } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { MachineConnectorDaemon } from './daemon.js';
-import { MachineRegistrationClient } from './registration.js';
-import { MachineMcpHost } from './mcp-host.js';
+import { startMachineConnector } from './connector.js';
 
 const VERSION = '0.5.0-alpha.1';
 
@@ -63,15 +59,6 @@ const configSchema = z.object({
   labels: z.record(z.string()).optional(),
   mcpConfig: z.string().min(1).optional(),
 }).strict();
-
-function detectPlatform(): 'macos' | 'linux' | 'windows' | 'other' {
-  switch (osPlatform()) {
-    case 'darwin': return 'macos';
-    case 'linux': return 'linux';
-    case 'win32': return 'windows';
-    default: return 'other';
-  }
-}
 
 async function main(argv: string[]): Promise<number> {
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
@@ -117,59 +104,41 @@ async function main(argv: string[]): Promise<number> {
     process.stderr.write('--a8s <url> is required (flag or config)\n');
     return 2;
   }
-  const adminToken = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN ?? config.adminToken;
-  const machineId = values['machine-id'] ?? config.machineId ?? hostname();
   const port = values.port ? parseInt(values.port, 10) : (config.port ?? 7200);
   if (!Number.isFinite(port) || port <= 0) {
     process.stderr.write(`invalid --port: ${values.port}\n`);
     return 2;
   }
-  const bindHost = values['bind-host'] ?? config.bindHost;
   const heartbeatTtlMs = values['heartbeat-ttl']
     ? parseInt(values['heartbeat-ttl'], 10)
     : (config.heartbeatTtlMs ?? 30_000);
 
-  // ---- Local MCP ----
-  // Connect this machine's local MCP servers so the cluster can use them
-  // as Hands. Default to <cwd>/.mcp.json when present; explicit flag/config
-  // wins. The persistent stdio connections live here; a8s only forwards
-  // one-shot invokes.
-  const mcpConfigPath = values['mcp-config'] ?? config.mcpConfig
-    ?? (existsSync(join(process.cwd(), '.mcp.json')) ? join(process.cwd(), '.mcp.json') : undefined);
-  let mcpHost: MachineMcpHost | undefined;
-  if (mcpConfigPath) {
-    mcpHost = new MachineMcpHost({ configPath: mcpConfigPath });
-    await mcpHost.start();
-    const toolCount = mcpHost.manifest().tools.length;
-    process.stdout.write(`   MCP: ${mcpHost.serverIds().length} server(s), ${toolCount} tool(s) from ${mcpConfigPath}\n`);
-  }
-
-  const daemon = new MachineConnectorDaemon({ machineId, port, bindHost, version: VERSION, mcpHost });
-  const info = await daemon.start();
-  process.stdout.write(`🖐  berry-machine "${machineId}" listening on ${info.callbackUrl}\n`);
-  process.stdout.write(`   platform: ${detectPlatform()}\n`);
-
-  const reg = new MachineRegistrationClient({
+  // All wiring (MCP host → daemon → register) lives in startMachineConnector
+  // so a GUI client can bundle the connector with the same one call. The CLI
+  // only adds what a long-running process needs: signal handling + blocking.
+  const connector = await startMachineConnector({
     a8sUrl,
-    machineId,
-    callbackUrl: info.callbackUrl,
+    machineId: values['machine-id'] ?? config.machineId,
+    port,
+    bindHost: values['bind-host'] ?? config.bindHost,
+    adminToken: values['admin-token'] ?? config.adminToken,
     heartbeatTtlMs,
-    platform: detectPlatform(),
     labels: config.labels,
-    adminToken,
-    mcpServers: mcpHost?.serverIds(),
-    mcpManifest: mcpHost?.manifest(),
+    mcpConfigPath: values['mcp-config'] ?? config.mcpConfig,
+    version: VERSION,
   });
-  const result = await reg.register();
-  daemon.setAuthToken(result.machineToken);
+
+  process.stdout.write(`🖐  berry-machine "${connector.machineId}" listening on ${connector.callbackUrl}\n`);
+  process.stdout.write(`   platform: ${connector.platform}\n`);
+  if (connector.mcp) {
+    process.stdout.write(`   MCP: ${connector.mcp.servers.length} server(s), ${connector.mcp.toolCount} tool(s)\n`);
+  }
   process.stdout.write(`🔗 registered with a8s at ${a8sUrl}\n`);
 
   const shutdown = async (signal: string) => {
     process.stdout.write(`\n[berry-machine] received ${signal}, withdrawing...\n`);
     try {
-      await reg.withdraw();
-      await daemon.stop();
-      await mcpHost?.dispose();
+      await connector.stop();
       process.exit(0);
     } catch (err) {
       process.stderr.write(`[berry-machine] shutdown error: ${err instanceof Error ? err.message : String(err)}\n`);

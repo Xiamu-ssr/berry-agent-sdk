@@ -2,6 +2,13 @@
 // @berry-agent/machine-connector — Public API
 // ============================================================
 
+export { startMachineConnector, detectPlatform } from './connector.js';
+export type {
+  StartMachineConnectorOptions,
+  RunningMachineConnector,
+  MachinePlatform,
+} from './connector.js';
+
 export { MachineConnectorDaemon } from './daemon.js';
 export type { MachineConnectorDaemonOptions } from './daemon.js';
 
