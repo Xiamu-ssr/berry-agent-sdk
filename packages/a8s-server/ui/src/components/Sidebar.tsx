@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Layout, Menu, Button } from '@arco-design/web-react';
 import {
   PeakMark, GridIcon, AgentIcon, ChatIcon, WorkerIcon, MachineIcon,
   LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon, HandIcon, SkillIcon,
@@ -21,6 +21,8 @@ export type View =
 export interface SidebarProps {
   view: View;
   onSelect(view: View): void;
+  collapsed: boolean;
+  onCollapse(collapsed: boolean): void;
 }
 
 type Icon = (props: { className?: string }) => JSX.Element;
@@ -66,64 +68,76 @@ export const VIEW_LABEL: Record<View, string> = Object.fromEntries(
   GROUPS.flatMap((g) => g.items.map((i) => [i.key, i.label])),
 ) as Record<View, string>;
 
-export function Sidebar({ view, onSelect }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
-
+/**
+ * The console's left rail. Arco `Layout.Sider` (collapse/brand/footer) wrapping
+ * a controlled `Menu` — the existing useState routing maps 1:1 to Menu keys, so
+ * no router is needed. We keep the hand-drawn brand icons (the visual language
+ * is ours) rather than swapping to generic Arco glyphs.
+ */
+export function Sidebar({ view, onSelect, collapsed, onCollapse }: SidebarProps) {
   return (
-    <aside
-      className={`${collapsed ? 'w-16' : 'w-60'} shrink-0 border-r border-ink-200 dark:border-ink-800
-        bg-gradient-to-b from-ink-50 to-white dark:from-ink-950 dark:to-ink-900 flex flex-col transition-[width] duration-200`}
+    <Layout.Sider
+      collapsible
+      collapsed={collapsed}
+      onCollapse={(c) => onCollapse(c)}
+      width={232}
+      collapsedWidth={64}
+      trigger={null}
+      breakpoint="xl"
+      style={{ borderRight: '1px solid var(--color-border-2)' }}
     >
-      <div className="px-4 py-5 flex items-center gap-2.5">
-        <span className="text-snow-600 dark:text-snow-400 shrink-0"><PeakMark /></span>
-        {!collapsed && (
-          <div className="leading-tight min-w-0">
-            <div className="font-semibold text-ink-900 dark:text-ink-50 truncate">雪山引擎</div>
-            <div className="text-[11px] text-ink-400 dark:text-ink-500 tracking-wide">SNOW MOUNTAIN</div>
-          </div>
-        )}
-      </div>
+      <div className="h-full flex flex-col">
+        <div className="px-4 py-5 flex items-center gap-2.5">
+          <span className="text-snow-600 shrink-0"><PeakMark /></span>
+          {!collapsed && (
+            <div className="leading-tight min-w-0">
+              <div className="font-semibold truncate" style={{ color: 'var(--color-text-1)' }}>雪山引擎</div>
+              <div className="text-[11px] tracking-wide" style={{ color: 'var(--color-text-3)' }}>SNOW MOUNTAIN</div>
+            </div>
+          )}
+        </div>
 
-      <nav className="flex-1 px-2 overflow-y-auto">
-        {GROUPS.map((group) => (
-          <div key={group.label}>
-            {!collapsed && <div className="nav-group">{group.label}</div>}
-            {group.items.map((item) => {
-              const active = view === item.key;
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.key}
-                  onClick={() => onSelect(item.key)}
-                  title={collapsed ? item.label : undefined}
-                  className={`w-full text-left px-3 py-2 my-0.5 rounded-md text-sm transition-colors flex items-center gap-3 ${
-                    active
-                      ? 'bg-white shadow-sm text-snow-700 ring-1 ring-snow-100 dark:bg-ink-800 dark:text-snow-300 dark:ring-ink-700'
-                      : 'text-ink-600 hover:bg-white/70 dark:text-ink-400 dark:hover:bg-ink-900'
-                  }`}
-                >
-                  <span className={`shrink-0 ${active ? 'text-snow-600 dark:text-snow-400' : 'text-ink-400 dark:text-ink-500'}`}>
-                    <Icon className="w-[18px] h-[18px]" />
-                  </span>
-                  {!collapsed && item.label}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
+        <div className="flex-1 overflow-y-auto">
+          <Menu
+            selectedKeys={[view]}
+            onClickMenuItem={(key) => onSelect(key as View)}
+            collapse={collapsed}
+            style={{ width: '100%', border: 'none', background: 'transparent' }}
+          >
+            {GROUPS.map((group) => (
+              <Menu.ItemGroup key={group.label} title={group.label}>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Menu.Item key={item.key}>
+                      <Icon className="w-[18px] h-[18px] inline-block align-[-3px] mr-1" />
+                      {item.label}
+                    </Menu.Item>
+                  );
+                })}
+              </Menu.ItemGroup>
+            ))}
+          </Menu>
+        </div>
 
-      <div className="px-3 py-3 border-t border-ink-200/70 dark:border-ink-800 flex items-center justify-between">
-        {!collapsed && <span className="text-[11px] text-ink-400 dark:text-ink-600 px-1">a8s v0.5.0-alpha</span>}
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? 'Expand' : 'Collapse'}
-          className="btn btn-ghost px-2 py-1 text-ink-400"
+        <div
+          className="px-3 py-3 flex items-center justify-between"
+          style={{ borderTop: '1px solid var(--color-border-2)' }}
         >
-          {collapsed ? '»' : '«'}
-        </button>
+          {!collapsed && (
+            <span className="text-[11px] px-1" style={{ color: 'var(--color-text-3)' }}>a8s v0.5.0-alpha</span>
+          )}
+          <Button
+            type="text"
+            size="small"
+            onClick={() => onCollapse(!collapsed)}
+            title={collapsed ? '展开' : '收起'}
+            style={{ color: 'var(--color-text-3)' }}
+          >
+            {collapsed ? '»' : '«'}
+          </Button>
+        </div>
       </div>
-    </aside>
+    </Layout.Sider>
   );
 }

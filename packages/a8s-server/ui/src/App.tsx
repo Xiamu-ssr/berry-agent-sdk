@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Layout } from '@arco-design/web-react';
 import { Sidebar, VIEW_LABEL, type View } from './components/Sidebar.js';
 import { TokenModal } from './components/TokenModal.js';
 import { Topbar } from './components/Topbar.js';
@@ -18,6 +19,7 @@ import { AuditPage } from './pages/AuditPage.js';
 
 export function App() {
   const [view, setView] = useState<View>('dashboard');
+  const [collapsed, setCollapsed] = useState(false);
   const [hasToken, setHasToken] = useState<boolean>(() => !!getToken());
 
   // Listen for auth failures so any component throwing AuthError will
@@ -33,25 +35,27 @@ export function App() {
   }
 
   return (
-    <div className="h-full flex">
-      <Sidebar view={view} onSelect={setView} />
-      <div className="flex-1 flex flex-col min-w-0">
+    <Layout className="h-full">
+      <Sidebar view={view} onSelect={setView} collapsed={collapsed} onCollapse={setCollapsed} />
+      <Layout>
         <Topbar title={VIEW_LABEL[view]} onLogout={() => setHasToken(false)} />
-        <main className="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full">
-          {view === 'dashboard' && <DashboardPage />}
-          {view === 'agents' && <AgentsPage />}
-          {view === 'hands' && <HandsPage />}
-          {view === 'skills' && <SkillsPage />}
-          {view === 'admin' && <AdminChatPage />}
-          {view === 'workers' && <WorkersPage />}
-          {view === 'machines' && <MachinesPage />}
-          {view === 'leases' && <LeasesPage />}
-          {view === 'wakes' && <WakesPage />}
-          {view === 'models' && <SettingsPage />}
-          {view === 'credentials' && <CredentialsPage />}
-          {view === 'audit' && <AuditPage />}
-        </main>
-      </div>
-    </div>
+        <Layout.Content style={{ overflowY: 'auto', background: 'var(--color-bg-1)' }}>
+          <div className="p-6 max-w-7xl mx-auto w-full">
+            {view === 'dashboard' && <DashboardPage />}
+            {view === 'agents' && <AgentsPage />}
+            {view === 'hands' && <HandsPage />}
+            {view === 'skills' && <SkillsPage />}
+            {view === 'admin' && <AdminChatPage />}
+            {view === 'workers' && <WorkersPage />}
+            {view === 'machines' && <MachinesPage />}
+            {view === 'leases' && <LeasesPage />}
+            {view === 'wakes' && <WakesPage />}
+            {view === 'models' && <SettingsPage />}
+            {view === 'credentials' && <CredentialsPage />}
+            {view === 'audit' && <AuditPage />}
+          </div>
+        </Layout.Content>
+      </Layout>
+    </Layout>
   );
 }
