@@ -21,6 +21,13 @@ export interface AgentSystemPromptDeps {
   projectContext: () => ProjectContext | undefined;
   agentMdPath: string;
   renderSkillIndexBlock: () => Promise<string | null>;
+  /**
+   * Render the agent's hands grouped by env (each hand's env + tool names +
+   * mcp overview), or null when there are no hands worth listing. Lets the
+   * model see "which hands do I have, on what env, able to do what" without
+   * dumping full tool schemas.
+   */
+  renderHandsBlock?: () => string | null;
 }
 
 export async function buildAgentSystemPrompt(
@@ -33,6 +40,7 @@ export async function buildAgentSystemPrompt(
   const base = normalizeSystemPrompt(basePrompt);
   await appendProjectContext(base, deps.projectContext());
   await appendAgentInstructions(base, deps.agentMdPath);
+  appendHandsIndex(base, deps.renderHandsBlock);
   await appendSkillIndex(base, deps.renderSkillIndexBlock);
   return base;
 }
@@ -101,5 +109,17 @@ async function appendSkillIndex(
   const index = await renderSkillIndexBlock();
   if (index) {
     base.push({ text: index, cache: SystemPromptCacheMode.Dynamic });
+  }
+}
+
+function appendHandsIndex(
+  base: SystemPromptBlock[],
+  renderHandsBlock: (() => string | null) | undefined,
+): void {
+  const block = renderHandsBlock?.();
+  if (block) {
+    // Hands change when an env is granted/revoked at runtime; keep it in the
+    // dynamic cache segment so a toggle invalidates only the tail.
+    base.push({ text: block, cache: SystemPromptCacheMode.Dynamic });
   }
 }

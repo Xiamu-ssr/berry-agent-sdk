@@ -43,6 +43,7 @@ import type {
 } from '@berry-agent/small-shared-core';
 import { normalizeSystemPrompt } from '@berry-agent/small-shared-core';
 import type { Hand, HandRegistry, HandToolAdapterOptions } from './hands.js';
+import { buildHandsIndex } from './hands.js';
 import type { EventLogListener, EventLogStore, GetEventsOptions, SessionEvent, SessionEventDraft } from './event-log/types.js';
 import type { AgentMemory, ProjectContext } from './workspace/types.js';
 import type { MemoryProvider } from './memory/provider.js';
@@ -85,6 +86,9 @@ import {
   type MCPSummary,
   unregisterHandCapabilities,
   unregisterToolCapability,
+  CONFIGURED_TOOLS_HAND_ID,
+  MEMORY_PROVIDER_HAND_ID_PREFIX,
+  RUNTIME_TOOL_HAND_ID_PREFIX,
 } from './agent-helpers/index.js';
 
 export class Agent {
@@ -838,10 +842,26 @@ export class Agent {
         projectContext: () => this._projectContext,
         agentMdPath: this._home.agentMdPath,
         renderSkillIndexBlock: () => this.skills.renderIndexBlock(),
+        renderHandsBlock: () => this.renderHandsBlock(),
       },
       basePrompt,
       override,
     );
+  }
+
+  /**
+   * Render the model-facing hands index (env-grouped tool/mcp names), or null
+   * when only SDK-internal plumbing hands exist. Excludes the configured-tools,
+   * memory-provider, and per-runtime-tool wrapper hands — those are not
+   * capability bundles the model should reason about as "environments".
+   */
+  private renderHandsBlock(): string | null {
+    const userHands = this.hands.list().filter((h) =>
+      h.id !== CONFIGURED_TOOLS_HAND_ID
+      && !h.id.startsWith(MEMORY_PROVIDER_HAND_ID_PREFIX)
+      && !h.id.startsWith(RUNTIME_TOOL_HAND_ID_PREFIX),
+    );
+    return buildHandsIndex(userHands, (handId) => this.handToolNames.get(handId));
   }
 
   /** Get a loaded skill by name (for lazy content loading). */

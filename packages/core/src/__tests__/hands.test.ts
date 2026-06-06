@@ -4,6 +4,7 @@ import {
   HandRegistry,
   ManagedAgentRuntime,
   ToolGroup,
+  buildHandsIndex,
   createHandToolRegistrations,
   createToolRegistrationHand,
   evaluateHandCapabilityPolicy,
@@ -114,6 +115,35 @@ describe('hands', () => {
 
     const regs = createHandToolRegistrations([a, b, c], { onCollision: 'suffix' });
     expect(regs.map((r) => r.definition.name)).toEqual(['run', 'run_dev', 'run_dev_2']);
+  });
+
+  it('buildHandsIndex groups by env and separates tools from mcp', () => {
+    const local = createToolRegistrationHand({
+      id: 'workspace', env: 'local', displayName: 'Workspace',
+      tools: [tool('shell'), tool('read_file')],
+    });
+    const machine = createToolRegistrationHand({
+      id: 'machine-mac-1', kind: 'remote-sandbox', env: 'mac-1', displayName: 'Machine mac-1',
+      tools: [tool('shell'), { ...tool('browser_navigate'), source: { kind: 'mcp', server: 'mac-1:playwright' } }],
+    });
+
+    // Pass the exposed names so the suffixed `shell_mac-1` shows up.
+    const exposed: Record<string, Set<string>> = {
+      'workspace': new Set(['shell', 'read_file']),
+      'machine-mac-1': new Set(['shell_mac-1', 'browser_navigate']),
+    };
+    const index = buildHandsIndex([local, machine], (id) => exposed[id])!;
+
+    expect(index).toContain('<hands>');
+    expect(index).toContain('env=local');
+    expect(index).toContain('env=mac-1');
+    expect(index).toContain('tools: shell, read_file');
+    expect(index).toContain('tools: shell_mac-1');     // suffixed name shown
+    expect(index).toContain('mcp: browser_navigate');  // mcp listed separately
+  });
+
+  it('buildHandsIndex returns null with no hands', () => {
+    expect(buildHandsIndex([])).toBeNull();
   });
 
   it('preserves explicit upstream provenance for wrapped capabilities', () => {
@@ -257,8 +287,7 @@ describe('hands', () => {
     expect(registry.list()).toEqual([]);
   });
 
-  it('lets Agent own hand registration and execution', async () => {
-    const provider = new SequenceProvider([
+  it('lets Agent own hand registration and execution', async () => {    const provider = new SequenceProvider([
       {
         content: [{
           type: 'tool_use',
@@ -296,6 +325,27 @@ describe('hands', () => {
       .flatMap((message) => Array.isArray(message.content) ? message.content : [])
       .find((block) => block.type === 'tool_result');
     expect(toolResult?.content).toContain('"handId":"local-workspace"');
+  });
+
+  it('includes a <hands> index in the system prompt sent to the provider', async () => {
+    const provider = new SequenceProvider([
+      { content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage: usage() },
+    ]);
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake' },
+      providerInstance: provider,
+      home: tmpHome('berry-hand-sysprompt-'),
+      hands: [
+        createToolRegistrationHand({ id: 'machine-mac-1', kind: 'remote-sandbox', env: 'mac-1', displayName: 'Machine mac-1', tools: [tool('shell')] }),
+      ],
+    });
+
+    await agent.send('hi');
+
+    const sysText = (provider.requests[0]!.systemPrompt ?? []).map((b) => b.text).join('\n');
+    expect(sysText).toContain('<hands>');
+    expect(sysText).toContain('[machine-mac-1] env=mac-1');
+    expect(sysText).toContain('tools: shell');
   });
 
   it('lets ManagedAgentRuntime remove mounted hands without exposing Agent', async () => {

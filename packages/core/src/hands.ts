@@ -393,9 +393,65 @@ function emitHandCapabilityAudit(
   }
 }
 
+/**
+ * Render a compact, model-facing index of the agent's hands grouped by env.
+ * Shows each hand's env + tool NAMES (not full schemas) + an MCP overview —
+ * enough for the model to know "which hands do I have, on what environment,
+ * able to do what", without bloating the prompt with JSON schemas (those
+ * already travel in the tools array). Returns null when there are no hands.
+ *
+ * `exposedNamesFor(handId)` returns the model-visible tool names actually
+ * registered for that hand — so env-suffixed collisions (乙1) show their
+ * real, suffixed names. When omitted, bare capability names are used.
+ */
+export function buildHandsIndex(
+  hands: readonly Hand[],
+  exposedNamesFor?: (handId: string) => ReadonlySet<string> | undefined,
+): string | null {
+  if (hands.length === 0) return null;
+
+  const lines: string[] = ['<hands>'];
+  lines.push('  # Each hand is a bundle of capabilities bound to one environment (env).');
+  lines.push('  # Tools below are flattened into your tool list; names that collide across envs are suffixed with the env.');
+
+  for (const hand of hands) {
+    const env = hand.env ?? hand.id;
+    const exposed = exposedNamesFor?.(hand.id);
+    const toolNames: string[] = [];
+    const mcpNames: string[] = [];
+    for (const cap of hand.capabilities()) {
+      // Prefer the actually-registered (possibly env-suffixed) name; fall back
+      // to the bare capability name when no registry mapping is supplied.
+      const shown = pickExposedName(cap.definition.name, exposed);
+      if (cap.source?.kind === 'mcp') mcpNames.push(shown);
+      else toolNames.push(shown);
+    }
+    const label = hand.displayName ? `${hand.displayName} ` : '';
+    lines.push(`  - ${label}[${hand.id}] env=${env} kind=${hand.kind}`);
+    if (toolNames.length) lines.push(`      tools: ${toolNames.join(', ')}`);
+    if (mcpNames.length) lines.push(`      mcp: ${mcpNames.join(', ')}`);
+    if (!toolNames.length && !mcpNames.length) lines.push('      (no capabilities)');
+  }
+  lines.push('</hands>');
+  return lines.join('\n');
+}
+
+/**
+ * Resolve which exposed name corresponds to a bare capability name: it is
+ * either the bare name itself (no collision) or `<bare>_<suffix>` (collided).
+ * Matching by prefix keeps this independent of the exact suffix scheme.
+ */
+function pickExposedName(bare: string, exposed: ReadonlySet<string> | undefined): string {
+  if (!exposed) return bare;
+  if (exposed.has(bare)) return bare;
+  for (const name of exposed) {
+    if (name === bare || name.startsWith(`${bare}_`)) return name;
+  }
+  return bare;
+}
+
 export class HandRegistry {
   private readonly hands = new Map<string, Hand>();
-
   register(hand: Hand): void {
     if (this.hands.has(hand.id)) {
       throw new Error(`Hand already registered: ${hand.id}`);

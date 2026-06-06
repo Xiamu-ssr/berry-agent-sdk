@@ -51,6 +51,7 @@ export {
   evaluateHandCapabilityPolicy,
   createHandToolRegistrations,
   createToolRegistrationHand,
+  buildHandsIndex,
 } from './hands.js';
 export type {
   CreateToolHandOptions,
