@@ -28,6 +28,7 @@ import {
   machineExecRequestSchema,
   machineMcpInvokeReplySchema,
   machineMcpInvokeRequestSchema,
+  machineReloadReplySchema,
   parseWorkerAuthHeader,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
@@ -55,6 +56,11 @@ export interface MachineConnectorDaemonOptions {
   mcpHost?: MachineMcpHost;
   /** Default cwd when an exec request omits one. Defaults to process.cwd(). */
   defaultCwd?: string;
+  /**
+   * Called after a successful /reload so the connector can re-report its new
+   * MCP capability to a8s (the registration client wires this to a heartbeat).
+   */
+  onReload?: (servers: string[]) => void | Promise<void>;
   version?: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }
@@ -137,6 +143,10 @@ export class MachineConnectorDaemon {
       return this.handleMcpInvoke(req, res);
     }
 
+    if (req.method === 'POST' && url === MACHINE_PATHS.reload) {
+      return this.handleReload(res);
+    }
+
     return writeJson(res, 404, errorPayloadSchema.parse({
       error: { code: 'not_found', message: `no route for ${req.method} ${url}` },
     }));
@@ -176,6 +186,27 @@ export class MachineConnectorDaemon {
     writeJson(res, 200, machineMcpInvokeReplySchema.parse({
       content: reply.content,
       isError: reply.isError,
+    }));
+  }
+
+  /**
+   * Rescan .mcp.json and rebuild live MCP connections. This is what lets a8s
+   * provision a Hand onto this env remotely: write a new .mcp.json over /exec,
+   * then POST /reload — the new server's tools appear without a restart. The
+   * fresh capability is pushed to a8s via the onReload hook (next heartbeat).
+   */
+  private async handleReload(res: ServerResponse): Promise<void> {
+    if (!this.options.mcpHost) {
+      return writeJson(res, 200, machineReloadReplySchema.parse({
+        mcpServers: [],
+        mcpManifest: { tools: [] },
+      }));
+    }
+    const servers = await this.options.mcpHost.reload();
+    await this.options.onReload?.(servers);
+    writeJson(res, 200, machineReloadReplySchema.parse({
+      mcpServers: servers,
+      mcpManifest: this.options.mcpHost.manifest(),
     }));
   }
 }

@@ -16,6 +16,7 @@ import {
   machineExecReplySchema,
   machineExecRequestSchema,
   machineHeartbeatResponseSchema,
+  machineHeartbeatRequestSchema,
   machineMcpInvokeReplySchema,
   machineMcpInvokeRequestSchema,
   machineMcpManifestSchema,
@@ -60,8 +61,12 @@ export function machineRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       pattern: '/v1/machines/:machineId/heartbeat',
       name: 'POST /v1/machines/:id/heartbeat',
       middleware: [requireMachineToken(deps)],
-      handler: async ({ params, res }) => {
-        const ok = deps.machines.heartbeat(params.machineId, Date.now());
+      handler: async ({ req, params, res }) => {
+        const beat = machineHeartbeatRequestSchema.parse(await readJsonBody(req));
+        const ok = deps.machines.heartbeat(params.machineId, Date.now(), {
+          mcpServers: beat.mcpServers,
+          mcpTools: beat.mcpManifest?.tools,
+        });
         if (!ok) {
           throw httpError(410, 'machine_gone', `machine ${params.machineId} is unknown; please re-register`);
         }

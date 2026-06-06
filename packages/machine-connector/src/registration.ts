@@ -56,12 +56,28 @@ export class MachineRegistrationClient {
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private token: string | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Current MCP capability, re-reported on every heartbeat so a8s reflects
+   *  reloads. Seeded from the register-time options. */
+  private mcpServers: string[];
+  private mcpManifest: MachineMcpManifest | undefined;
 
   constructor(options: MachineRegistrationClientOptions) {
     this.options = options;
     this.baseUrl = options.a8sUrl.replace(/\/$/, '');
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.logger = options.logger ?? console;
+    this.mcpServers = options.mcpServers ?? [];
+    this.mcpManifest = options.mcpManifest;
+  }
+
+  /**
+   * Replace the reported MCP capability (called after the connector reloads
+   * its .mcp.json). The next heartbeat carries it to a8s, so a remotely
+   * provisioned Hand becomes visible cluster-wide without a re-register.
+   */
+  updateCapability(servers: string[], manifest: MachineMcpManifest): void {
+    this.mcpServers = servers;
+    this.mcpManifest = manifest;
   }
 
   async register(): Promise<MachineRegistrationResponse> {
@@ -71,8 +87,8 @@ export class MachineRegistrationClient {
       heartbeatTtlMs: this.options.heartbeatTtlMs,
       platform: this.options.platform,
       labels: this.options.labels,
-      mcpServers: this.options.mcpServers ?? [],
-      mcpManifest: this.options.mcpManifest,
+      mcpServers: this.mcpServers,
+      mcpManifest: this.mcpManifest,
     });
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.options.adminToken) {
@@ -120,7 +136,12 @@ export class MachineRegistrationClient {
 
   private async heartbeatOnce(): Promise<void> {
     if (!this.token) return;
-    const body = machineHeartbeatRequestSchema.parse({});
+    // Re-report current MCP capability so a8s reflects any reload since
+    // registration (omitting the fields would leave a8s's view stale).
+    const body = machineHeartbeatRequestSchema.parse({
+      mcpServers: this.mcpServers,
+      mcpManifest: this.mcpManifest,
+    });
     try {
       const response = await this.fetchImpl(
         `${this.baseUrl}${A8S_PATHS.machineHeartbeat(this.options.machineId)}`,

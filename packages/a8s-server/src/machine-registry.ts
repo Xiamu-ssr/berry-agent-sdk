@@ -77,12 +77,23 @@ export class MachineRegistry {
     return !!entry && !!token && entry.token === token;
   }
 
-  /** Refresh heartbeat. Returns false if the machine is unknown. */
-  heartbeat(machineId: string, now: number): boolean {
+  /**
+   * Refresh heartbeat. Returns false if the machine is unknown. When the
+   * heartbeat carries fresh MCP capability (the connector reloaded its
+   * .mcp.json), apply it so the operator/agent view reflects the change
+   * without a re-register.
+   */
+  heartbeat(
+    machineId: string,
+    now: number,
+    capability?: { mcpServers?: string[]; mcpTools?: MachineMcpTool[] },
+  ): boolean {
     const entry = this.machines.get(machineId);
     if (!entry) return false;
     entry.heartbeatAt = now;
     entry.withdrawnAt = undefined;
+    if (capability?.mcpServers !== undefined) entry.mcpServers = [...capability.mcpServers];
+    if (capability?.mcpTools !== undefined) entry.mcpTools = [...capability.mcpTools];
     return true;
   }
 

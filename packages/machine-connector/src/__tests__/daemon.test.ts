@@ -11,6 +11,7 @@ import {
   workerAuthHeader,
   machineExecReplySchema,
   machineMcpInvokeReplySchema,
+  machineReloadReplySchema,
 } from '@berry-agent/cluster-protocol';
 import { MachineConnectorDaemon } from '../daemon.js';
 import type { MachineMcpHost } from '../mcp-host.js';
@@ -110,5 +111,51 @@ describe('MachineConnectorDaemon', () => {
     const reply = machineMcpInvokeReplySchema.parse(await resp.json());
     expect(reply.isError).toBe(true);
     expect(reply.content).toMatch(/no MCP host/);
+  });
+
+  it('rescans MCP via /reload and reports the fresh capability + fires onReload (B3)', async () => {
+    const port = await pickPort();
+    let reloads = 0;
+    const reloaded: string[][] = [];
+    // Stub host: reload() returns the new server id list; manifest() the tools.
+    const mcpHost = {
+      reload: async () => { reloads++; return ['fs']; },
+      manifest: () => ({ tools: [{ server: 'fs', name: 'read_file' }] }),
+    } as unknown as MachineMcpHost;
+    daemon = new MachineConnectorDaemon({
+      machineId: 'm-reload',
+      port,
+      bindHost: '127.0.0.1',
+      mcpHost,
+      onReload: (servers) => { reloaded.push(servers); },
+    });
+    daemon.setAuthToken('s');
+    const info = await daemon.start();
+
+    const resp = await fetch(`${info.callbackUrl}${MACHINE_PATHS.reload}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', [WORKER_AUTH_HEADER]: workerAuthHeader('s') },
+    });
+    expect(resp.status).toBe(200);
+    const reply = machineReloadReplySchema.parse(await resp.json());
+    expect(reply.mcpServers).toEqual(['fs']);
+    expect(reply.mcpManifest.tools.map((t) => t.name)).toEqual(['read_file']);
+    expect(reloads).toBe(1);
+    expect(reloaded).toEqual([['fs']]); // onReload fired with the fresh server list
+  });
+
+  it('reload with no MCP host returns empty capability', async () => {
+    const port = await pickPort();
+    daemon = new MachineConnectorDaemon({ machineId: 'm-noreload', port, bindHost: '127.0.0.1' });
+    daemon.setAuthToken('s');
+    const info = await daemon.start();
+    const resp = await fetch(`${info.callbackUrl}${MACHINE_PATHS.reload}`, {
+      method: 'POST',
+      headers: { [WORKER_AUTH_HEADER]: workerAuthHeader('s') },
+    });
+    expect(resp.status).toBe(200);
+    const reply = machineReloadReplySchema.parse(await resp.json());
+    expect(reply.mcpServers).toEqual([]);
+    expect(reply.mcpManifest.tools).toEqual([]);
   });
 });

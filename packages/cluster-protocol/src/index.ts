@@ -199,7 +199,16 @@ export const machineRegistrationResponseSchema = z.object({
 }).strict();
 export type MachineRegistrationResponse = z.infer<typeof machineRegistrationResponseSchema>;
 
-export const machineHeartbeatRequestSchema = z.object({}).strict();
+/**
+ * Heartbeat body. Optionally re-reports the machine's current MCP capability
+ * so a8s reflects changes made after registration (e.g. a8s remotely wrote a
+ * new .mcp.json over /exec and the connector reloaded). Omitted fields leave
+ * the stored capability untouched — a plain `{}` heartbeat is still valid.
+ */
+export const machineHeartbeatRequestSchema = z.object({
+  mcpServers: z.array(z.string().min(1)).optional(),
+  mcpManifest: machineMcpManifestSchema.optional(),
+}).strict();
 export type MachineHeartbeatRequest = z.infer<typeof machineHeartbeatRequestSchema>;
 
 export const machineHeartbeatResponseSchema = z.object({
@@ -1169,7 +1178,17 @@ export const MACHINE_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
   exec: `/${CLUSTER_PROTOCOL_VERSION}/exec`,
   mcpInvoke: `/${CLUSTER_PROTOCOL_VERSION}/mcp/invoke`,
+  /** Re-read .mcp.json and rebuild live MCP connections without a restart.
+   *  Called after a8s writes a new config over /exec. */
+  reload: `/${CLUSTER_PROTOCOL_VERSION}/reload`,
 } as const;
+
+/** Reply from POST /reload — the connector's MCP capability after rescanning. */
+export const machineReloadReplySchema = z.object({
+  mcpServers: z.array(z.string().min(1)),
+  mcpManifest: machineMcpManifestSchema,
+}).strict();
+export type MachineReloadReply = z.infer<typeof machineReloadReplySchema>;
 
 // ============================================================
 // Auth helpers — minimal Bearer-token scheme

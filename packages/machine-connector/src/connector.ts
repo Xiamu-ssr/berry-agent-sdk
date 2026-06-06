@@ -106,6 +106,9 @@ export async function startMachineConnector(
     await mcpHost.start();
   }
 
+  // Forward-declared so the daemon's onReload closure can reach it; assigned
+  // just below once the daemon is listening (the closure only fires later).
+  let reg: MachineRegistrationClient | undefined;
   const daemon = new MachineConnectorDaemon({
     machineId,
     port,
@@ -114,10 +117,15 @@ export async function startMachineConnector(
     executor: options.executor,
     mcpHost,
     logger,
+    // After a /reload, push the rescanned capability to a8s so a remotely
+    // provisioned Hand becomes visible cluster-wide on the next heartbeat.
+    onReload: (servers) => {
+      reg?.updateCapability(servers, mcpHost?.manifest() ?? { tools: [] });
+    },
   });
   const info = await daemon.start();
 
-  const reg = new MachineRegistrationClient({
+  reg = new MachineRegistrationClient({
     a8sUrl: options.a8sUrl,
     machineId,
     callbackUrl: info.callbackUrl,

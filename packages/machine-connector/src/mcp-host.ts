@@ -32,7 +32,7 @@ export interface MachineMcpHostOptions {
  */
 export class MachineMcpHost {
   private readonly clients = new Map<string, MCPClient>();
-  private readonly tools: MachineMcpTool[] = [];
+  private tools: MachineMcpTool[] = [];
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly options: MachineMcpHostOptions;
 
@@ -87,6 +87,21 @@ export class MachineMcpHost {
   /** Flat manifest reported to a8s at registration. */
   manifest(): MachineMcpManifest {
     return { tools: [...this.tools] };
+  }
+
+  /**
+   * Re-read .mcp.json and rebuild the live connections from scratch. This is
+   * what makes "a8s remotely writes a new .mcp.json over the connector's exec,
+   * then the new MCP server shows up" work without a process restart — the
+   * settled machine-layer flow (product writes config → connector rescans →
+   * new Hand appears). Returns the fresh server id list so the caller can
+   * re-report capability to a8s.
+   */
+  async reload(): Promise<string[]> {
+    await this.dispose();
+    this.tools = [];
+    await this.start();
+    return this.serverIds();
   }
 
   /** Server ids successfully connected (for the lightweight mcpServers list). */
