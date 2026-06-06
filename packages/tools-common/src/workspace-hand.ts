@@ -39,6 +39,8 @@ export interface WorkspaceToolsHandOptions {
   sandbox?: boolean | LocalWorkspaceSandboxOptions;
   id?: string;
   displayName?: string;
+  /** Instrument/env this hand binds to. Used to suffix colliding tool names. Defaults to the bound environment's id, else `local`. */
+  env?: string;
 }
 
 export interface LocalWorkspaceSandboxOptions {
@@ -61,6 +63,7 @@ export function createWorkspaceToolsHand(options: WorkspaceToolsHandOptions): Ha
     id: options.id ?? 'workspace',
     kind: 'local',
     displayName: options.displayName ?? 'Workspace',
+    env: options.env ?? options.environment?.id ?? 'local',
     tools: filterTools(tools, options.allowedTools),
   });
 }

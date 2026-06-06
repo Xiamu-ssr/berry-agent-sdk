@@ -157,6 +157,7 @@ export function createMachineHand(options: MachineHandOptions): Hand {
     id: `machine-${options.machineId}`,
     kind: 'remote-sandbox',
     displayName: `Machine ${options.machineId}`,
+    env: options.machineId,
     tools: buildMachineTools(options),
   });
 }

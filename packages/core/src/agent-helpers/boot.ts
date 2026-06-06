@@ -96,6 +96,11 @@ export function bootAgent(config: AgentConfig): AgentBootState {
   const hands = new HandRegistry();
   const handToolNames = new Map<string, Set<string>>();
   const handAdapterOptions: HandToolAdapterOptions = {
+    // Two hands operating different envs may expose the same tool (e.g.
+    // `shell` on the local env and on machine `mac-1`). Keep both, suffixing
+    // the colliding one with its env — `shell` + `shell_mac-1` — instead of
+    // crashing the agent. Dispatch is unaffected (still by capability id).
+    onCollision: 'suffix',
     policy: config.handPolicy,
     auditSink: config.handAuditSink,
   };

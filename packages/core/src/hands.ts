@@ -115,6 +115,14 @@ export interface Hand {
   readonly id: string;
   readonly kind: HandKind;
   readonly displayName?: string;
+  /**
+   * The execution environment / instrument this hand is bound to (a machine
+   * id, a device id, `local`, …). Used to disambiguate model-visible tool
+   * names when two hands expose the same tool: the colliding tool is
+   * suffixed with this env so an agent operating several environments sees
+   * e.g. `shell` and `shell_mac-1`. Defaults to the hand id when omitted.
+   */
+  readonly env?: string;
   capabilities(): readonly HandCapability[];
   status?(): HandStatus;
   execute(call: HandCall, context: HandContext): Promise<ToolResult>;
@@ -125,6 +133,8 @@ export interface CreateToolHandOptions {
   id: string;
   kind?: HandKind;
   displayName?: string;
+  /** Instrument/env this hand is bound to (see {@link Hand.env}). */
+  env?: string;
   tools: readonly ToolRegistration[];
   state?: HandState;
 }
@@ -150,6 +160,7 @@ export function createToolRegistrationHand(options: CreateToolHandOptions): Hand
     id: options.id,
     kind: options.kind ?? 'local',
     displayName: options.displayName,
+    env: options.env,
     capabilities: () => capabilities,
     status: () => ({
       id: options.id,
@@ -193,7 +204,15 @@ export function createToolRegistrationHand(options: CreateToolHandOptions): Hand
 export interface HandToolAdapterOptions {
   include?: readonly string[];
   exclude?: readonly string[];
-  onCollision?: 'throw' | 'skip';
+  /**
+   * What to do when two hands expose the same tool name.
+   *  - `throw` (default): raise — the historical strict behavior.
+   *  - `skip`: drop the later colliding tool.
+   *  - `suffix`: keep both, renaming the *colliding* tool to
+   *    `<name>_<env>` (env defaults to the hand id). The model sees a
+   *    unique name; execute() still dispatches by the hand's capability id.
+   */
+  onCollision?: 'throw' | 'skip' | 'suffix';
   policy?: HandCapabilityPolicy;
   auditSink?: HandCapabilityAuditSink;
   now?: () => number;
@@ -266,14 +285,26 @@ export function createHandToolRegistrations(
         ...(exposeDecision.action === 'deny' ? { reason: exposeDecision.reason } : {}),
       });
       if (exposeDecision.action === 'deny') continue;
-      if (seen.has(toolName)) {
+
+      let exposedName = toolName;
+      if (seen.has(exposedName)) {
         if (onCollision === 'skip') continue;
-        throw new Error(`Duplicate hand tool name "${toolName}" from hand "${hand.id}"`);
+        if (onCollision !== 'suffix') {
+          throw new Error(`Duplicate hand tool name "${toolName}" from hand "${hand.id}"`);
+        }
+        // Keep both: suffix the colliding tool with the hand's env (falls back
+        // to the hand id), so the model sees a unique name. execute() still
+        // dispatches by capability.id, so the rename is purely model-facing.
+        exposedName = disambiguateToolName(toolName, hand.env ?? hand.id, seen);
       }
-      seen.add(toolName);
+      seen.add(exposedName);
+
+      const definition = exposedName === toolName
+        ? capability.definition
+        : { ...capability.definition, name: exposedName };
 
       tools.push({
-        definition: capability.definition,
+        definition,
         execute: async (input, context) => {
           const executeDecision = evaluateHandCapabilityPolicy(options.policy, policyContext);
           emitHandCapabilityAudit(options.auditSink, {
@@ -304,8 +335,25 @@ export function createHandToolRegistrations(
   return tools;
 }
 
-function createPolicyContext(hand: Hand, capability: HandCapability): HandCapabilityPolicyContext {
-  return {
+/**
+ * Build a unique, provider-safe model-visible name for a tool whose bare name
+ * already collides. Appends the hand's env (`shell` → `shell_mac-1`); if that
+ * is still taken (two hands on the same env exposing the same tool — rare),
+ * appends a numeric counter. Env is sanitized to `[A-Za-z0-9_-]` so the result
+ * still matches provider function-name rules.
+ */
+function disambiguateToolName(base: string, env: string, taken: ReadonlySet<string>): string {
+  const safeEnv = env.replace(/[^a-zA-Z0-9_-]/g, '_');
+  let candidate = `${base}_${safeEnv}`;
+  let n = 2;
+  while (taken.has(candidate)) {
+    candidate = `${base}_${safeEnv}_${n}`;
+    n += 1;
+  }
+  return candidate;
+}
+
+function createPolicyContext(hand: Hand, capability: HandCapability): HandCapabilityPolicyContext {  return {
     handId: hand.id,
     handKind: hand.kind,
     capabilityId: capability.id,

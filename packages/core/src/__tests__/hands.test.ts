@@ -91,6 +91,31 @@ describe('hands', () => {
     expect(createHandToolRegistrations([left, right], { onCollision: 'skip' })).toHaveLength(1);
   });
 
+  it('suffixes colliding tool names with the hand env, keeping both', async () => {
+    const local = createToolRegistrationHand({ id: 'workspace', env: 'local', tools: [tool('shell', 'local-shell')] });
+    const machine = createToolRegistrationHand({ id: 'machine-mac-1', env: 'mac-1', tools: [tool('shell', 'mac-shell')] });
+
+    const regs = createHandToolRegistrations([local, machine], { onCollision: 'suffix' });
+    expect(regs.map((r) => r.definition.name)).toEqual(['shell', 'shell_mac-1']);
+
+    // The suffixed tool still dispatches to its own hand's capability.
+    const suffixed = regs.find((r) => r.definition.name === 'shell_mac-1')!;
+    const result = await suffixed.execute({}, { cwd: '/tmp' });
+    expect(JSON.parse(result.content)).toMatchObject({ content: 'mac-shell', handId: 'machine-mac-1' });
+  });
+
+  it('falls back to hand id for env suffix and counter on double collision', () => {
+    // Two hands without env, same tool, same id-derived suffix is impossible
+    // (ids differ); but two hands sharing an env exposing the same tool needs
+    // the numeric counter.
+    const a = createToolRegistrationHand({ id: 'a', env: 'dev', tools: [tool('run')] });
+    const b = createToolRegistrationHand({ id: 'b', env: 'dev', tools: [tool('run')] });
+    const c = createToolRegistrationHand({ id: 'c', env: 'dev', tools: [tool('run')] });
+
+    const regs = createHandToolRegistrations([a, b, c], { onCollision: 'suffix' });
+    expect(regs.map((r) => r.definition.name)).toEqual(['run', 'run_dev', 'run_dev_2']);
+  });
+
   it('preserves explicit upstream provenance for wrapped capabilities', () => {
     const hand = createToolRegistrationHand({
       id: 'mcp:github',
@@ -273,24 +298,6 @@ describe('hands', () => {
     expect(toolResult?.content).toContain('"handId":"local-workspace"');
   });
 
-  it('removes tools when an Agent hand is removed', async () => {
-    const agent = new Agent({
-      provider: { type: 'anthropic', apiKey: 'test', model: 'fake' },
-      providerInstance: new SequenceProvider([]),
-      home: tmpHome('berry-hand-remove-'),
-    });
-
-    agent.addHand(createToolRegistrationHand({
-      id: 'browser',
-      kind: 'browser',
-      tools: [tool('browser_navigate')],
-    }));
-    expect(agent.getTools().map((definition) => definition.name)).toContain('browser_navigate');
-
-    await expect(agent.removeHand('browser')).resolves.toBe(true);
-    expect(agent.getTools().map((definition) => definition.name)).not.toContain('browser_navigate');
-  });
-
   it('lets ManagedAgentRuntime remove mounted hands without exposing Agent', async () => {
     const runtime = ManagedAgentRuntime.create({
       config: {
@@ -309,6 +316,39 @@ describe('hands', () => {
     expect(runtime.hasHand('mcp:docs')).toBe(true);
     await expect(runtime.removeHand('mcp:docs')).resolves.toBe(true);
     expect(runtime.hasHand('mcp:docs')).toBe(false);
+  });
+
+  it('env-suffixes a colliding tool when a second hand is added incrementally', () => {
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake' },
+      providerInstance: new SequenceProvider([]),
+      home: tmpHome('berry-hand-incr-collision-'),
+    });
+
+    agent.addHand(createToolRegistrationHand({ id: 'workspace', env: 'local', tools: [tool('shell')] }));
+    agent.addHand(createToolRegistrationHand({ id: 'machine-mac-1', env: 'mac-1', tools: [tool('shell')] }));
+
+    const names = agent.getTools().map((d) => d.name);
+    expect(names).toContain('shell');
+    expect(names).toContain('shell_mac-1');
+  });
+
+  it('removes tools when an Agent hand is removed', async () => {
+    const agent = new Agent({
+      provider: { type: 'anthropic', apiKey: 'test', model: 'fake' },
+      providerInstance: new SequenceProvider([]),
+      home: tmpHome('berry-hand-remove-'),
+    });
+
+    agent.addHand(createToolRegistrationHand({
+      id: 'browser',
+      kind: 'browser',
+      tools: [tool('browser_navigate')],
+    }));
+    expect(agent.getTools().map((definition) => definition.name)).toContain('browser_navigate');
+
+    await expect(agent.removeHand('browser')).resolves.toBe(true);
+    expect(agent.getTools().map((definition) => definition.name)).not.toContain('browser_navigate');
   });
 
   it('wraps constructor tools as an SDK-owned configured-tools hand', () => {

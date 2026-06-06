@@ -82,22 +82,46 @@ export function registerHandCapabilities(
     throw new Error(`Hand already registered: ${hand.id}`);
   }
 
+  // Hands register incrementally (one addHand at a time), so collisions are
+  // against tools already in the registry, not just within this batch. When
+  // the caller opts into env-suffix disambiguation, resolve the colliding
+  // names here against the live registry; otherwise keep the strict throw.
+  const suffix = options?.onCollision === 'suffix';
   const registrations = createHandToolRegistrations([hand], options);
+  const finalNames: string[] = [];
   for (const registration of registrations) {
-    const name = registration.definition.name;
+    let name = registration.definition.name;
     if (registry.tools.has(name)) {
-      throw new Error(`Tool "${name}" from hand "${hand.id}" collides with an existing tool`);
+      if (!suffix) {
+        throw new Error(`Tool "${name}" from hand "${hand.id}" collides with an existing tool`);
+      }
+      name = disambiguateAgainstRegistry(name, hand.env ?? hand.id, registry.tools);
+      registration.definition = { ...registration.definition, name };
     }
+    finalNames.push(name);
   }
 
   registry.hands.register(hand);
-  registry.handToolNames.set(
-    hand.id,
-    new Set(registrations.map((registration) => registration.definition.name)),
-  );
+  registry.handToolNames.set(hand.id, new Set(finalNames));
   for (const registration of registrations) {
     registry.tools.set(registration.definition.name, registration);
   }
+}
+
+/** Same env-suffix scheme as the batch adapter, but against the live registry. */
+function disambiguateAgainstRegistry(
+  base: string,
+  env: string,
+  tools: ReadonlyMap<string, ToolRegistration>,
+): string {
+  const safeEnv = env.replace(/[^a-zA-Z0-9_-]/g, '_');
+  let candidate = `${base}_${safeEnv}`;
+  let n = 2;
+  while (tools.has(candidate)) {
+    candidate = `${base}_${safeEnv}_${n}`;
+    n += 1;
+  }
+  return candidate;
 }
 
 function registerToolRegistrationsAsHand(
