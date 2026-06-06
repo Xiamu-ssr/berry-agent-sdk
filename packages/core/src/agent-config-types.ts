@@ -32,6 +32,14 @@ export interface AgentConfig {
   providerInstance?: Provider;
   /** Execution surfaces that expose capabilities to the agent. */
   hands?: Hand[];
+  /**
+   * Built-in Hand ids actually assembled (e.g. `['workspace','web']`). Seeded
+   * into agent.json's `hands.builtin` on first init so the on-disk file is the
+   * single source of truth for Hand selection across restarts. Derived by the
+   * runtime builder from its `workspaceTools`/`webTools` flags; products
+   * normally don't set this directly.
+   */
+  builtinHandSelection?: string[];
   /** SDK-owned long-lived capability policy for hands, MCP, and direct tools. */
   handPolicy?: HandCapabilityPolicy;
   /** Audit sink for hand capability expose/execute decisions. */

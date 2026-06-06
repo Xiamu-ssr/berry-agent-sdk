@@ -16,6 +16,18 @@ export interface BuiltinHandSelection {
 }
 
 /**
+ * Select built-in Hands from an explicit id list. `undefined` → both on (the
+ * historical default, so agents predating persisted Hand selection are
+ * unaffected). This is the canonical selector; `parseBuiltinHands` is the
+ * comma-string adapter for the `labels.hands` wire form.
+ */
+export function selectBuiltinHands(ids: string[] | undefined): BuiltinHandSelection {
+  if (ids === undefined) return { workspace: true, web: true };
+  const set = new Set(ids.map((s) => s.trim()).filter(Boolean));
+  return { workspace: set.has('workspace'), web: set.has('web') };
+}
+
+/**
  * Parse `labels.hands` into on/off flags. Absent label → both on (the
  * historical default, so existing agents are unaffected). Recognized ids:
  * `workspace`, `web`. Unknown ids are ignored here — machine hands are
@@ -23,6 +35,14 @@ export interface BuiltinHandSelection {
  */
 export function parseBuiltinHands(raw: string | undefined): BuiltinHandSelection {
   if (raw === undefined) return { workspace: true, web: true };
-  const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return { workspace: set.has('workspace'), web: set.has('web') };
+  return selectBuiltinHands(raw.split(','));
+}
+
+/** The built-in hand ids that are enabled, as a stable sorted list — the
+ *  form persisted to agent.json (`hands.builtin`). */
+export function builtinHandsToIds(sel: BuiltinHandSelection): string[] {
+  const ids: string[] = [];
+  if (sel.workspace) ids.push('workspace');
+  if (sel.web) ids.push('web');
+  return ids;
 }

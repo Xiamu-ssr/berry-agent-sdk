@@ -95,6 +95,9 @@ function assembleManagedRuntime(
       hands: buildHands(scope, options, executionEnvironment),
       handPolicy: options.handPolicy,
       handAuditSink: options.handAuditSink,
+      // Persist which built-in Hands are on so agent.json is the single source
+      // of truth — a restart reads this back instead of reverting to all-on.
+      builtinHandSelection: builtinHandIds(options),
       cwd: options.projectRoot ?? options.workspace,
       home: options.home,
       project: options.projectRoot,
@@ -270,6 +273,18 @@ function shouldRuntimeOwnExecutionEnvironment(options: ManagedRuntimeBuildOption
   if (options.executionEnvironment) return false;
   if (options.executionEnvironmentProvider) return true;
   return options.workspaceTools !== false;
+}
+
+/**
+ * The enabled built-in Hand ids, derived from the build flags, in the stable
+ * form persisted to agent.json (`hands.builtin`). Mirrors `buildHands`' own
+ * `!== false` gating so the persisted record matches what was actually built.
+ */
+function builtinHandIds(options: ManagedRuntimeBuildOptions): string[] {
+  const ids: string[] = [];
+  if (options.workspaceTools !== false) ids.push('workspace');
+  if (options.webTools !== false) ids.push('web');
+  return ids;
 }
 
 function buildSafetyClassifier(options: ManagedRuntimeBuildOptions): ManagedToolGuardOptions['classifier'] {

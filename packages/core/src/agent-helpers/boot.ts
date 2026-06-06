@@ -76,6 +76,9 @@ export function bootAgent(config: AgentConfig): AgentBootState {
     skills: config.skillDirs
       ? { extraDirs: config.skillDirs.map((entry) => (typeof entry === 'string' ? entry : entry.dir)) }
       : undefined,
+    hands: config.builtinHandSelection
+      ? { builtin: config.builtinHandSelection }
+      : undefined,
   });
 
   const modelResolver = config.modelResolver ?? null;

@@ -44,6 +44,19 @@ describe('initWorkspaceSync — first-time init', () => {
     expect(existsSync(home.memoryPath)).toBe(true);
     expect(existsSync(home.sessionsDir)).toBe(true);
   });
+
+  it('seeds built-in Hand selection into agent.json so a restart reads it back', () => {
+    const root = freshDir();
+    const meta = initWorkspaceSync(root, {
+      model: 'claude-opus-4.7',
+      hands: { builtin: ['workspace'] }, // web disabled at create time
+    });
+    expect(meta.hands?.builtin).toEqual(['workspace']);
+
+    // Persisted — this is the single source of truth a rehydrate reloads.
+    const reloaded = loadAgentConfigSync(root);
+    expect(reloaded.hands?.builtin).toEqual(['workspace']);
+  });
 });
 
 describe('initWorkspaceSync — on-disk authority is preserved', () => {

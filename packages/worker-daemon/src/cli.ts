@@ -30,7 +30,7 @@ import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
 import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withAdminOpsEnv, withMachineHostTools } from './index.js';
-import { parseBuiltinHands } from './builtin-hands.js';
+import { parseBuiltinHands, selectBuiltinHands } from './builtin-hands.js';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -463,27 +463,39 @@ async function main(argv: string[]): Promise<number> {
  * post-registration rehydrate loop to bring back agents that the
  * orchestrator says we still own after a worker process restart.
  *
- * `agent.json` is authoritative for model selection + reasoning effort;
- * everything else (projectRoot, ensureDefaultMcpConfig) is intentionally
- * minimal — the SDK rebuilds the rest from the on-disk home (sessions/,
- * skills/, .mcp.json). `projectRoot` is left undefined because nothing
- * persists it; agents that need it must be re-created through the full
- * a8s createAgent path.
+ * `agent.json` is authoritative for model selection, reasoning effort, and
+ * built-in Hand selection (`hands.builtin`); everything else (projectRoot,
+ * ensureDefaultMcpConfig) is intentionally minimal — the SDK rebuilds the
+ * rest from the on-disk home (sessions/, skills/, .mcp.json). `projectRoot`
+ * is left undefined because nothing persists it; agents that need it must be
+ * re-created through the full a8s createAgent path.
  */
 async function loadAgentSpecFromDisk(agentId: string, agentsRoot: string): Promise<WorkerAgentSpec> {
   const workspace = join(agentsRoot, agentId);
   const home = new AgentHome(workspace);
   const raw = await import('node:fs/promises').then((m) => m.readFile(home.metadataPath, 'utf-8'));
-  const meta = JSON.parse(raw) as { id?: string; model?: string };
+  const meta = JSON.parse(raw) as {
+    id?: string;
+    model?: string;
+    reasoningEffort?: WorkerAgentSpec['reasoningEffort'];
+    hands?: { builtin?: string[] };
+  };
   if (!meta.model) {
     throw new Error(`agent.json at ${home.metadataPath} has no "model" — cannot rehydrate`);
   }
+  // Built-in Hand selection is authoritative on disk so a restart keeps the
+  // same Hands instead of silently reverting to the all-on default. Absent
+  // `hands` (agents created before this field) → both on, matching history.
+  const builtinHands = selectBuiltinHands(meta.hands?.builtin);
   return {
     agentId,
     workspace,
     home,
     model: meta.model,
+    ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
     ensureDefaultMcpConfig: false,
+    ...(builtinHands.workspace === false ? { workspaceTools: false } : {}),
+    ...(builtinHands.web === false ? { webTools: false } : {}),
   };
 }
 

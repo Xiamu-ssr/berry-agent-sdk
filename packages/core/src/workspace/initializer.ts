@@ -60,6 +60,13 @@ export interface AgentMetadata {
   mcp?: { extraPaths?: string[] };
   /** Tool denylist — names returned from ToolGuard as `deny` regardless of other logic. */
   toolDenylist?: string[];
+  /**
+   * Built-in Hand selection — which SDK-provided Hands this agent mounts.
+   * `agent.json` is the single source of truth: a restart (rehydrate) reads
+   * this back instead of losing the selection to the create-time wire label.
+   * `undefined` means "all built-ins on" (the historical default).
+   */
+  hands?: { builtin?: string[] };
   /** Free-form safety tier tag (product-defined). SDK does not interpret — products
    *  map this to a concrete ToolGuard. */
   safeLevel?: string;
@@ -75,6 +82,7 @@ export interface InitWorkspaceSeed {
   skills?: { extraDirs?: string[] };
   mcp?: { extraPaths?: string[] };
   toolDenylist?: string[];
+  hands?: { builtin?: string[] };
   safeLevel?: string;
 }
 
@@ -108,6 +116,9 @@ export const zAgentMetadata = z.object({
     extraPaths: z.array(z.string().min(1)).optional(),
   }).strict().optional(),
   toolDenylist: z.array(z.string().min(1)).optional(),
+  hands: z.object({
+    builtin: z.array(z.string().min(1)).optional(),
+  }).strict().optional(),
   safeLevel: z.string().min(1).optional(),
 }).strict() satisfies z.ZodType<AgentMetadata>;
 
@@ -151,6 +162,7 @@ export function initWorkspaceSync(root: string, seed?: InitWorkspaceSeed): Agent
     ...(seed?.skills && { skills: seed.skills }),
     ...(seed?.mcp && { mcp: seed.mcp }),
     ...(seed?.toolDenylist && { toolDenylist: seed.toolDenylist }),
+    ...(seed?.hands && { hands: seed.hands }),
     ...(seed?.safeLevel && { safeLevel: seed.safeLevel }),
   };
 
