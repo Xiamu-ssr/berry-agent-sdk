@@ -7,6 +7,8 @@ import {
   useModelsTemplate,
   useWorkers,
   useMachines,
+  useAgentSkills,
+  useRemoveAgentSkill,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { relativeTime } from '../components/StatusPill.js';
@@ -379,12 +381,58 @@ function AgentDetail({
         )}
       </div>
 
+      <AgentSkillsCard agentId={agentId} />
+
       {selectedSession && (
         <div className="card">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 mb-3">
             Events (live)
           </h2>
           <EventStream agentId={agentId} sessionId={selectedSession} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Agent skills — what this agent has installed (home is source of truth)
+// ============================================================
+// Install happens from the Skill market (pick an agent there). Here we show
+// the agent's currently-installed skills and allow removing one.
+
+function AgentSkillsCard({ agentId }: { agentId: string }) {
+  const skills = useAgentSkills(agentId);
+  const remove = useRemoveAgentSkill();
+  return (
+    <div className="card">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 mb-3">
+        Skills
+      </h2>
+      {skills.isLoading ? (
+        <Spinner />
+      ) : !skills.data || skills.data.length === 0 ? (
+        <div className="text-sm text-ink-500 dark:text-ink-400">
+          没有已安装技能。去「Skill 市场」选一个装到这个 agent 上。
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {skills.data.map((name) => (
+            <span key={name} className="pill pill-info group inline-flex items-center gap-1">
+              <code className="font-mono">{name}</code>
+              <button
+                title="移除"
+                className="opacity-50 hover:opacity-100"
+                onClick={() => {
+                  if (confirm(`从 ${agentId} 移除技能「${name}」?`)) {
+                    remove.mutate({ agentId, name });
+                  }
+                }}
+              >
+                ✕
+              </button>
+            </span>
+          ))}
         </div>
       )}
     </div>

@@ -133,3 +133,26 @@ export function ChevronIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Hand — the capability an agent grasps. */
+export function HandIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M7 11V6a1.5 1.5 0 0 1 3 0v4" />
+      <path d="M10 10V4.5a1.5 1.5 0 0 1 3 0V10" />
+      <path d="M13 10V6a1.5 1.5 0 0 1 3 0v6" />
+      <path d="M16 8.5A1.5 1.5 0 0 1 19 9v4a7 7 0 0 1-7 7 7 7 0 0 1-5-2l-3-3.5a1.5 1.5 0 0 1 2.2-2L7 13" />
+    </svg>
+  );
+}
+
+/** Skill — a booklet of knowledge. */
+export function SkillIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 5a2 2 0 0 1 2-2h7v16H6a2 2 0 0 0-2 2V5Z" />
+      <path d="M13 3h5a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2h-5" />
+      <path d="M7 7h3M7 10h3" />
+    </svg>
+  );
+}

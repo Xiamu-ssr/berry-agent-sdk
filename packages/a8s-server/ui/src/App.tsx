@@ -8,6 +8,8 @@ import { WorkersPage } from './pages/WorkersPage.js';
 import { MachinesPage } from './pages/MachinesPage.js';
 import { LeasesPage } from './pages/LeasesPage.js';
 import { AgentsPage } from './pages/AgentsPage.js';
+import { HandsPage } from './pages/HandsPage.js';
+import { SkillsPage } from './pages/SkillsPage.js';
 import { WakesPage } from './pages/WakesPage.js';
 import { AdminChatPage } from './pages/AdminChatPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -38,6 +40,8 @@ export function App() {
         <main className="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full">
           {view === 'dashboard' && <DashboardPage />}
           {view === 'agents' && <AgentsPage />}
+          {view === 'hands' && <HandsPage />}
+          {view === 'skills' && <SkillsPage />}
           {view === 'admin' && <AdminChatPage />}
           {view === 'workers' && <WorkersPage />}
           {view === 'machines' && <MachinesPage />}

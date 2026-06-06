@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import {
   PeakMark, GridIcon, AgentIcon, ChatIcon, WorkerIcon, MachineIcon,
-  LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon,
+  LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon, HandIcon, SkillIcon,
 } from './icons.js';
 
 export type View =
   | 'dashboard'
   | 'agents'
+  | 'hands'
+  | 'skills'
   | 'admin'
   | 'workers'
   | 'machines'
@@ -32,6 +34,8 @@ const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; ic
     label: 'Agent',
     items: [
       { key: 'agents', label: 'Agents', icon: AgentIcon },
+      { key: 'hands', label: 'Hand 市场', icon: HandIcon },
+      { key: 'skills', label: 'Skill 市场', icon: SkillIcon },
       { key: 'admin', label: 'Admin chat', icon: ChatIcon },
     ],
   },

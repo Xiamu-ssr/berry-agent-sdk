@@ -106,6 +106,135 @@ export function useMachineJoinScript() {
   });
 }
 
+// ---- Hand recipes (the Hand market) ----
+
+export interface HandRecipe {
+  id: string;
+  name: string;
+  description?: string;
+  kind: 'mcp';
+  mcpServers: Record<string, Record<string, unknown>>;
+  installCommands: string[];
+  envVarNames: string[];
+  builtin: boolean;
+}
+export function useHandRecipes() {
+  return useQuery({
+    queryKey: ['hand-recipes'],
+    queryFn: () => api<{ recipes: HandRecipe[] }>('/v1/operator/hand-recipes').then((r) => r.recipes),
+    refetchInterval: 15_000,
+  });
+}
+export function useRegisterHandRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recipe: Omit<HandRecipe, 'builtin'>) =>
+      api<HandRecipe>('/v1/operator/hand-recipes', { method: 'POST', body: JSON.stringify(recipe) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['hand-recipes'] }); },
+  });
+}
+export function useDeleteHandRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recipeId: string) =>
+      api(`/v1/operator/hand-recipes/${encodeURIComponent(recipeId)}`, { method: 'DELETE' }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['hand-recipes'] }); },
+  });
+}
+export interface LandRecipeResult {
+  machineId: string;
+  recipeId: string;
+  configPath: string;
+  mcpServers: string[];
+  mcpManifest: { tools: Array<{ server: string; name: string }> };
+}
+export function useLandHandRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { machineId: string; recipeId: string; configPath?: string }) =>
+      api<LandRecipeResult>(
+        `/v1/operator/machines/${encodeURIComponent(input.machineId)}/hand-recipes/${encodeURIComponent(input.recipeId)}`,
+        { method: 'POST', body: JSON.stringify(input.configPath ? { configPath: input.configPath } : {}) },
+      ),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['machines'] }); },
+  });
+}
+
+// ---- Skill registry (the skill market) ----
+
+export interface RegistrySkill {
+  name: string;
+  description: string;
+  builtin: boolean;
+  extraFileCount: number;
+}
+export function useSkills() {
+  return useQuery({
+    queryKey: ['skills'],
+    queryFn: () => api<{ skills: RegistrySkill[] }>('/v1/operator/skills').then((r) => r.skills),
+    refetchInterval: 15_000,
+  });
+}
+export interface SkillDetail {
+  name: string;
+  description: string;
+  builtin: boolean;
+  content: string;
+  files: Array<{ path: string; content: string }>;
+}
+export function useSkillDetail(name: string | null) {
+  return useQuery({
+    queryKey: ['skill-detail', name],
+    queryFn: () => api<SkillDetail>(`/v1/operator/skills/${encodeURIComponent(name!)}`),
+    enabled: !!name,
+  });
+}
+export function useRegisterSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; description: string; content: string }) =>
+      api<RegistrySkill>('/v1/operator/skills', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['skills'] }); },
+  });
+}
+export function useDeleteSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      api(`/v1/operator/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['skills'] }); },
+  });
+}
+export function useInstallSkillOnAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { agentId: string; name: string }) =>
+      api<{ ok: true; agentId: string; name: string }>(
+        `/v1/operator/agents/${encodeURIComponent(input.agentId)}/skills/${encodeURIComponent(input.name)}`,
+        { method: 'POST', body: '{}' },
+      ),
+    onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: ['agent-skills', v.agentId] }); },
+  });
+}
+
+/** An agent's installed skill names (its home is the source of truth). */
+export function useAgentSkills(agentId: string | null) {
+  return useQuery({
+    queryKey: ['agent-skills', agentId],
+    queryFn: () =>
+      api<{ names: string[] }>(`/v1/agents/${encodeURIComponent(agentId!)}/skills`).then((r) => r.names),
+    enabled: !!agentId,
+  });
+}
+export function useRemoveAgentSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { agentId: string; name: string }) =>
+      api(`/v1/agents/${encodeURIComponent(input.agentId)}/skills/${encodeURIComponent(input.name)}`, { method: 'DELETE' }),
+    onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: ['agent-skills', v.agentId] }); },
+  });
+}
+
 // ---- Agents ----
 
 export interface Agent {

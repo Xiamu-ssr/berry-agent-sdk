@@ -52,6 +52,10 @@
     @apply bg-ink-100 text-ink-600 ring-ink-200;
     @apply dark:bg-ink-800 dark:text-ink-400 dark:ring-ink-700;
   }
+  .pill-info {
+    @apply bg-snow-50 text-snow-700 ring-snow-200;
+    @apply dark:bg-snow-950/40 dark:text-snow-300 dark:ring-snow-900;
+  }
   .card {
     @apply bg-white border border-ink-200 rounded-lg p-4;
     @apply dark:bg-ink-900 dark:border-ink-800;
