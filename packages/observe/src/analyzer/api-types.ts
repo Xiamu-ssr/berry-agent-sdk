@@ -312,6 +312,16 @@ export const agentMetricsSchema = z.object({
   avgSessionCost: nonNegativeNumber,
   topTools: z.array(z.object({ name: z.string(), count: nonNegativeInt }).strip()),
   modelUsage: z.record(nonNegativeInt),
+  // Per-model cost/token split — the same llm_calls rows that feed modelUsage,
+  // carrying the real cost + tokens each model accounts for. The model rung of
+  // the consumption layering (product -> agent -> model); every number is a
+  // pure GROUP BY sum, never an estimate.
+  modelBreakdown: z.array(z.object({
+    model: z.string(),
+    calls: nonNegativeInt,
+    totalCost: nonNegativeNumber,
+    totalTokens: nonNegativeInt,
+  }).strip()).default([]),
 }).strip();
 export type AgentMetrics = z.infer<typeof agentMetricsSchema>;
 

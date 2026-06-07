@@ -204,10 +204,14 @@ export class MetricsCalculator {
 
     const topTools = toolDistRows.map(r => ({ name: r.name, count: r.count }));
 
-    // Model usage
+    // Model usage — count + real cost/tokens per model, in one GROUP BY.
+    // count keeps the legacy `modelUsage` shape alive; the cost/token sums
+    // feed `modelBreakdown` (the model rung of the consumption layering).
     const modelRows = this.db.db.select({
       model: llmCalls.model,
       count: sql<number>`count(*)`,
+      totalCost: sql<number>`coalesce(sum(${llmCalls.totalCost}), 0)`,
+      totalTokens: sql<number>`coalesce(sum(${llmCalls.inputTokens}) + sum(${llmCalls.outputTokens}), 0)`,
     }).from(llmCalls)
       .where(eq(llmCalls.agentId, agentId))
       .groupBy(llmCalls.model)
@@ -217,6 +221,10 @@ export class MetricsCalculator {
     for (const r of modelRows) {
       modelUsage[r.model] = r.count;
     }
+    // Sort the breakdown by cost so the operator reads the heaviest model first.
+    const modelBreakdown = modelRows
+      .map((r) => ({ model: r.model, calls: r.count, totalCost: r.totalCost, totalTokens: r.totalTokens }))
+      .sort((a, b) => b.totalCost - a.totalCost);
 
     const { sessionCount, totalCost } = sessionRow;
     return {
@@ -227,6 +235,7 @@ export class MetricsCalculator {
       avgSessionCost: sessionCount > 0 ? totalCost / sessionCount : 0,
       topTools,
       modelUsage,
+      modelBreakdown,
     };
   }
 

@@ -85,7 +85,26 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
           .map(([product, v]) => ({ product, ...v }))
           .sort((a, b) => b.totalCost - a.totalCost);
 
-        writeJson(res, 200, operatorUsageResponseSchema.parse({ totals, byProduct, agents: rows }));
+        // Per-model cluster rollup — fan-in over every agent's modelBreakdown.
+        // Same "aggregate upward, never re-record" rule: each agent already
+        // owns the per-model split; a8s only sums it across the cluster so an
+        // operator can read which models the spend actually went to.
+        const byModelMap = new Map<string, { agents: Set<string>; calls: number; totalCost: number; totalTokens: number }>();
+        for (const r of rows) {
+          for (const m of r.modelBreakdown ?? []) {
+            const acc = byModelMap.get(m.model) ?? { agents: new Set<string>(), calls: 0, totalCost: 0, totalTokens: 0 };
+            acc.agents.add(r.agentId);
+            acc.calls += m.calls;
+            acc.totalCost += m.totalCost;
+            acc.totalTokens += m.totalTokens;
+            byModelMap.set(m.model, acc);
+          }
+        }
+        const byModel = [...byModelMap.entries()]
+          .map(([model, v]) => ({ model, agentCount: v.agents.size, calls: v.calls, totalCost: v.totalCost, totalTokens: v.totalTokens }))
+          .sort((a, b) => b.totalCost - a.totalCost);
+
+        writeJson(res, 200, operatorUsageResponseSchema.parse({ totals, byProduct, byModel, agents: rows }));
       },
     },
   ];

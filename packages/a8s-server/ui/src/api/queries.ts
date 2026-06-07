@@ -208,9 +208,17 @@ export interface UsageProductRow {
   totalCost: number;
   totalTokens: number;
 }
+export interface UsageModelRow {
+  model: string;
+  agentCount: number;
+  calls: number;
+  totalCost: number;
+  totalTokens: number;
+}
 export interface OperatorUsage {
   totals: { agentCount: number; sessionCount: number; totalCost: number; totalTokens: number };
   byProduct: UsageProductRow[];
+  byModel: UsageModelRow[];
   agents: UsageAgentRow[];
 }
 export function useUsage() {

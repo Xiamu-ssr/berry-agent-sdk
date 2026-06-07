@@ -1315,6 +1315,14 @@ export const agentUsageToolStatSchema = z.object({
   count: z.number().int().nonnegative(),
 }).strict();
 
+/** Per-model cost/token split — the model rung of the consumption layering. */
+export const agentUsageModelStatSchema = z.object({
+  model: z.string(),
+  calls: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+}).strict();
+
 export const agentUsageSchema = z.object({
   agentId: z.string().min(1),
   sessionCount: z.number().int().nonnegative(),
@@ -1323,6 +1331,10 @@ export const agentUsageSchema = z.object({
   avgSessionCost: z.number().nonnegative(),
   topTools: z.array(agentUsageToolStatSchema).default([]),
   modelUsage: z.record(z.number().int().nonnegative()).default({}),
+  // Real per-model cost/token split this agent accounts for (sorted by cost).
+  // Carries the same data over the wire so a8s can fan-in aggregate a cluster
+  // model breakdown without holding any usage state itself.
+  modelBreakdown: z.array(agentUsageModelStatSchema).default([]),
 }).strip();
 export type AgentUsage = z.infer<typeof agentUsageSchema>;
 
@@ -1356,6 +1368,14 @@ export const operatorUsageResponseSchema = z.object({
     totalCost: z.number().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
   }).strict()),
+  /** Per-model cluster rollup — fan-in over every agent's modelBreakdown. */
+  byModel: z.array(z.object({
+    model: z.string(),
+    agentCount: z.number().int().nonnegative(),
+    calls: z.number().int().nonnegative(),
+    totalCost: z.number().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict()).default([]),
   agents: z.array(operatorUsageAgentRowSchema),
 }).strict();
 export type OperatorUsageResponse = z.infer<typeof operatorUsageResponseSchema>;

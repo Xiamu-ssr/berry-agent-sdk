@@ -127,8 +127,19 @@ describe('a8s usage rollup E2E', () => {
     await createAgent('gamma');
 
     // Record usage for two of the three; gamma stays unrecorded (null).
-    KNOWN['alpha'] = fakeUsage('alpha', { totalCost: 2, totalTokens: 1200, sessionCount: 3 });
-    KNOWN['beta'] = fakeUsage('beta', { totalCost: 1, totalTokens: 800, sessionCount: 1 });
+    KNOWN['alpha'] = fakeUsage('alpha', {
+      totalCost: 2, totalTokens: 1200, sessionCount: 3,
+      modelBreakdown: [
+        { model: 'claude-sonnet', calls: 4, totalCost: 1.2, totalTokens: 700 },
+        { model: 'gpt-4o', calls: 2, totalCost: 0.8, totalTokens: 500 },
+      ],
+    });
+    KNOWN['beta'] = fakeUsage('beta', {
+      totalCost: 1, totalTokens: 800, sessionCount: 1,
+      modelBreakdown: [
+        { model: 'claude-sonnet', calls: 3, totalCost: 1, totalTokens: 800 },
+      ],
+    });
 
     // ---- per-agent proxy: recorded agent ----
     const alphaRes = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsage('alpha')}`, { headers: admin });
@@ -163,6 +174,19 @@ describe('a8s usage rollup E2E', () => {
 
     // The per-agent rows echo what each worker reported.
     expect(op.agents.map((a) => a.agentId).sort()).toEqual(['alpha', 'beta']);
+
+    // Per-model cluster rollup — fan-in over every agent's modelBreakdown.
+    // claude-sonnet appears in both agents (alpha 1.2 + beta 1.0 = 2.2, 2 agents);
+    // gpt-4o only in alpha (0.8, 1 agent). Sorted by cost → sonnet leads.
+    expect(op.byModel.map((m) => m.model)).toEqual(['claude-sonnet', 'gpt-4o']);
+    const sonnet = op.byModel.find((m) => m.model === 'claude-sonnet')!;
+    expect(sonnet.agentCount).toBe(2);
+    expect(sonnet.calls).toBe(7);
+    expect(sonnet.totalCost).toBeCloseTo(2.2, 6);
+    expect(sonnet.totalTokens).toBe(1500);
+    const gpt = op.byModel.find((m) => m.model === 'gpt-4o')!;
+    expect(gpt.agentCount).toBe(1);
+    expect(gpt.totalCost).toBeCloseTo(0.8, 6);
 
     await reg.withdraw(true).catch(() => {});
     await daemon.stop();

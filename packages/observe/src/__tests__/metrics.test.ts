@@ -247,6 +247,11 @@ describe('MetricsCalculator', () => {
     ]);
     expect(result!.modelUsage['claude-sonnet-4-20250514']).toBe(2);
     expect(result!.modelUsage['gpt-4o']).toBe(1);
+    // modelBreakdown carries the real per-model cost/token split, sorted by cost.
+    expect(result!.modelBreakdown).toEqual([
+      { model: 'claude-sonnet-4-20250514', calls: 2, totalCost: 0.022, totalTokens: 3000 },
+      { model: 'gpt-4o', calls: 1, totalCost: 0.011, totalTokens: 1500 },
+    ]);
   });
 
   it('agentMetrics returns correct avgSessionCost with single session', () => {
