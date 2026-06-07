@@ -90,6 +90,12 @@ export function UsagePage() {
                 pagination={{ pageSize: 20, hideOnSinglePage: true, sizeCanChange: false }}
                 size="small"
                 data={[...agents].sort((a, b) => b.totalCost - a.totalCost)}
+                expandedRowRender={(row: UsageAgentRow) => <ToolBreakdown tools={row.topTools} />}
+                expandProps={{
+                  // Only offer the expander when there's a tool breakdown to show —
+                  // a brand-new agent with no tool calls gets no chevron.
+                  rowExpandable: (row: UsageAgentRow) => (row.topTools?.length ?? 0) > 0,
+                }}
                 columns={[
                   { title: 'Agent', dataIndex: 'agentId', render: (v: string) => <code className="font-mono text-xs">{v}</code> },
                   {
@@ -146,6 +152,37 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
 
 function Num({ v }: { v: number | string }) {
   return <span className="font-mono text-sm" style={{ color: 'var(--color-text-2)' }}>{v}</span>;
+}
+
+// Expanded-row content for the per-agent table: the tool-call distribution
+// observe already keeps (top tools by invocation count). Pure surfacing of
+// existing data — a horizontal bar gives the operator an at-a-glance "where
+// did this agent's work actually go" read without inventing any metric.
+function ToolBreakdown({ tools }: { tools: UsageAgentRow['topTools'] }) {
+  const rows = tools ?? [];
+  if (rows.length === 0) {
+    return <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>没有工具调用记录</span>;
+  }
+  const max = Math.max(...rows.map((t) => t.count), 1);
+  return (
+    <div className="py-1 pl-1 pr-3">
+      <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>工具调用分布(按次数)</div>
+      <div className="flex flex-col gap-1.5 max-w-xl">
+        {rows.map((t) => (
+          <div key={t.name} className="flex items-center gap-2">
+            <code className="font-mono text-xs w-32 shrink-0 truncate" style={{ color: 'var(--color-text-2)' }}>{t.name}</code>
+            <div className="flex-1 h-2.5 rounded-sm overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
+              <div
+                className="h-full rounded-sm"
+                style={{ width: `${(t.count / max) * 100}%`, background: 'rgb(var(--arcoblue-5))' }}
+              />
+            </div>
+            <span className="font-mono text-xs w-10 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{t.count}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // Trim the provider prefix + date suffix for a compact model chip.
