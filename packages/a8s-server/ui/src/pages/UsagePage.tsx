@@ -118,6 +118,19 @@ export function UsagePage() {
                   { title: '会话', dataIndex: 'sessionCount', align: 'right' as const, render: (v: number) => <Num v={v} /> },
                   { title: 'Token', dataIndex: 'totalTokens', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
                   {
+                    // Per-session unit cost — totalCost / sessionCount, both on the
+                    // row. The product rung's natural unit is the session (byProduct
+                    // carries no call count); pairs with 按模型's 均/调用 and 按
+                    // Agent's 均/会话 so every layer of the rollup reads a unit price.
+                    // Pure ratio over data already on the row, no protocol change.
+                    title: '均/会话', dataIndex: 'totalCost', align: 'right' as const,
+                    render: (_v: number, row: UsageProductRow) => (
+                      <span className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>
+                        {row.sessionCount > 0 ? money(row.totalCost / row.sessionCount) : '—'}
+                      </span>
+                    ),
+                  },
+                  {
                     title: '占比', dataIndex: 'totalCost', align: 'right' as const, width: 132,
                     // Share of cluster cost — pure ratio over the totals we already
                     // show up top, so the operator reads the cost structure at a glance.
