@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Table, Card, Button, Modal, Message, Typography, Input } from '@arco-design/web-react';
+import { Table, Card, Button, Modal, Message, Typography, Input, Tooltip } from '@arco-design/web-react';
 import {
   useMachines, useMachineJoinScript, useMachineMcpConfig, useSetMachineMcp,
   type Machine,
@@ -27,13 +27,7 @@ export function MachinesPage() {
     {
       title: 'MCP',
       dataIndex: '__mcp',
-      render: (_: unknown, m: Machine) => (
-        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>
-          {m.mcpServers.length > 0
-            ? `${m.mcpServers.join(', ')} (${m.mcpToolCount} tool${m.mcpToolCount === 1 ? '' : 's'})`
-            : '—'}
-        </span>
-      ),
+      render: (_: unknown, m: Machine) => <McpServerCells machine={m} />,
     },
     { title: 'Heartbeat', dataIndex: 'heartbeatAt', render: (v: number) => <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>{relativeTime(v)}</span> },
     {
@@ -96,6 +90,31 @@ function machineState(state: Machine['state']): string {
   if (state === 'active') return 'active';
   if (state === 'expired') return 'draining';
   return 'withdrawn';
+}
+
+// Per-server MCP cell with a health dot + tool count. Mirrors the Hand wizard's
+// MCP step so the operator sees the same truth in both places.
+function McpServerCells({ machine }: { machine: Machine }) {
+  const details = machine.mcpServerDetails ?? [];
+  if (details.length === 0) {
+    return <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>—</span>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {details.map((d) => (
+        <Tooltip key={d.server} content={d.healthy ? `健康 · ${d.toolCount} 个工具` : '未连接'}>
+          <span className="inline-flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-2)' }}>
+            <span style={{
+              width: 7, height: 7, borderRadius: 999, display: 'inline-block',
+              background: d.healthy ? 'rgb(var(--green-6))' : 'rgb(var(--gray-5))',
+            }} />
+            <code className="font-mono">{d.server}</code>
+            <span style={{ color: 'var(--color-text-4)' }}>{d.toolCount}</span>
+          </span>
+        </Tooltip>
+      ))}
+    </div>
+  );
 }
 
 function JoinScriptModal({ script, onClose }: { script: string; onClose: () => void }) {
