@@ -1,18 +1,18 @@
 import { useState } from 'react';
-import { Card, Button, Tag, Select, Modal, Message, Popconfirm, Typography } from '@arco-design/web-react';
+import { Card, Button, Tag, Select, Modal, Message, Popconfirm, Typography, Input } from '@arco-design/web-react';
 import {
-  useHandRecipes, useLandHandRecipe, useDeleteHandRecipe, useMachines,
+  useHandRecipes, useLandHandRecipe, useDeleteHandRecipe, useRegisterHandRecipe, useMachines,
   type HandRecipe,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
 // ============================================================
-// Hand 市场 — machine-bound capability bundles (甲1 model on Arco)
+// Hand 市场 — machine-bound capability bundles (machine-inborn)
 // ============================================================
 // A Hand is a GROUP of capabilities (shell exec + a group of MCP servers)
-// bound to ONE machine — the binding is machine-inborn (chosen when the recipe
-// is authored). One card == one Hand. Cards are grouped by their free-assembly
-// `group` label (e.g. 系统预装) purely for convenience.
+// bound to ONE machine — the binding is machine-inborn (chosen at creation).
+// One card == one Hand. Cards are grouped by their free-assembly `group` label
+// (e.g. 系统预装) purely for convenience.
 //
 // Two distinct actions: SELECTING a Hand onto an agent (done on the agent
 // config page — grants the machine) vs LANDING the recipe's .mcp.json onto the
@@ -27,10 +27,14 @@ export function HandsPage() {
   const machines = useMachines();
   const land = useLandHandRecipe();
   const del = useDeleteHandRecipe();
+  const register = useRegisterHandRecipe();
   const [landing, setLanding] = useState<HandRecipe | null>(null);
+  const [creating, setCreating] = useState(false);
 
   if (recipes.error) return <ErrorBanner error={recipes.error} />;
   if (!recipes.data) return <Spinner />;
+
+  const activeMachineIds = (machines.data ?? []).filter((m) => m.state === 'active').map((m) => m.machineId);
 
   // Group by the convenience `group` label; built-ins float their group first.
   const groups = new Map<string, HandRecipe[]>();
@@ -51,6 +55,7 @@ export function HandsPage() {
       <PageHeader
         title="Hand 市场"
         subtitle={`${recipes.data.length} 个 Hand · 一个 Hand = 一台机器上的一组能力(exec + 一组 MCP)`}
+        actions={<Button type="primary" onClick={() => setCreating(true)}>创建 Hand</Button>}
       />
 
       <Typography.Paragraph type="secondary" className="-mt-3 mb-5 max-w-3xl text-sm">
@@ -60,7 +65,7 @@ export function HandsPage() {
       </Typography.Paragraph>
 
       {recipes.data.length === 0 ? (
-        <EmptyState icon="🖐" title="还没有 Hand" hint="内置 Hand 应随 a8s 提供;若为空,请检查 a8s 版本。" />
+        <EmptyState icon="🖐" title="还没有 Hand" hint="点「创建 Hand」绑定一台已接入的机器,粘上它的 MCP 配置。" />
       ) : (
         orderedGroups.map(([group, items]) => (
           <section key={group} className="mb-7">
@@ -74,7 +79,7 @@ export function HandsPage() {
                   key={r.id}
                   recipe={r}
                   onLand={() => setLanding(r)}
-                  onDelete={r.builtin ? undefined : () => { void del.mutateAsync(r.id).then(() => Message.success(`已删除「${r.name}」`)); }}
+                  onDelete={() => { void del.mutateAsync(r.id).then(() => Message.success(`已删除「${r.name}」`)); }}
                 />
               ))}
             </div>
@@ -96,6 +101,20 @@ export function HandsPage() {
           }}
         />
       )}
+
+      {creating && (
+        <CreateHandModal
+          machineIds={activeMachineIds}
+          pending={register.isPending}
+          error={register.error}
+          onClose={() => setCreating(false)}
+          onCreate={async (recipe) => {
+            await register.mutateAsync(recipe);
+            Message.success(`已创建「${recipe.name}」`);
+            setCreating(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -103,7 +122,7 @@ export function HandsPage() {
 function RecipeCard({ recipe, onLand, onDelete }: {
   recipe: HandRecipe;
   onLand: () => void;
-  onDelete?: () => void;
+  onDelete: () => void;
 }) {
   const servers = Object.keys(recipe.mcpServers);
   return (
@@ -114,15 +133,10 @@ function RecipeCard({ recipe, onLand, onDelete }: {
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold truncate" style={{ color: 'var(--color-text-1)' }}>{recipe.name}</h3>
-            {recipe.builtin && <Tag size="small">内置</Tag>}
-          </div>
+          <h3 className="font-semibold truncate" style={{ color: 'var(--color-text-1)' }}>{recipe.name}</h3>
           <code className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>{recipe.id}</code>
         </div>
-        {recipe.machineId
-          ? <Tag color="arcoblue" size="small" className="shrink-0">🖥 {recipe.machineId}</Tag>
-          : <Tag size="small" className="shrink-0">未绑机</Tag>}
+        <Tag color="arcoblue" size="small" className="shrink-0">🖥 {recipe.machineId}</Tag>
       </div>
 
       {recipe.description && (
@@ -151,13 +165,141 @@ function RecipeCard({ recipe, onLand, onDelete }: {
 
       <div className="flex gap-2 mt-auto pt-1">
         <Button type="primary" size="small" onClick={onLand}>落地到机器…</Button>
-        {onDelete && (
-          <Popconfirm title={`删除「${recipe.name}」?`} okText="删除" cancelText="取消" onOk={onDelete}>
-            <Button type="text" status="danger" size="small">删除</Button>
-          </Popconfirm>
-        )}
+        <Popconfirm title={`删除「${recipe.name}」?`} okText="删除" cancelText="取消" onOk={onDelete}>
+          <Button type="text" status="danger" size="small">删除</Button>
+        </Popconfirm>
       </div>
     </Card>
+  );
+}
+
+// ============================================================
+// 创建 Hand — model A: operator-authored, machine-bound, raw-JSON paste
+// ============================================================
+// The operator picks an already-connected machine (machine-inborn) and pastes
+// the mcpServers fragment of an .mcp.json. We extract the `${VAR}` env-var
+// names from the pasted JSON automatically — the operator never types secrets,
+// only references their names.
+
+/** Collect distinct `${VAR}` references from arbitrary JSON text. */
+function extractEnvVarNames(jsonText: string): string[] {
+  const names = new Set<string>();
+  for (const m of jsonText.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) names.add(m[1]);
+  return [...names];
+}
+
+function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
+  machineIds: string[];
+  pending: boolean;
+  error: unknown;
+  onClose: () => void;
+  onCreate: (recipe: HandRecipe) => void | Promise<void>;
+}) {
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [machineId, setMachineId] = useState<string>(machineIds[0] ?? '');
+  const [group, setGroup] = useState('');
+  const [mcpJson, setMcpJson] = useState('');
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const idValid = /^[a-z0-9][a-z0-9-]*$/.test(id);
+  const canSubmit = idValid && name.trim() && machineId && mcpJson.trim() && !pending;
+
+  const submit = () => {
+    let mcpServers: Record<string, Record<string, unknown>>;
+    try {
+      const parsed = JSON.parse(mcpJson);
+      // Accept either a bare mcpServers map or a full { mcpServers: {...} } doc.
+      const servers = parsed && typeof parsed === 'object' && 'mcpServers' in parsed ? parsed.mcpServers : parsed;
+      if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+        throw new Error('应是一个对象:{ "server-name": { "command": … } }');
+      }
+      mcpServers = servers as Record<string, Record<string, unknown>>;
+    } catch (e) {
+      setJsonError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setJsonError(null);
+    void onCreate({
+      id, name: name.trim(),
+      description: description.trim() || undefined,
+      machineId,
+      group: group.trim() || undefined,
+      mcpServers,
+      installCommands: [],
+      envVarNames: extractEnvVarNames(mcpJson),
+    });
+  };
+
+  return (
+    <Modal
+      visible
+      title="创建 Hand"
+      onCancel={onClose}
+      style={{ width: 560 }}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={pending} disabled={!canSubmit} onClick={submit}>创建</Button>
+        </div>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>Hand ID(kebab-case)</span>
+          <Input className="mt-1 font-mono" value={id} onChange={setId} placeholder="e.g. office-mac-github" autoFocus />
+          {id.length > 0 && !idValid && (
+            <div className="text-xs mt-1" style={{ color: 'rgb(var(--red-6))' }}>只能用小写字母、数字、横线,且以字母/数字开头。</div>
+          )}
+        </label>
+        <label className="block">
+          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>名称</span>
+          <Input className="mt-1" value={name} onChange={setName} placeholder="给这个 Hand 起个名" />
+        </label>
+      </div>
+
+      <label className="block mt-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>描述(可选)</span>
+        <Input className="mt-1" value={description} onChange={setDescription} placeholder="这个 Hand 能做什么" />
+      </label>
+
+      <div className="grid grid-cols-2 gap-3 mt-3">
+        <label className="block">
+          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>绑定机器(创建时即绑机)</span>
+          {machineIds.length === 0 ? (
+            <div className="text-sm mt-1" style={{ color: 'rgb(var(--red-6))' }}>没有活跃的机器。先在「Machines」里接入一台。</div>
+          ) : (
+            <Select className="mt-1" value={machineId} onChange={setMachineId} placeholder="选一台已接入的机器">
+              {machineIds.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
+            </Select>
+          )}
+        </label>
+        <label className="block">
+          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>分组(可选)</span>
+          <Input className="mt-1" value={group} onChange={setGroup} placeholder="e.g. 系统预装" />
+        </label>
+      </div>
+
+      <label className="block mt-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>
+          MCP servers(粘贴 .mcp.json 的 <code className="font-mono">mcpServers</code> 片段)
+        </span>
+        <Input.TextArea
+          className="mt-1 font-mono"
+          value={mcpJson}
+          onChange={setMcpJson}
+          autoSize={{ minRows: 6, maxRows: 16 }}
+          placeholder={'{\n  "github": {\n    "command": "npx",\n    "args": ["-y", "@modelcontextprotocol/server-github"],\n    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }\n  }\n}'}
+        />
+        <div className="text-xs mt-1" style={{ color: 'var(--color-text-3)' }}>
+          其中的 <code className="font-mono">{'${VAR}'}</code> 会被自动识别为「机器本机需存在的密钥名」,a8s 不收集值。
+        </div>
+        {jsonError && <div className="text-xs mt-1" style={{ color: 'rgb(var(--red-6))' }}>JSON 解析失败:{jsonError}</div>}
+      </label>
+
+      {error ? <div className="text-sm mt-2" style={{ color: 'rgb(var(--red-6))' }}>{error instanceof Error ? error.message : String(error)}</div> : null}
+    </Modal>
   );
 }
 

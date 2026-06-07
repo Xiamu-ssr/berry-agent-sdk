@@ -1699,6 +1699,7 @@ describe('a8s-server + worker-daemon E2E', () => {
       port: a8sPort,
       controlPlane: { orchestrator },
       adminToken: 'recipe-secret',
+      auditRoot: mkdtempSync(join(tmpdir(), 'a8s-recipe-store-')),
     });
     const a8sInfo = await a8s.start();
     const adminHeaders = { authorization: 'Bearer recipe-secret', 'content-type': 'application/json' };
@@ -1723,20 +1724,33 @@ describe('a8s-server + worker-daemon E2E', () => {
     });
     connector.setAuthToken((await reg.register()).machineToken);
 
-    // ---- The built-in playwright recipe is in the registry ----
+    // ---- Register a machine-bound recipe, then it shows in the registry ----
+    const regResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorHandRecipes}`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({
+        id: 'pw',
+        name: 'Playwright (land-1)',
+        machineId: 'land-1',
+        mcpServers: { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless'] } },
+        installCommands: [],
+        envVarNames: [],
+      }),
+    });
+    expect(regResp.status).toBe(200);
     const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorHandRecipes}`, { headers: adminHeaders });
     expect(listResp.status).toBe(200);
     const { recipes } = await listResp.json() as { recipes: Array<{ id: string }> };
-    expect(recipes.some((r) => r.id === 'playwright')).toBe(true);
+    expect(recipes.some((r) => r.id === 'pw')).toBe(true);
 
     // ---- Land it onto the machine ----
     const landResp = await fetch(
-      `${a8sInfo.url}/v1/operator/machines/land-1/hand-recipes/playwright`,
+      `${a8sInfo.url}/v1/operator/machines/land-1/hand-recipes/pw`,
       { method: 'POST', headers: adminHeaders, body: JSON.stringify({}) },
     );
     expect(landResp.status).toBe(200);
     const land = await landResp.json() as { configPath: string; recipeId: string };
-    expect(land.recipeId).toBe('playwright');
+    expect(land.recipeId).toBe('pw');
     expect(land.configPath).toBe(mcpConfigPath);
 
     // ---- a8s wrote the merged .mcp.json on the machine over the exec broker ----
@@ -1746,7 +1760,7 @@ describe('a8s-server + worker-daemon E2E', () => {
 
     // ---- Landing onto an unknown machine → 404 ----
     const ghost = await fetch(
-      `${a8sInfo.url}/v1/operator/machines/ghost/hand-recipes/playwright`,
+      `${a8sInfo.url}/v1/operator/machines/ghost/hand-recipes/pw`,
       { method: 'POST', headers: adminHeaders, body: JSON.stringify({}) },
     );
     expect(ghost.status).toBe(404);

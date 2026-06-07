@@ -13,7 +13,6 @@ import {
   useHandRecipes,
   useAgentSkills,
   useRemoveAgentSkill,
-  type HandRecipe,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { relativeTime } from '../components/StatusPill.js';
@@ -174,8 +173,8 @@ function CreateAgentModal({
   }, [workers.data]);
 
   const activeMachines = (machines.data ?? []).filter((m) => m.state === 'active').map((m) => m.machineId);
-  // Only Hands bound to a machine can be selected here (a grant needs a machine).
-  const selectableHands = (recipes.data ?? []).filter((r): r is HandRecipe & { machineId: string } => !!r.machineId);
+  // Every Hand is machine-bound; selecting one grants its machine.
+  const selectableHands = recipes.data ?? [];
 
   // The effective machine grant = machines from chosen Hands ∪ raw grants.
   const handMachines = selectedHands

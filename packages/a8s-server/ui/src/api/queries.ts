@@ -112,16 +112,13 @@ export interface HandRecipe {
   id: string;
   name: string;
   description?: string;
-  /** 'machine' = a machine-bound Hand. ('mcp' may appear from legacy data.) */
-  kind: 'machine' | 'mcp';
   /** The machine this Hand is bound to (machine-inborn). */
-  machineId?: string;
+  machineId: string;
   /** Free-assembly convenience grouping for the market view (e.g. 系统预装). */
   group?: string;
   mcpServers: Record<string, Record<string, unknown>>;
   installCommands: string[];
   envVarNames: string[];
-  builtin: boolean;
 }
 export function useHandRecipes() {
   return useQuery({
@@ -133,7 +130,7 @@ export function useHandRecipes() {
 export function useRegisterHandRecipe() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (recipe: Omit<HandRecipe, 'builtin'>) =>
+    mutationFn: (recipe: HandRecipe) =>
       api<HandRecipe>('/v1/operator/hand-recipes', { method: 'POST', body: JSON.stringify(recipe) }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['hand-recipes'] }); },
   });

@@ -313,32 +313,24 @@ export type HandRecipeMcpServer = z.infer<typeof handRecipeMcpServerSchema>;
 
 /**
  * A Hand blueprint: "a group of capabilities (exec + a group of MCP servers)
- * on ONE machine." A Hand is bound to its machine at recipe-creation time
+ * on ONE machine." A Hand is bound to its machine at creation time
  * (machine-inborn) — `machineId` names the env it grasps. Selecting this Hand
  * onto an agent grants that machine (the agent gets `machine_<id>_exec` +
  * reaches its MCP via berry-mcp); it does NOT itself land config — landing the
  * `.mcp.json` onto the machine stays a separate operator step.
  *
- * `kind` is read-permissive for back-compat: legacy recipes persisted as
- * `'mcp'` parse fine; the store normalizes them to `'machine'` on read and
- * always writes `'machine'`. `machineId` is optional only to leave room for a
- * future env-less Hand (web/api) — per invariant 1, env belongs only to
- * machine-bound Hands. (See env-hand-skill-cli-memo.)
+ * Per invariant 1, env belongs only to machine-bound Hands — so `machineId`
+ * is required: there is no such thing as an unbound Hand in the market.
  */
 export const handRecipeSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'recipe id must be kebab-case'),
   name: z.string().min(1),
   description: z.string().optional(),
-  /** 'machine' = a machine-bound Hand. 'mcp' is accepted on read for legacy
-   *  disk files; normalized to 'machine' (see HandRecipeStore). */
-  kind: z.enum(['machine', 'mcp']).default('machine'),
   /**
-   * The machine this Hand is bound to (machine-inborn). Required in practice
-   * for a machine-bound Hand; optional in the schema to leave room for a
-   * future env-less Hand. Selecting the Hand merges this into the agent's
-   * `labels.machines`.
+   * The machine this Hand is bound to (machine-inborn). Selecting the Hand
+   * merges this into the agent's `labels.machines`.
    */
-  machineId: z.string().min(1).optional(),
+  machineId: z.string().min(1),
   /**
    * Free-assembly convenience grouping for the market view (e.g. `系统预装`).
    * A label only — it never restricts a recipe's source or contents.
@@ -354,8 +346,6 @@ export const handRecipeSchema = z.object({
    * never collects the values.
    */
   envVarNames: z.array(z.string().min(1)).default([]),
-  /** True for recipes a8s ships out of the box (read-only in the registry). */
-  builtin: z.boolean().default(false),
 }).strict();
 export type HandRecipe = z.infer<typeof handRecipeSchema>;
 
@@ -364,8 +354,8 @@ export const handRecipeListResponseSchema = z.object({
 }).strict();
 export type HandRecipeListResponse = z.infer<typeof handRecipeListResponseSchema>;
 
-/** Register/update a recipe (operator). `builtin` is forced false server-side. */
-export const handRecipeRegisterRequestSchema = handRecipeSchema.omit({ builtin: true });
+/** Register/update a recipe (operator). Same shape as the stored recipe. */
+export const handRecipeRegisterRequestSchema = handRecipeSchema;
 export type HandRecipeRegisterRequest = z.infer<typeof handRecipeRegisterRequestSchema>;
 
 /**

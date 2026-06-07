@@ -1,6 +1,9 @@
 // ============================================================
-// HandRecipeStore — registry + built-in protection + persistence (B4)
+// HandRecipeStore — operator registry + persistence
 // ============================================================
+// Every recipe is machine-bound (machine-inborn) and operator-authored; there
+// are no built-ins and no legacy-shape compatibility. The store is plain CRUD
+// over one JSON file.
 
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -15,108 +18,67 @@ function tmpFile(): string {
 const silent = { log() {}, warn() {}, error() {} };
 
 describe('HandRecipeStore', () => {
-  it('ships built-in recipes and floats them to the top of the list', async () => {
+  it('starts empty when no file exists', async () => {
     const store = new HandRecipeStore({ filePath: tmpFile(), logger: silent });
-    const list = await store.list();
-    const ids = list.map((r) => r.id);
-    expect(ids).toContain('playwright');
-    expect(ids).toContain('github');
-    // built-ins first
-    expect(list[0].builtin).toBe(true);
-    // playwright needs no secret; github declares the env var NAME, not a value.
-    const github = await store.get('github');
-    expect(github!.envVarNames).toEqual(['GITHUB_TOKEN']);
-    expect(JSON.stringify(github)).not.toContain('ghp_'); // no secret value baked in
+    expect(await store.list()).toEqual([]);
   });
 
-  it('registers an operator recipe, forces builtin=false, and persists across reopen', async () => {
+  it('registers a machine-bound recipe and persists it across reopen', async () => {
     const file = tmpFile();
     const store = new HandRecipeStore({ filePath: file, logger: silent });
     const saved = await store.register({
-      id: 'my-fs',
-      name: 'Filesystem',
-      kind: 'mcp',
-      mcpServers: { fs: { command: 'mcp-fs', args: ['/data'] } },
+      id: 'office-mac-github',
+      name: 'GitHub (office-mac)',
+      machineId: 'office-mac',
+      group: '系统预装',
+      mcpServers: { github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] } },
       installCommands: [],
-      envVarNames: [],
+      envVarNames: ['GITHUB_TOKEN'],
     });
-    expect(saved.builtin).toBe(false);
+    expect(saved.machineId).toBe('office-mac');
+    expect(saved.group).toBe('系统预装');
 
     const reopened = new HandRecipeStore({ filePath: file, logger: silent });
-    const got = await reopened.get('my-fs');
+    const got = await reopened.get('office-mac-github');
     expect(got).not.toBeNull();
-    expect(got!.name).toBe('Filesystem');
-    // built-ins still present alongside the persisted custom recipe
-    expect((await reopened.list()).some((r) => r.id === 'playwright')).toBe(true);
+    expect(got!.name).toBe('GitHub (office-mac)');
+    expect(got!.machineId).toBe('office-mac');
   });
 
-  it('refuses to overwrite or remove a built-in id', async () => {
+  it('lists recipes sorted by id', async () => {
     const store = new HandRecipeStore({ filePath: tmpFile(), logger: silent });
-    await expect(store.register({
-      id: 'playwright',
-      name: 'evil',
-      kind: 'mcp',
-      mcpServers: { x: { command: 'x' } },
-      installCommands: [],
-      envVarNames: [],
-    })).rejects.toThrow(/built-in/);
-    await expect(store.remove('playwright')).rejects.toThrow(/built-in/);
+    for (const id of ['zebra', 'alpha', 'mike']) {
+      await store.register({ id, name: id, machineId: 'm-1', mcpServers: { s: { command: 'x' } }, installCommands: [], envVarNames: [] });
+    }
+    expect((await store.list()).map((r) => r.id)).toEqual(['alpha', 'mike', 'zebra']);
   });
 
-  it('removes an operator recipe and reports absence', async () => {
+  it('removes a recipe and reports absence', async () => {
     const store = new HandRecipeStore({ filePath: tmpFile(), logger: silent });
-    await store.register({
-      id: 'temp', name: 'Temp', kind: 'mcp',
-      mcpServers: { t: { command: 't' } }, installCommands: [], envVarNames: [],
-    });
+    await store.register({ id: 'temp', name: 'Temp', machineId: 'm-1', mcpServers: { t: { command: 't' } }, installCommands: [], envVarNames: [] });
     expect(await store.remove('temp')).toBe(true);
     expect(await store.remove('temp')).toBe(false);
     expect(await store.get('temp')).toBeNull();
   });
 
-  it('built-ins are machine-bound Hands carrying a market group', async () => {
+  it('rejects a recipe with no machineId (machine-inborn is required)', async () => {
     const store = new HandRecipeStore({ filePath: tmpFile(), logger: silent });
-    const pw = await store.get('playwright');
-    expect(pw!.kind).toBe('machine');
-    expect(pw!.group).toBe('系统预装');
+    await expect(store.register({
+      // @ts-expect-error — intentionally omitting the required machineId
+      id: 'unbound', name: 'Unbound', mcpServers: { s: { command: 'x' } }, installCommands: [], envVarNames: [],
+    })).rejects.toThrow();
   });
 
-  it('persists a machine-bound Hand with machineId + group', async () => {
+  it('does not silently tolerate a corrupt/legacy disk file — surfaces empty + warns', async () => {
     const file = tmpFile();
-    const store = new HandRecipeStore({ filePath: file, logger: silent });
-    const saved = await store.register({
-      id: 'android-pixel',
-      name: 'Android 设备',
-      description: 'adb + uiautomator on a docked Pixel',
-      kind: 'machine',
-      machineId: 'pixel-dock-1',
-      group: '设备',
-      mcpServers: { android: { command: 'adb-mcp' } },
-      installCommands: [],
-      envVarNames: [],
-    });
-    expect(saved.machineId).toBe('pixel-dock-1');
-    expect(saved.group).toBe('设备');
-
-    const reopened = new HandRecipeStore({ filePath: file, logger: silent });
-    const got = await reopened.get('android-pixel');
-    expect(got!.machineId).toBe('pixel-dock-1');
-    expect(got!.kind).toBe('machine');
-  });
-
-  it('reads a legacy kind:\'mcp\' disk file and normalizes it to machine', async () => {
-    const file = tmpFile();
-    // Simulate a recipe persisted by an older a8s (kind:'mcp', no machineId/group).
+    // A recipe persisted by an older a8s (kind:'mcp', no machineId): the new
+    // schema rejects it on parse. We don't normalize legacy shapes anymore.
     writeFileSync(file, JSON.stringify({
-      recipes: [{
-        id: 'legacy-fs', name: 'Legacy FS', kind: 'mcp',
-        mcpServers: { fs: { command: 'mcp-fs' } }, installCommands: [], envVarNames: [], builtin: false,
-      }],
+      recipes: [{ id: 'legacy', name: 'Legacy', kind: 'mcp', mcpServers: {}, installCommands: [], envVarNames: [], builtin: false }],
       updatedAt: 0,
     }), 'utf-8');
     const store = new HandRecipeStore({ filePath: file, logger: silent });
-    const got = await store.get('legacy-fs');
-    expect(got).not.toBeNull();
-    expect(got!.kind).toBe('machine'); // normalized on read
+    // parse throws inside ensureLoaded → caught → empty map (warned, not crashed).
+    expect(await store.list()).toEqual([]);
   });
 });
