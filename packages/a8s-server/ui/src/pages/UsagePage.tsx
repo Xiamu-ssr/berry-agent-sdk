@@ -185,11 +185,13 @@ export function UsagePage() {
                 size="small"
                 data={filteredAgents}
                 noDataElement={<div className="py-8 text-center text-sm" style={{ color: 'var(--color-text-4)' }}>没有匹配的 Agent</div>}
-                expandedRowRender={(row: UsageAgentRow) => <ToolBreakdown tools={row.topTools} />}
+                expandedRowRender={(row: UsageAgentRow) => <AgentExpanded agent={row} />}
                 expandProps={{
-                  // Only offer the expander when there's a tool breakdown to show —
-                  // a brand-new agent with no tool calls gets no chevron.
-                  rowExpandable: (row: UsageAgentRow) => (row.topTools?.length ?? 0) > 0,
+                  // Offer the expander when there's anything to drill into — the
+                  // tool distribution and/or the per-model cost split. A brand-new
+                  // agent with neither gets no chevron.
+                  rowExpandable: (row: UsageAgentRow) =>
+                    (row.topTools?.length ?? 0) > 0 || (row.modelBreakdown?.length ?? 0) > 0,
                 }}
                 columns={[
                   { title: 'Agent', dataIndex: 'agentId', render: (v: string) => <code className="font-mono text-xs">{v}</code> },
@@ -331,6 +333,47 @@ function ModelAgents({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Expanded-row content for the per-agent table, combining two pure re-slices
+// of data this agent already carries: its per-model cost split (the model rung
+// seen from one agent — symmetric with the 按模型 drill that goes the other
+// way) and its tool-call distribution. No new metric; both come straight off
+// the agent row. Rendered side by side so an operator reads "what models did
+// this agent spend on" next to "where did its work go".
+function AgentExpanded({ agent }: { agent: UsageAgentRow }) {
+  const models = [...(agent.modelBreakdown ?? [])].sort((a, b) => b.totalCost - a.totalCost);
+  const hasModels = models.length > 0;
+  const hasTools = (agent.topTools?.length ?? 0) > 0;
+  return (
+    <div className="flex flex-col lg:flex-row gap-6 py-1 pl-1 pr-3">
+      {hasModels && (
+        <div className="flex-1 min-w-0">
+          <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>该 Agent 的模型成本(按成本)</div>
+          <div className="flex flex-col gap-1.5 max-w-md">
+            {models.map((m) => {
+              const pct = agent.totalCost > 0 ? (m.totalCost / agent.totalCost) * 100 : 0;
+              return (
+                <div key={m.model} className="flex items-center gap-2">
+                  <code className="font-mono text-xs w-40 shrink-0 truncate" style={{ color: 'var(--color-text-2)' }}>{shortModel(m.model)}</code>
+                  <div className="flex-1 h-2.5 rounded-sm overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
+                    <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
+                  </div>
+                  <span className="font-mono text-xs w-10 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{compact(m.calls)}</span>
+                  <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(m.totalCost)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {hasTools && (
+        <div className="flex-1 min-w-0">
+          <ToolBreakdown tools={agent.topTools} />
+        </div>
+      )}
     </div>
   );
 }
