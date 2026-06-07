@@ -73,6 +73,12 @@ export function UsagePage() {
                   { title: '会话', dataIndex: 'sessionCount', align: 'right' as const, render: (v: number) => <Num v={v} /> },
                   { title: 'Token', dataIndex: 'totalTokens', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
                   {
+                    title: '占比', dataIndex: 'totalCost', align: 'right' as const, width: 132,
+                    // Share of cluster cost — pure ratio over the totals we already
+                    // show up top, so the operator reads the cost structure at a glance.
+                    render: (v: number) => <CostShare value={v} total={totals.totalCost} />,
+                  },
+                  {
                     title: '成本', dataIndex: 'totalCost', align: 'right' as const,
                     render: (v: number) => <span className="font-mono text-sm" style={{ color: 'rgb(var(--arcoblue-6))' }}>{money(v)}</span>,
                   },
@@ -181,6 +187,23 @@ function ToolBreakdown({ tools }: { tools: UsageAgentRow['topTools'] }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// A compact "share of cluster cost" cell: a thin bar + percentage. Reads the
+// per-product cost against the cluster total we already surface in the header
+// stat cards — no new metric, just structure made visible inline in the table.
+function CostShare({ value, total }: { value: number; total: number }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <div className="w-14 h-1.5 rounded-sm overflow-hidden shrink-0" style={{ background: 'var(--color-fill-2)' }}>
+        <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
+      </div>
+      <span className="font-mono text-xs w-10 text-right" style={{ color: 'var(--color-text-3)' }}>
+        {pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%
+      </span>
     </div>
   );
 }
