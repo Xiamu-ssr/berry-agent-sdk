@@ -35,7 +35,7 @@ export function App() {
   }
 
   return (
-    <Layout className="h-full">
+    <Layout className="h-full" hasSider>
       <Sidebar view={view} onSelect={setView} collapsed={collapsed} onCollapse={setCollapsed} />
       <Layout>
         <Topbar title={VIEW_LABEL[view]} onLogout={() => setHasToken(false)} />
