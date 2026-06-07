@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Card, Input, Table, Tag, Typography } from '@arco-design/web-react';
-import { useUsage, type UsageAgentRow, type UsageModelRow, type UsageProductRow } from '../api/queries.js';
+import { useUsage, type UsageAgentRow, type UsageModelRow, type UsageProductRow, type UsageTrendPoint } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
 // ============================================================
@@ -50,7 +50,7 @@ export function UsagePage() {
   if (usage.error) return <ErrorBanner error={usage.error} />;
   if (!usage.data) return <Spinner />;
 
-  const { totals, byProduct, byModel } = usage.data;
+  const { totals, byProduct, byModel, trend } = usage.data;
   const empty = agents.length === 0;
   // Cluster-wide inference count + its blended unit cost. Each call belongs to
   // exactly one model, so Σ byModel.calls is the cluster total (no double count);
@@ -84,6 +84,20 @@ export function UsagePage() {
         <StatCard label="会话数" value={String(totals.sessionCount)} />
         <StatCard label="Agent 数" value={String(totals.agentCount)} />
       </div>
+
+      {/* Cluster cost trend — the time rung of the layering. The stat cards above
+          say how much in total; this says how fast right now, so an operator
+          reads spend accelerating or flattening at a glance. Fanned in from
+          every agent's per-day spend (向上聚合,不重复记录). Only shown once at
+          least two days carry cost — a single bar trends nothing. */}
+      {trend.filter((d) => d.totalCost > 0).length >= 2 && (
+        <section className="mb-6">
+          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text-2)' }}>每日成本趋势</h2>
+          <Card bordered bodyStyle={{ padding: 16 }}>
+            <CostTrend points={trend} />
+          </Card>
+        </section>
+      )}
 
       {empty ? (
         <EmptyState icon="📊" title="还没有消耗数据" hint="等 agent 跑起来并发生推理后,这里会出现真实的 token 与成本。" />
@@ -268,6 +282,47 @@ export function UsagePage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+// Cluster daily cost trend — a compact bar-per-day read of how spend moves
+// over time. Each bar is one UTC day's total cost (height ∝ cost / busiest
+// day), with the call count under it; the most-recent ~30 days, oldest→newest
+// left-to-right. Pure surfacing of the trend a8s already fans in — no chart
+// lib, no new metric. The last day is accented so "today" reads at a glance.
+function CostTrend({ points }: { points: UsageTrendPoint[] }) {
+  const recent = points.slice(-30);
+  const max = Math.max(...recent.map((d) => d.totalCost), 0.0001);
+  const peak = recent.reduce((a, b) => (b.totalCost > a.totalCost ? b : a), recent[0]);
+  return (
+    <div>
+      <div className="flex items-end gap-1.5 h-32 mb-2">
+        {recent.map((d, i) => {
+          const isLast = i === recent.length - 1;
+          const h = Math.max((d.totalCost / max) * 100, d.totalCost > 0 ? 4 : 1);
+          return (
+            <div key={d.date} className="flex-1 min-w-0 flex flex-col justify-end items-center group relative" style={{ height: '100%' }}>
+              <div
+                className="w-full rounded-t-sm transition-all"
+                title={`${d.date} · ${money(d.totalCost)} · ${compact(d.calls)} 次`}
+                style={{
+                  height: `${h}%`,
+                  background: isLast ? 'rgb(var(--arcoblue-6))' : 'rgb(var(--arcoblue-4))',
+                  minHeight: 2,
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-between text-xs" style={{ color: 'var(--color-text-4)' }}>
+        <span className="font-mono">{recent[0]?.date}</span>
+        <span>
+          峰值 <span className="font-mono" style={{ color: 'var(--color-text-3)' }}>{peak ? `${money(peak.totalCost)} · ${peak.date}` : '—'}</span>
+        </span>
+        <span className="font-mono">{recent[recent.length - 1]?.date}</span>
+      </div>
     </div>
   );
 }

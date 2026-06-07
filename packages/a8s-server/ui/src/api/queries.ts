@@ -220,10 +220,18 @@ export interface UsageModelRow {
   totalCost: number;
   totalTokens: number;
 }
+// Cluster cost trend point — one UTC day. The time rung of the consumption
+// layering, fanned in from every agent's per-day spend (向上聚合,不重复记录).
+export interface UsageTrendPoint {
+  date: string;
+  calls: number;
+  totalCost: number;
+}
 export interface OperatorUsage {
   totals: { agentCount: number; sessionCount: number; totalCost: number; totalTokens: number };
   byProduct: UsageProductRow[];
   byModel: UsageModelRow[];
+  trend: UsageTrendPoint[];
   agents: UsageAgentRow[];
 }
 export function useUsage() {
