@@ -1,4 +1,5 @@
-import { Card, Table, Tag, Typography } from '@arco-design/web-react';
+import { useMemo, useState } from 'react';
+import { Card, Input, Table, Tag, Typography } from '@arco-design/web-react';
 import { useUsage, type UsageAgentRow } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
@@ -20,13 +21,36 @@ function compact(n: number): string {
   return String(n);
 }
 
+const EMPTY_AGENTS: UsageAgentRow[] = [];
+
 export function UsagePage() {
   const usage = useUsage();
+
+  // Client-side filter for the per-agent table — operators scanning a large
+  // cluster need to jump to one agent or one product without paging. Matches
+  // agentId or owner, case-insensitive; sorting by cost is preserved.
+  //
+  // NOTE: these hooks MUST run on every render, before any early return.
+  // Putting them after the loading/error guards changed the hook count
+  // between the first (no data → early return) and later renders — React
+  // error #310 ("rendered more hooks than during the previous render"),
+  // which blanked the whole page once real usage data arrived. Read agents
+  // defensively from usage.data so the memo dependency is stable across states.
+  const [query, setQuery] = useState('');
+  const agents = usage.data?.agents ?? EMPTY_AGENTS;
+  const filteredAgents = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const sorted = [...agents].sort((a, b) => b.totalCost - a.totalCost);
+    if (!q) return sorted;
+    return sorted.filter(
+      (a) => a.agentId.toLowerCase().includes(q) || (a.owner ?? '').toLowerCase().includes(q),
+    );
+  }, [agents, query]);
 
   if (usage.error) return <ErrorBanner error={usage.error} />;
   if (!usage.data) return <Spinner />;
 
-  const { totals, byProduct, agents } = usage.data;
+  const { totals, byProduct } = usage.data;
   const empty = agents.length === 0;
 
   return (
@@ -89,13 +113,24 @@ export function UsagePage() {
 
           {/* Per-agent detail */}
           <section>
-            <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text-2)' }}>按 Agent</h2>
+            <div className="flex items-center justify-between mb-3 gap-3">
+              <h2 className="text-sm font-semibold" style={{ color: 'var(--color-text-2)' }}>按 Agent</h2>
+              <Input.Search
+                allowClear
+                value={query}
+                onChange={setQuery}
+                placeholder="按 Agent ID 或产品筛选"
+                style={{ width: 240 }}
+                size="small"
+              />
+            </div>
             <Card bordered bodyStyle={{ padding: 0 }}>
               <Table
                 rowKey="agentId"
                 pagination={{ pageSize: 20, hideOnSinglePage: true, sizeCanChange: false }}
                 size="small"
-                data={[...agents].sort((a, b) => b.totalCost - a.totalCost)}
+                data={filteredAgents}
+                noDataElement={<div className="py-8 text-center text-sm" style={{ color: 'var(--color-text-4)' }}>没有匹配的 Agent</div>}
                 expandedRowRender={(row: UsageAgentRow) => <ToolBreakdown tools={row.topTools} />}
                 expandProps={{
                   // Only offer the expander when there's a tool breakdown to show —
