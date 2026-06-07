@@ -200,6 +200,11 @@ export interface UsageAgentRow {
   avgSessionCost: number;
   topTools: Array<{ name: string; count: number }>;
   modelUsage: Record<string, number>;
+  // Real per-model cost/token split this agent accounts for (sorted by cost on
+  // the worker). Carried over the wire so the 消耗 page can drill a cluster
+  // model row back down into the agents that actually spent on it — no new
+  // metric, just the same agent data re-sliced.
+  modelBreakdown: Array<{ model: string; calls: number; totalCost: number; totalTokens: number }>;
 }
 export interface UsageProductRow {
   product: string;

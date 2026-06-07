@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Card, Input, Table, Tag, Typography } from '@arco-design/web-react';
-import { useUsage, type UsageAgentRow, type UsageProductRow } from '../api/queries.js';
+import { useUsage, type UsageAgentRow, type UsageModelRow, type UsageProductRow } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
 // ============================================================
@@ -133,6 +133,16 @@ export function UsagePage() {
                   pagination={false}
                   size="small"
                   data={byModel}
+                  expandedRowRender={(row: UsageModelRow) => (
+                    <ModelAgents model={row.model} agents={agents} modelCost={row.totalCost} />
+                  )}
+                  expandProps={{
+                    // Drill a cluster model row back down to the agents that
+                    // actually spent on it. A model run by a single agent adds
+                    // nothing the 按 Agent table doesn't already show, so it
+                    // gets no chevron — same rule as the per-product drill.
+                    rowExpandable: (row: UsageModelRow) => row.agentCount > 1,
+                  }}
                   columns={[
                     {
                       title: '模型', dataIndex: 'model',
@@ -271,6 +281,52 @@ function ProductAgents({
                 <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
               </div>
               <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(a.totalCost)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Drill-down for a model row: the agents that actually spent on this model,
+// ranked by their share of the model's cluster cost. Pure re-slice of the
+// per-agent modelBreakdown we already carry over the wire — the model rung
+// answers "where did the spend go", this answers "who drove it" without
+// inventing any new metric (向上聚合,不重复记录,只是把同一份数据按模型重切).
+function ModelAgents({
+  model,
+  agents,
+  modelCost,
+}: {
+  model: string;
+  agents: UsageAgentRow[];
+  modelCost: number;
+}) {
+  const mine = agents
+    .map((a) => {
+      const stat = (a.modelBreakdown ?? []).find((m) => m.model === model);
+      return stat ? { agentId: a.agentId, cost: stat.totalCost, calls: stat.calls } : null;
+    })
+    .filter((x): x is { agentId: string; cost: number; calls: number } => x !== null)
+    .sort((x, y) => y.cost - x.cost);
+  if (mine.length === 0) {
+    return <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>没有 Agent 明细</span>;
+  }
+  return (
+    <div className="py-1 pl-1 pr-3">
+      <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>用该模型的 Agent(按成本)</div>
+      <div className="flex flex-col gap-1.5 max-w-2xl">
+        {mine.map((a) => {
+          const pct = modelCost > 0 ? (a.cost / modelCost) * 100 : 0;
+          return (
+            <div key={a.agentId} className="flex items-center gap-2">
+              <code className="font-mono text-xs w-44 shrink-0 truncate" style={{ color: 'var(--color-text-2)' }}>{a.agentId}</code>
+              <div className="flex-1 h-2.5 rounded-sm overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
+                <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
+              </div>
+              <span className="font-mono text-xs w-10 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{compact(a.calls)}</span>
+              <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(a.cost)}</span>
             </div>
           );
         })}
