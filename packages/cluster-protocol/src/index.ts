@@ -1323,6 +1323,13 @@ export const agentUsageModelStatSchema = z.object({
   totalTokens: z.number().int().nonnegative(),
 }).strict();
 
+/** Per-day cost/call point — the time rung of the consumption layering. */
+export const agentUsageDailyStatSchema = z.object({
+  date: z.string(),
+  calls: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+}).strict();
+
 export const agentUsageSchema = z.object({
   agentId: z.string().min(1),
   sessionCount: z.number().int().nonnegative(),
@@ -1335,6 +1342,11 @@ export const agentUsageSchema = z.object({
   // Carries the same data over the wire so a8s can fan-in aggregate a cluster
   // model breakdown without holding any usage state itself.
   modelBreakdown: z.array(agentUsageModelStatSchema).default([]),
+  // Per-day cost/call trend (UTC YYYY-MM-DD buckets, ascending). The time rung
+  // of the consumption layering: carries each agent's daily spend over the wire
+  // so a8s can fan these in by date into a cluster trend — same upward-only
+  // rule, never re-recorded.
+  dailyTrend: z.array(agentUsageDailyStatSchema).default([]),
 }).strip();
 export type AgentUsage = z.infer<typeof agentUsageSchema>;
 
@@ -1375,6 +1387,18 @@ export const operatorUsageResponseSchema = z.object({
     calls: z.number().int().nonnegative(),
     totalCost: z.number().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
+  }).strict()).default([]),
+  /**
+   * Cluster cost trend by day — fan-in over every agent's dailyTrend, summed
+   * per UTC date and sorted ascending in time. The time rung of the layering:
+   * the totals say "how much", this says "how fast", so an operator sees spend
+   * accelerating or flattening at a glance. Pure upward aggregation, never
+   * re-recorded — each agent already owns its daily split.
+   */
+  trend: z.array(z.object({
+    date: z.string(),
+    calls: z.number().int().nonnegative(),
+    totalCost: z.number().nonnegative(),
   }).strict()).default([]),
   agents: z.array(operatorUsageAgentRowSchema),
 }).strict();

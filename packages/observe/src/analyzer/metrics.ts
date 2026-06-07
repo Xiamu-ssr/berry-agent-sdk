@@ -226,6 +226,25 @@ export class MetricsCalculator {
       .map((r) => ({ model: r.model, calls: r.count, totalCost: r.totalCost, totalTokens: r.totalTokens }))
       .sort((a, b) => b.totalCost - a.totalCost);
 
+    // Daily trend — the time rung of the consumption layering. The cumulative
+    // rollups above answer "how much", this answers "how fast right now":
+    // is the agent's spend accelerating or flat? Bucket every llm_call by its
+    // calendar day (timestamp is epoch-ms; SQLite's date(…, 'unixepoch') gives
+    // a UTC YYYY-MM-DD), summing the real cost + counting calls. Pure GROUP BY,
+    // never an estimate — same llm_calls rows, just sliced by day. Ascending so
+    // the consumer reads left-to-right in time; a8s fans these in by date.
+    const trendRows = this.db.db.select({
+      date: sql<string>`date(${llmCalls.timestamp} / 1000, 'unixepoch')`,
+      calls: sql<number>`count(*)`,
+      totalCost: sql<number>`coalesce(sum(${llmCalls.totalCost}), 0)`,
+    }).from(llmCalls)
+      .where(eq(llmCalls.agentId, agentId))
+      .groupBy(sql`date(${llmCalls.timestamp} / 1000, 'unixepoch')`)
+      .orderBy(sql`date(${llmCalls.timestamp} / 1000, 'unixepoch') ASC`)
+      .all();
+
+    const dailyTrend = trendRows.map((r) => ({ date: r.date, calls: r.calls, totalCost: r.totalCost }));
+
     const { sessionCount, totalCost } = sessionRow;
     return {
       agentId,
@@ -236,6 +255,7 @@ export class MetricsCalculator {
       topTools,
       modelUsage,
       modelBreakdown,
+      dailyTrend,
     };
   }
 

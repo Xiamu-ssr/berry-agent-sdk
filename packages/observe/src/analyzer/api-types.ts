@@ -322,6 +322,15 @@ export const agentMetricsSchema = z.object({
     totalCost: nonNegativeNumber,
     totalTokens: nonNegativeInt,
   }).strip()).default([]),
+  // Per-day cost/call trend — the time rung of the consumption layering. The
+  // cumulative fields above say "how much"; this says "how fast right now".
+  // date is a UTC YYYY-MM-DD bucket over llm_calls.timestamp; ascending in time.
+  // Pure GROUP BY over the same rows — never an estimate.
+  dailyTrend: z.array(z.object({
+    date: z.string(),
+    calls: nonNegativeInt,
+    totalCost: nonNegativeNumber,
+  }).strip()).default([]),
 }).strip();
 export type AgentMetrics = z.infer<typeof agentMetricsSchema>;
 

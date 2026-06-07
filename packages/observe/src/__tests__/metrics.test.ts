@@ -33,7 +33,7 @@ function seedTurn(db: ObserveDB, id: string, sessionId: string, opts?: { agentId
   }).run();
 }
 
-function seedLlmCall(db: ObserveDB, id: string, sessionId: string, opts?: { turnId?: string; agentId?: string; model?: string; inputTokens?: number; outputTokens?: number }) {
+function seedLlmCall(db: ObserveDB, id: string, sessionId: string, opts?: { turnId?: string; agentId?: string; model?: string; inputTokens?: number; outputTokens?: number; totalCost?: number; timestamp?: number }) {
   db.db.insert(llmCalls).values({
     id,
     sessionId,
@@ -48,7 +48,7 @@ function seedLlmCall(db: ObserveDB, id: string, sessionId: string, opts?: { turn
     inputCost: 0.003,
     outputCost: 0.0075,
     cacheSavings: 0.00054,
-    totalCost: 0.011,
+    totalCost: opts?.totalCost ?? 0.011,
     latencyMs: 500,
     ttftMs: 100,
     stopReason: 'end_turn',
@@ -58,7 +58,7 @@ function seedLlmCall(db: ObserveDB, id: string, sessionId: string, opts?: { turn
     hasImages: false,
     skillsLoaded: null,
     providerDetail: null,
-    timestamp: Date.now(),
+    timestamp: opts?.timestamp ?? Date.now(),
   }).run();
 }
 
@@ -262,5 +262,25 @@ describe('MetricsCalculator', () => {
     expect(result).not.toBeNull();
     expect(result!.sessionCount).toBe(1);
     expect(result!.avgSessionCost).toBe(result!.totalCost);
+  });
+
+  it('agentMetrics buckets dailyTrend by UTC day, summed and ascending', () => {
+    // Three calls across two UTC days; the trend rung must collapse same-day
+    // calls into one bucket (cost summed, calls counted) and sort ascending.
+    const day1 = Date.UTC(2025, 0, 1, 10, 0, 0); // 2025-01-01
+    const day1b = Date.UTC(2025, 0, 1, 23, 30, 0); // still 2025-01-01 (UTC)
+    const day2 = Date.UTC(2025, 0, 2, 1, 0, 0); // 2025-01-02
+    seedSession(database, 'ses_t', 'agent-trend');
+    // Seed day2 first to prove the result is sorted, not insertion-ordered.
+    seedLlmCall(database, 'llm_t3', 'ses_t', { agentId: 'agent-trend', totalCost: 0.5, timestamp: day2 });
+    seedLlmCall(database, 'llm_t1', 'ses_t', { agentId: 'agent-trend', totalCost: 0.2, timestamp: day1 });
+    seedLlmCall(database, 'llm_t2', 'ses_t', { agentId: 'agent-trend', totalCost: 0.3, timestamp: day1b });
+
+    const result = metrics.agentMetrics('agent-trend');
+    expect(result).not.toBeNull();
+    expect(result!.dailyTrend).toEqual([
+      { date: '2025-01-01', calls: 2, totalCost: 0.5 },
+      { date: '2025-01-02', calls: 1, totalCost: 0.5 },
+    ]);
   });
 });

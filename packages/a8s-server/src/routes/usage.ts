@@ -104,7 +104,25 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
           .map(([model, v]) => ({ model, agentCount: v.agents.size, calls: v.calls, totalCost: v.totalCost, totalTokens: v.totalTokens }))
           .sort((a, b) => b.totalCost - a.totalCost);
 
-        writeJson(res, 200, operatorUsageResponseSchema.parse({ totals, byProduct, byModel, agents: rows }));
+        // Cluster cost trend by day — the time rung. Fan-in over every agent's
+        // dailyTrend, keyed by UTC date so two agents that both spent on the
+        // same day land in one bucket. Same "aggregate upward, never re-record"
+        // rule as byModel/byProduct; sorted ascending so the consumer reads
+        // left-to-right in time.
+        const trendMap = new Map<string, { calls: number; totalCost: number }>();
+        for (const r of rows) {
+          for (const d of r.dailyTrend ?? []) {
+            const acc = trendMap.get(d.date) ?? { calls: 0, totalCost: 0 };
+            acc.calls += d.calls;
+            acc.totalCost += d.totalCost;
+            trendMap.set(d.date, acc);
+          }
+        }
+        const trend = [...trendMap.entries()]
+          .map(([date, v]) => ({ date, calls: v.calls, totalCost: v.totalCost }))
+          .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+        writeJson(res, 200, operatorUsageResponseSchema.parse({ totals, byProduct, byModel, trend, agents: rows }));
       },
     },
   ];
