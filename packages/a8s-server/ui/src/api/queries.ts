@@ -112,13 +112,12 @@ export interface HandRecipe {
   id: string;
   name: string;
   description?: string;
-  /** The machine this Hand is bound to (machine-inborn). */
+  /** The machine (environment) this Hand uses. */
   machineId: string;
   /** Free-assembly convenience grouping for the market view (e.g. 系统预装). */
   group?: string;
-  mcpServers: Record<string, Record<string, unknown>>;
-  installCommands: string[];
-  envVarNames: string[];
+  /** Subset of the machine's exposed MCP server names this Hand references. */
+  mcpServerRefs: string[];
 }
 export function useHandRecipes() {
   return useQuery({
@@ -143,22 +142,40 @@ export function useDeleteHandRecipe() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['hand-recipes'] }); },
   });
 }
-export interface LandRecipeResult {
+
+// ---- Machine MCP config (the single source of truth for MCP) ----
+
+export type McpServerConfig = Record<string, unknown>;
+export interface MachineMcpConfig {
   machineId: string;
-  recipeId: string;
+  configPath: string | null;
+  mcpServers: Record<string, McpServerConfig>;
+}
+export function useMachineMcpConfig(machineId: string | null) {
+  return useQuery({
+    queryKey: ['machine-mcp', machineId],
+    queryFn: () => api<MachineMcpConfig>(`/v1/operator/machines/${encodeURIComponent(machineId!)}/mcp-config`),
+    enabled: !!machineId,
+  });
+}
+export interface SetMachineMcpResult {
+  machineId: string;
   configPath: string;
   mcpServers: string[];
   mcpManifest: { tools: Array<{ server: string; name: string }> };
 }
-export function useLandHandRecipe() {
+export function useSetMachineMcp() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { machineId: string; recipeId: string; configPath?: string }) =>
-      api<LandRecipeResult>(
-        `/v1/operator/machines/${encodeURIComponent(input.machineId)}/hand-recipes/${encodeURIComponent(input.recipeId)}`,
-        { method: 'POST', body: JSON.stringify(input.configPath ? { configPath: input.configPath } : {}) },
+    mutationFn: (input: { machineId: string; mcpServers: Record<string, McpServerConfig>; installCommands?: string[] }) =>
+      api<SetMachineMcpResult>(
+        `/v1/operator/machines/${encodeURIComponent(input.machineId)}/mcp-config`,
+        { method: 'POST', body: JSON.stringify({ mcpServers: input.mcpServers, installCommands: input.installCommands ?? [] }) },
       ),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['machines'] }); },
+    onSuccess: (_d, v) => {
+      void qc.invalidateQueries({ queryKey: ['machine-mcp', v.machineId] });
+      void qc.invalidateQueries({ queryKey: ['machines'] });
+    },
   });
 }
 

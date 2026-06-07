@@ -269,6 +269,58 @@ export const operatorMachineListResponseSchema = z.object({
 }).strict();
 export type OperatorMachineListResponse = z.infer<typeof operatorMachineListResponseSchema>;
 
+/**
+ * One MCP server entry in a machine's `.mcp.json`, in the Claude Code / Cursor
+ * shape. Kept permissive (passthrough) so a8s stays MCP-agnostic: it transports
+ * the fragment to the connector verbatim and the connector's loader is the
+ * single interpreter. `env` values should be env var name references
+ * (`${GITHUB_TOKEN}`), not secrets — the value is the machine owner's asset.
+ */
+export const mcpServerConfigSchema = z.object({
+  type: z.enum(['stdio', 'http', 'sse', 'streamable_http']).optional(),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string()).optional(),
+  cwd: z.string().optional(),
+  url: z.string().optional(),
+  headers: z.record(z.string()).optional(),
+  enabled: z.boolean().optional(),
+}).passthrough();
+export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+
+/**
+ * Operator → a8s: "set this machine's MCP servers." a8s writes the map into the
+ * machine's `.mcp.json` over the exec broker, runs any install commands, then
+ * asks the connector to /reload. This is the ONLY place MCP config is authored
+ * — the machine is the single source of truth. Replaces the whole map (the
+ * connector rescans afterward), so the UI sends the full desired set.
+ */
+export const machineSetMcpRequestSchema = z.object({
+  mcpServers: z.record(mcpServerConfigSchema),
+  /** Shell commands to run on the machine before reload (e.g. `npm i -g ...`). */
+  installCommands: z.array(z.string().min(1)).default([]),
+  /** Absolute path to write; defaults to the connector-reported `.mcp.json`. */
+  configPath: z.string().min(1).optional(),
+}).strict();
+export type MachineSetMcpRequest = z.infer<typeof machineSetMcpRequestSchema>;
+
+/** Result of setting machine MCP — echoes the connector's post-reload capability. */
+export const machineSetMcpResponseSchema = z.object({
+  machineId: z.string().min(1),
+  configPath: z.string().min(1),
+  mcpServers: z.array(z.string()),
+  mcpManifest: machineMcpManifestSchema,
+}).strict();
+export type MachineSetMcpResponse = z.infer<typeof machineSetMcpResponseSchema>;
+
+/** a8s → operator: a machine's current `.mcp.json` mcpServers map (read over exec). */
+export const machineGetMcpResponseSchema = z.object({
+  machineId: z.string().min(1),
+  configPath: z.string().min(1).nullable(),
+  mcpServers: z.record(mcpServerConfigSchema),
+}).strict();
+export type MachineGetMcpResponse = z.infer<typeof machineGetMcpResponseSchema>;
+
 // ============================================================
 // Hand recipes — machine-bound capability bundles (B4 / 甲1)
 // ============================================================
@@ -292,43 +344,29 @@ export type OperatorMachineListResponse = z.infer<typeof operatorMachineListResp
 // the machine's own environment. a8s writes `${GITHUB_TOKEN}` into the
 // landed config — a name, never a value.
 
-/**
- * One MCP server entry inside a recipe, in the Claude Code / Cursor
- * `.mcp.json` shape. Kept permissive (passthrough) so a8s stays
- * MCP-agnostic: it transports the fragment to the machine verbatim and the
- * connector's loader is the single interpreter. `env` values should be env
- * var name references (`${GITHUB_TOKEN}`), not secrets.
- */
-export const handRecipeMcpServerSchema = z.object({
-  type: z.enum(['stdio', 'http', 'sse', 'streamable_http']).optional(),
-  command: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string()).optional(),
-  cwd: z.string().optional(),
-  url: z.string().optional(),
-  headers: z.record(z.string()).optional(),
-  enabled: z.boolean().optional(),
-}).passthrough();
-export type HandRecipeMcpServer = z.infer<typeof handRecipeMcpServerSchema>;
+// ============================================================
+// Hand recipes — capability bundles that reference a machine's MCP
+// ============================================================
+//
+// A Hand recipe is one Hand in the market: pick an environment (a machine,
+// which provides shell exec + the common tool list) and reference a subset of
+// the MCP servers that machine already exposes. The Hand carries NO MCP config
+// of its own — the machine's `.mcp.json` is the single source of truth for what
+// MCP exists. Many Hands can target the same machine; the basis is free.
+//
+// Selecting a Hand onto an agent grants that machine (merges `machineId` into
+// the agent's `labels.machines`; the agent gets `machine_<id>_exec` and reaches
+// the machine's MCP via berry-mcp). The MCP a Hand references is provisioned on
+// the machine separately (Machines page → set MCP), because the machine owns
+// its config. There is no "land" step — there is nothing to land.
 
-/**
- * A Hand blueprint: "a group of capabilities (exec + a group of MCP servers)
- * on ONE machine." A Hand is bound to its machine at creation time
- * (machine-inborn) — `machineId` names the env it grasps. Selecting this Hand
- * onto an agent grants that machine (the agent gets `machine_<id>_exec` +
- * reaches its MCP via berry-mcp); it does NOT itself land config — landing the
- * `.mcp.json` onto the machine stays a separate operator step.
- *
- * Per invariant 1, env belongs only to machine-bound Hands — so `machineId`
- * is required: there is no such thing as an unbound Hand in the market.
- */
 export const handRecipeSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'recipe id must be kebab-case'),
   name: z.string().min(1),
   description: z.string().optional(),
   /**
-   * The machine this Hand is bound to (machine-inborn). Selecting the Hand
-   * merges this into the agent's `labels.machines`.
+   * The machine (environment) this Hand uses. Selecting the Hand merges this
+   * into the agent's `labels.machines`. Many Hands may share one machine.
    */
   machineId: z.string().min(1),
   /**
@@ -336,16 +374,13 @@ export const handRecipeSchema = z.object({
    * A label only — it never restricts a recipe's source or contents.
    */
   group: z.string().min(1).optional(),
-  /** `mcpServers` map merged into the machine's .mcp.json when landed. */
-  mcpServers: z.record(handRecipeMcpServerSchema),
-  /** Shell commands run on the machine before reload (e.g. `npm i -g ...`). */
-  installCommands: z.array(z.string().min(1)).default([]),
   /**
-   * Env var NAMES this recipe expects to exist on the target machine. UI
-   * surfaces them as "this Hand needs these secrets on the machine"; a8s
-   * never collects the values.
+   * Subset of the machine's exposed MCP server names this Hand grasps. These
+   * are references — the actual MCP config lives in the machine's `.mcp.json`
+   * (the single source of truth). Empty = an exec-only Hand (shell + common
+   * tools, no MCP).
    */
-  envVarNames: z.array(z.string().min(1)).default([]),
+  mcpServerRefs: z.array(z.string().min(1)).default([]),
 }).strict();
 export type HandRecipe = z.infer<typeof handRecipeSchema>;
 
@@ -357,27 +392,6 @@ export type HandRecipeListResponse = z.infer<typeof handRecipeListResponseSchema
 /** Register/update a recipe (operator). Same shape as the stored recipe. */
 export const handRecipeRegisterRequestSchema = handRecipeSchema;
 export type HandRecipeRegisterRequest = z.infer<typeof handRecipeRegisterRequestSchema>;
-
-/**
- * Land a recipe onto a machine. The recipe id + machine id are path params;
- * the body only carries the target config file (defaults to the machine's
- * `.mcp.json`) for operators who keep MCP config elsewhere.
- */
-export const handRecipeLandRequestSchema = z.object({
-  /** Absolute path on the machine to write the merged .mcp.json. */
-  configPath: z.string().min(1).optional(),
-}).strict();
-export type HandRecipeLandRequest = z.infer<typeof handRecipeLandRequestSchema>;
-
-/** Result of landing — echoes the connector's post-reload capability. */
-export const handRecipeLandResponseSchema = z.object({
-  machineId: z.string().min(1),
-  recipeId: z.string().min(1),
-  configPath: z.string().min(1),
-  mcpServers: z.array(z.string()),
-  mcpManifest: machineMcpManifestSchema,
-}).strict();
-export type HandRecipeLandResponse = z.infer<typeof handRecipeLandResponseSchema>;
 
 // ============================================================
 // Agent lifecycle — product → a8s
@@ -1355,12 +1369,12 @@ export const A8S_PATHS = {
   operatorAdminAgent: `/${CLUSTER_PROTOCOL_VERSION}/operator/admin-agent`,
   operatorMachines: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines`,
   operatorMachineJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/join-script`,
+  /** Read/write a machine's .mcp.json (the single source of truth for MCP). */
+  operatorMachineMcpConfig: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/${encodeURIComponent(machineId)}/mcp-config`,
   operatorHandRecipes: `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes`,
   operatorHandRecipe: (recipeId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes/${encodeURIComponent(recipeId)}`,
-  /** Land a recipe onto a machine: POST .../machines/:id/hand-recipes/:recipeId */
-  operatorMachineLandRecipe: (machineId: string, recipeId: string) =>
-    `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/${encodeURIComponent(machineId)}/hand-recipes/${encodeURIComponent(recipeId)}`,
   /** Skill registry (a8s's catalog of installable skills). */
   operatorSkills: `/${CLUSTER_PROTOCOL_VERSION}/operator/skills`,
   operatorSkill: (name: string) =>

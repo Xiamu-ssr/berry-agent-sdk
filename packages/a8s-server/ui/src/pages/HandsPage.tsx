@@ -1,42 +1,38 @@
 import { useState } from 'react';
-import { Card, Button, Tag, Select, Modal, Message, Popconfirm, Typography, Input } from '@arco-design/web-react';
+import { Card, Button, Tag, Select, Modal, Message, Popconfirm, Typography, Input, Checkbox } from '@arco-design/web-react';
 import {
-  useHandRecipes, useLandHandRecipe, useDeleteHandRecipe, useRegisterHandRecipe, useMachines,
-  type HandRecipe,
+  useHandRecipes, useDeleteHandRecipe, useRegisterHandRecipe, useMachines,
+  type HandRecipe, type Machine,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
 // ============================================================
-// Hand 市场 — machine-bound capability bundles (machine-inborn)
+// Hand 市场 — capability bundles that reference a machine's MCP
 // ============================================================
-// A Hand is a GROUP of capabilities (shell exec + a group of MCP servers)
-// bound to ONE machine — the binding is machine-inborn (chosen at creation).
-// One card == one Hand. Cards are grouped by their free-assembly `group` label
-// (e.g. 系统预装) purely for convenience.
+// A Hand = an environment (a machine, which provides shell exec + the common
+// tool list) + a referenced subset of the MCP servers that machine exposes.
+// The Hand carries NO MCP config — the machine's .mcp.json is the single source
+// of truth (authored on the Machines page). Many Hands can share one machine.
 //
-// Two distinct actions: SELECTING a Hand onto an agent (done on the agent
-// config page — grants the machine) vs LANDING the recipe's .mcp.json onto the
-// machine (the operator step here). Secrets never live in a recipe — it
-// references env var NAMES (${GITHUB_TOKEN}); the value is the machine owner's
-// asset on the machine.
+// Selecting a Hand onto an agent grants its machine (the agent gets
+// machine_<id>_exec + reaches the machine's MCP via berry-mcp). There is no
+// "land" step — the MCP already lives on the machine.
 
 const UNGROUPED = '其它';
 
 export function HandsPage() {
   const recipes = useHandRecipes();
   const machines = useMachines();
-  const land = useLandHandRecipe();
   const del = useDeleteHandRecipe();
   const register = useRegisterHandRecipe();
-  const [landing, setLanding] = useState<HandRecipe | null>(null);
   const [creating, setCreating] = useState(false);
 
   if (recipes.error) return <ErrorBanner error={recipes.error} />;
   if (!recipes.data) return <Spinner />;
 
-  const activeMachineIds = (machines.data ?? []).filter((m) => m.state === 'active').map((m) => m.machineId);
+  const activeMachines = (machines.data ?? []).filter((m) => m.state === 'active');
 
-  // Group by the convenience `group` label; built-ins float their group first.
+  // Group by the convenience `group` label; 系统预装 floats first.
   const groups = new Map<string, HandRecipe[]>();
   for (const r of recipes.data) {
     const key = r.group ?? UNGROUPED;
@@ -54,18 +50,18 @@ export function HandsPage() {
     <div className="animate-fade-in">
       <PageHeader
         title="Hand 市场"
-        subtitle={`${recipes.data.length} 个 Hand · 一个 Hand = 一台机器上的一组能力(exec + 一组 MCP)`}
+        subtitle={`${recipes.data.length} 个 Hand · 一个 Hand = 选一个环境(机器)+ 引用它暴露的 MCP 子集`}
         actions={<Button type="primary" onClick={() => setCreating(true)}>创建 Hand</Button>}
       />
 
       <Typography.Paragraph type="secondary" className="-mt-3 mb-5 max-w-3xl text-sm">
-        一个 <strong>Hand</strong> 是绑定在某台机器上的一组能力。给 agent 配置时<strong>勾选 Hand</strong>即把这台机器授权给它(agent 得到 machine exec,并经 berry-mcp 触达其 MCP);
-        而把 Hand 的 <code className="font-mono text-xs mx-0.5">.mcp.json</code> <strong>落地</strong>到机器是独立的运维步(下方按钮)。
-        密钥不进 Hand——只引用环境变量<strong>名</strong>(如 <code className="font-mono text-xs mx-0.5">{'${GITHUB_TOKEN}'}</code>),值是机主自己机器上的资产。
+        一个 <strong>Hand</strong> = 选一个<strong>环境</strong>(机器,提供 shell exec + 通用工具)+ 引用该机已暴露的一部分 <strong>MCP server</strong>。
+        给 agent <strong>勾选 Hand</strong> 即把这台机器授权给它(agent 得到 machine exec,并经 berry-mcp 触达其 MCP)。
+        MCP 的<strong>唯一事实源是机器的 <code className="font-mono text-xs mx-0.5">.mcp.json</code></strong>——在「Machines」页远程设置;Hand 只<strong>引用</strong>名字,自己不存配置。
       </Typography.Paragraph>
 
       {recipes.data.length === 0 ? (
-        <EmptyState icon="🖐" title="还没有 Hand" hint="点「创建 Hand」绑定一台已接入的机器,粘上它的 MCP 配置。" />
+        <EmptyState icon="🖐" title="还没有 Hand" hint="点「创建 Hand」:选一台机器,从它暴露的 MCP 里挑一组。" />
       ) : (
         orderedGroups.map(([group, items]) => (
           <section key={group} className="mb-7">
@@ -78,7 +74,6 @@ export function HandsPage() {
                 <RecipeCard
                   key={r.id}
                   recipe={r}
-                  onLand={() => setLanding(r)}
                   onDelete={() => { void del.mutateAsync(r.id).then(() => Message.success(`已删除「${r.name}」`)); }}
                 />
               ))}
@@ -87,24 +82,9 @@ export function HandsPage() {
         ))
       )}
 
-      {landing && (
-        <LandModal
-          recipe={landing}
-          machines={(machines.data ?? []).filter((m) => m.state === 'active').map((m) => m.machineId)}
-          pending={land.isPending}
-          error={land.error}
-          onClose={() => setLanding(null)}
-          onLand={async (machineId) => {
-            const res = await land.mutateAsync({ machineId, recipeId: landing.id });
-            Message.success(`已把「${landing.name}」落地到 ${machineId} — 现有 MCP servers: ${res.mcpServers.join(', ') || '(无)'}`);
-            setLanding(null);
-          }}
-        />
-      )}
-
       {creating && (
         <CreateHandModal
-          machineIds={activeMachineIds}
+          machines={activeMachines}
           pending={register.isPending}
           error={register.error}
           onClose={() => setCreating(false)}
@@ -119,12 +99,7 @@ export function HandsPage() {
   );
 }
 
-function RecipeCard({ recipe, onLand, onDelete }: {
-  recipe: HandRecipe;
-  onLand: () => void;
-  onDelete: () => void;
-}) {
-  const servers = Object.keys(recipe.mcpServers);
+function RecipeCard({ recipe, onDelete }: { recipe: HandRecipe; onDelete: () => void }) {
   return (
     <Card
       bordered
@@ -143,28 +118,14 @@ function RecipeCard({ recipe, onLand, onDelete }: {
         <p className="text-sm" style={{ color: 'var(--color-text-2)' }}>{recipe.description}</p>
       )}
 
-      <div className="text-xs space-y-1.5" style={{ color: 'var(--color-text-3)' }}>
-        <div className="flex gap-1.5 items-baseline flex-wrap">
-          <span>MCP:</span>
-          {servers.length > 0
-            ? servers.map((s) => <Tag key={s} size="small" color="cyan">{s}</Tag>)
-            : <span className="font-mono">—</span>}
-        </div>
-        {recipe.envVarNames.length > 0 && (
-          <div className="flex gap-1.5 items-baseline flex-wrap">
-            <span>需要密钥(机器本机):</span>
-            {recipe.envVarNames.map((n) => (
-              <code key={n} className="font-mono" style={{ color: 'rgb(var(--orange-6))' }}>${'{'}{n}{'}'}</code>
-            ))}
-          </div>
-        )}
-        {recipe.installCommands.length > 0 && (
-          <div>安装命令: <span className="font-mono">{recipe.installCommands.length} 条</span></div>
-        )}
+      <div className="text-xs flex gap-1.5 items-baseline flex-wrap" style={{ color: 'var(--color-text-3)' }}>
+        <span>MCP:</span>
+        {recipe.mcpServerRefs.length > 0
+          ? recipe.mcpServerRefs.map((s) => <Tag key={s} size="small" color="cyan">{s}</Tag>)
+          : <span className="font-mono">— 仅 exec</span>}
       </div>
 
       <div className="flex gap-2 mt-auto pt-1">
-        <Button type="primary" size="small" onClick={onLand}>落地到机器…</Button>
         <Popconfirm title={`删除「${recipe.name}」?`} okText="删除" cancelText="取消" onOk={onDelete}>
           <Button type="text" status="danger" size="small">删除</Button>
         </Popconfirm>
@@ -174,22 +135,11 @@ function RecipeCard({ recipe, onLand, onDelete }: {
 }
 
 // ============================================================
-// 创建 Hand — model A: operator-authored, machine-bound, raw-JSON paste
+// 创建 Hand — pick a machine, then check which of its exposed MCP to reference
 // ============================================================
-// The operator picks an already-connected machine (machine-inborn) and pastes
-// the mcpServers fragment of an .mcp.json. We extract the `${VAR}` env-var
-// names from the pasted JSON automatically — the operator never types secrets,
-// only references their names.
 
-/** Collect distinct `${VAR}` references from arbitrary JSON text. */
-function extractEnvVarNames(jsonText: string): string[] {
-  const names = new Set<string>();
-  for (const m of jsonText.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) names.add(m[1]);
-  return [...names];
-}
-
-function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
-  machineIds: string[];
+function CreateHandModal({ machines, pending, error, onClose, onCreate }: {
+  machines: Machine[];
   pending: boolean;
   error: unknown;
   onClose: () => void;
@@ -198,37 +148,25 @@ function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [machineId, setMachineId] = useState<string>(machineIds[0] ?? '');
+  const [machineId, setMachineId] = useState<string>(machines[0]?.machineId ?? '');
   const [group, setGroup] = useState('');
-  const [mcpJson, setMcpJson] = useState('');
-  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [refs, setRefs] = useState<string[]>([]);
 
   const idValid = /^[a-z0-9][a-z0-9-]*$/.test(id);
-  const canSubmit = idValid && name.trim() && machineId && mcpJson.trim() && !pending;
+  const canSubmit = idValid && name.trim() && machineId && !pending;
+
+  // The chosen machine's exposed MCP servers — the universe a Hand can reference.
+  const chosen = machines.find((m) => m.machineId === machineId);
+  const exposed = chosen?.mcpServers ?? [];
 
   const submit = () => {
-    let mcpServers: Record<string, Record<string, unknown>>;
-    try {
-      const parsed = JSON.parse(mcpJson);
-      // Accept either a bare mcpServers map or a full { mcpServers: {...} } doc.
-      const servers = parsed && typeof parsed === 'object' && 'mcpServers' in parsed ? parsed.mcpServers : parsed;
-      if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
-        throw new Error('应是一个对象:{ "server-name": { "command": … } }');
-      }
-      mcpServers = servers as Record<string, Record<string, unknown>>;
-    } catch (e) {
-      setJsonError(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    setJsonError(null);
     void onCreate({
-      id, name: name.trim(),
+      id,
+      name: name.trim(),
       description: description.trim() || undefined,
       machineId,
       group: group.trim() || undefined,
-      mcpServers,
-      installCommands: [],
-      envVarNames: extractEnvVarNames(mcpJson),
+      mcpServerRefs: refs.filter((r) => exposed.includes(r)),
     });
   };
 
@@ -248,7 +186,7 @@ function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>Hand ID(kebab-case)</span>
-          <Input className="mt-1 font-mono" value={id} onChange={setId} placeholder="e.g. office-mac-github" autoFocus />
+          <Input className="mt-1 font-mono" value={id} onChange={setId} placeholder="e.g. office-mac-web" autoFocus />
           {id.length > 0 && !idValid && (
             <div className="text-xs mt-1" style={{ color: 'rgb(var(--red-6))' }}>只能用小写字母、数字、横线,且以字母/数字开头。</div>
           )}
@@ -266,12 +204,12 @@ function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
 
       <div className="grid grid-cols-2 gap-3 mt-3">
         <label className="block">
-          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>绑定机器(创建时即绑机)</span>
-          {machineIds.length === 0 ? (
+          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>环境(机器)</span>
+          {machines.length === 0 ? (
             <div className="text-sm mt-1" style={{ color: 'rgb(var(--red-6))' }}>没有活跃的机器。先在「Machines」里接入一台。</div>
           ) : (
-            <Select className="mt-1" value={machineId} onChange={setMachineId} placeholder="选一台已接入的机器">
-              {machineIds.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
+            <Select className="mt-1" value={machineId} onChange={(v) => { setMachineId(v); setRefs([]); }} placeholder="选一台已接入的机器">
+              {machines.map((m) => <Select.Option key={m.machineId} value={m.machineId}>{m.machineId}</Select.Option>)}
             </Select>
           )}
         </label>
@@ -281,70 +219,20 @@ function CreateHandModal({ machineIds, pending, error, onClose, onCreate }: {
         </label>
       </div>
 
-      <label className="block mt-3">
-        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>
-          MCP servers(粘贴 .mcp.json 的 <code className="font-mono">mcpServers</code> 片段)
-        </span>
-        <Input.TextArea
-          className="mt-1 font-mono"
-          value={mcpJson}
-          onChange={setMcpJson}
-          autoSize={{ minRows: 6, maxRows: 16 }}
-          placeholder={'{\n  "github": {\n    "command": "npx",\n    "args": ["-y", "@modelcontextprotocol/server-github"],\n    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }\n  }\n}'}
-        />
-        <div className="text-xs mt-1" style={{ color: 'var(--color-text-3)' }}>
-          其中的 <code className="font-mono">{'${VAR}'}</code> 会被自动识别为「机器本机需存在的密钥名」,a8s 不收集值。
-        </div>
-        {jsonError && <div className="text-xs mt-1" style={{ color: 'rgb(var(--red-6))' }}>JSON 解析失败:{jsonError}</div>}
-      </label>
+      <div className="block mt-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>引用该机暴露的 MCP server(可不选 = 仅 exec)</span>
+        {exposed.length === 0 ? (
+          <div className="text-xs mt-1" style={{ color: 'var(--color-text-3)' }}>
+            这台机器没有暴露 MCP。去「Machines」页给它设置 <code className="font-mono">.mcp.json</code>,或创建一个仅 exec 的 Hand。
+          </div>
+        ) : (
+          <Checkbox.Group className="mt-1 flex flex-wrap gap-3" value={refs} onChange={setRefs}>
+            {exposed.map((s) => <Checkbox key={s} value={s}>{s}</Checkbox>)}
+          </Checkbox.Group>
+        )}
+      </div>
 
       {error ? <div className="text-sm mt-2" style={{ color: 'rgb(var(--red-6))' }}>{error instanceof Error ? error.message : String(error)}</div> : null}
-    </Modal>
-  );
-}
-
-function LandModal({ recipe, machines, pending, error, onClose, onLand }: {
-  recipe: HandRecipe;
-  machines: string[];
-  pending: boolean;
-  error: unknown;
-  onClose: () => void;
-  onLand: (machineId: string) => void | Promise<void>;
-}) {
-  // Default to the recipe's bound machine when present and active.
-  const preferred = recipe.machineId && machines.includes(recipe.machineId) ? recipe.machineId : machines[0] ?? '';
-  const [machineId, setMachineId] = useState<string>(preferred);
-  return (
-    <Modal
-      visible
-      title={`落地「${recipe.name}」`}
-      onCancel={onClose}
-      footer={
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" loading={pending} disabled={!machineId} onClick={() => void onLand(machineId)}>落地</Button>
-        </div>
-      }
-    >
-      <p className="text-sm mb-3" style={{ color: 'var(--color-text-2)' }}>
-        选一台活跃机器,a8s 会把这个 Hand 的 MCP 配置写到它的
-        <code className="font-mono text-xs mx-1">.mcp.json</code> 并热重载连接器。
-        {recipe.envVarNames.length > 0 && (
-          <> 该 Hand 需要机器本机已存在环境变量:{' '}
-            {recipe.envVarNames.map((n) => <code key={n} className="font-mono mx-0.5" style={{ color: 'rgb(var(--orange-6))' }}>{n}</code>)}。
-          </>
-        )}
-      </p>
-
-      {machines.length === 0 ? (
-        <div className="text-sm" style={{ color: 'rgb(var(--red-6))' }}>没有活跃的机器。先在「Machines」里添加一台。</div>
-      ) : (
-        <Select value={machineId} onChange={setMachineId} placeholder="目标机器">
-          {machines.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
-        </Select>
-      )}
-
-      {error ? <div className="text-sm mt-3" style={{ color: 'rgb(var(--red-6))' }}>{error instanceof Error ? error.message : String(error)}</div> : null}
     </Modal>
   );
 }

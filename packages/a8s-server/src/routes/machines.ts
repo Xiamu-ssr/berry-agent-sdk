@@ -15,6 +15,7 @@ import {
   WORKER_AUTH_HEADER,
   machineExecReplySchema,
   machineExecRequestSchema,
+  machineGetMcpResponseSchema,
   machineHeartbeatResponseSchema,
   machineHeartbeatRequestSchema,
   machineMcpInvokeReplySchema,
@@ -22,13 +23,18 @@ import {
   machineMcpManifestSchema,
   machineRegistrationRequestSchema,
   machineRegistrationResponseSchema,
+  machineReloadReplySchema,
+  machineSetMcpRequestSchema,
+  machineSetMcpResponseSchema,
   machineWithdrawRequestSchema,
   operatorMachineJoinScriptRequestSchema,
   operatorMachineJoinScriptResponseSchema,
   operatorMachineListResponseSchema,
   operatorMachineSchema,
   workerAuthHeader,
+  type McpServerConfig,
 } from '@berry-agent/cluster-protocol';
+import type { MachineEntry } from '../machine-registry.js';
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
@@ -194,6 +200,64 @@ export function machineRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       },
     },
 
+    // ---- Operator: read a machine's current .mcp.json mcpServers ----
+    // The machine owns its MCP config; this reads it back (over the exec
+    // broker) so the operator UI can pre-fill the editor. MCP is authored
+    // here, on the machine — never on a Hand.
+    {
+      method: 'GET',
+      pattern: '/v1/operator/machines/:machineId/mcp-config',
+      name: 'GET /v1/operator/machines/:id/mcp-config',
+      middleware: [requireAdminToken(deps)],
+      handler: async ({ params, res }) => {
+        const entry = requireActiveMachine(deps, params.machineId);
+        const configPath = entry.mcpConfigPath ?? null;
+        const mcpServers = configPath ? await readMachineMcpConfig(entry, configPath) : {};
+        writeJson(res, 200, machineGetMcpResponseSchema.parse({
+          machineId: entry.machineId,
+          configPath,
+          mcpServers,
+        }));
+      },
+    },
+
+    // ---- Operator: set a machine's .mcp.json mcpServers (single source) ----
+    // a8s writes the full map into the machine's .mcp.json over the exec
+    // broker, runs install commands, then asks the connector to /reload. The
+    // new capability appears on the next heartbeat (and in the reload reply).
+    {
+      method: 'POST',
+      pattern: '/v1/operator/machines/:machineId/mcp-config',
+      name: 'POST /v1/operator/machines/:id/mcp-config',
+      middleware: [
+        requireAdminToken(deps),
+        withAudit(deps.audit, { action: 'machine.set_mcp', target: (ctx) => ctx.params.machineId }),
+      ],
+      handler: async ({ params, req, res }) => {
+        const entry = requireActiveMachine(deps, params.machineId);
+        const body = machineSetMcpRequestSchema.parse(await readJsonBody(req));
+        const configPath = body.configPath ?? entry.mcpConfigPath;
+        if (!configPath) {
+          throw httpError(409, 'no_mcp_config_path',
+            `machine "${params.machineId}" did not report an .mcp.json path; pass configPath or re-register the connector with MCP enabled`);
+        }
+        // 1) Write the full mcpServers map (replace, the connector rescans).
+        await writeMachineMcpConfig(entry, configPath, body.mcpServers);
+        // 2) Run any install commands (e.g. npm i -g) on the machine.
+        for (const cmd of body.installCommands) {
+          await execOnMachine(entry, cmd, dirOf(configPath));
+        }
+        // 3) Ask the connector to rescan + rebuild live MCP connections.
+        const reload = await reloadMachine(entry);
+        writeJson(res, 200, machineSetMcpResponseSchema.parse({
+          machineId: entry.machineId,
+          configPath,
+          mcpServers: reload.mcpServers,
+          mcpManifest: reload.mcpManifest,
+        }));
+      },
+    },
+
     // ---- Operator: list ----
     {
       method: 'GET',
@@ -272,5 +336,138 @@ berry-machine start \\
 /** Minimal single-quote shell escaping for embedding values in the script. */
 function escapeShell(value: string): string {
   return value.replace(/'/g, `'\\''`);
+}
+
+/** Fetch an active machine entry or throw the right HTTP error. */
+function requireActiveMachine<TEntry>(deps: ServerDeps<TEntry>, machineId: string): MachineEntry {
+  const entry = deps.machines.get(machineId);
+  if (!entry) {
+    throw httpError(404, 'unknown_machine', `machine "${machineId}" is not registered`);
+  }
+  if (deps.machines.stateOf(entry, Date.now()) !== 'active') {
+    throw httpError(409, 'machine_unavailable', `machine "${machineId}" is not active (no recent heartbeat)`);
+  }
+  return entry;
+}
+
+/** Parent directory of a path, for use as exec cwd. */
+function dirOf(path: string): string {
+  const idx = path.replace(/\/+$/, '').lastIndexOf('/');
+  return idx <= 0 ? '/' : path.slice(0, idx);
+}
+
+/** One-quote shell escaping for embedding a value as a single arg. */
+function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Read the machine's current .mcp.json mcpServers map over the exec broker.
+ * Base64 round-trips the file content so arbitrary JSON survives the shell.
+ * Missing file → empty map. Corrupt JSON → 409 (don't pretend it's empty).
+ */
+async function readMachineMcpConfig(entry: MachineEntry, configPath: string): Promise<Record<string, McpServerConfig>> {
+  const catReply = await execOnMachine(
+    entry,
+    `if [ -f ${shq(configPath)} ]; then base64 < ${shq(configPath)}; fi; echo __BERRY_EOF__`,
+    dirOf(configPath),
+  );
+  const b64 = catReply.output.split('__BERRY_EOF__')[0].replace(/\s+/g, '');
+  if (!b64) return {};
+  let text: string;
+  try {
+    text = Buffer.from(b64, 'base64').toString('utf-8');
+  } catch {
+    throw httpError(409, 'mcp_config_unparsable', `could not decode machine's ${configPath}`);
+  }
+  let parsed: { mcpServers?: Record<string, McpServerConfig> };
+  try {
+    parsed = JSON.parse(text) as { mcpServers?: Record<string, McpServerConfig> };
+  } catch {
+    throw httpError(409, 'mcp_config_unparsable', `machine's ${configPath} is not valid JSON`);
+  }
+  return parsed.mcpServers ?? {};
+}
+
+/**
+ * Write the machine's .mcp.json with the given mcpServers map (replacing the
+ * mcpServers key, preserving any other top-level keys). a8s does the merge
+ * in-process; the machine only decodes + writes.
+ */
+async function writeMachineMcpConfig(
+  entry: MachineEntry,
+  configPath: string,
+  mcpServers: Record<string, McpServerConfig>,
+): Promise<void> {
+  const dir = dirOf(configPath);
+  // Preserve sibling keys in the existing file (read current, swap mcpServers).
+  const catReply = await execOnMachine(
+    entry,
+    `if [ -f ${shq(configPath)} ]; then base64 < ${shq(configPath)}; fi; echo __BERRY_EOF__`,
+    dir,
+  );
+  const b64in = catReply.output.split('__BERRY_EOF__')[0].replace(/\s+/g, '');
+  let current: Record<string, unknown> = {};
+  if (b64in) {
+    try {
+      current = JSON.parse(Buffer.from(b64in, 'base64').toString('utf-8')) as Record<string, unknown>;
+    } catch {
+      throw httpError(409, 'mcp_config_unparsable', `machine's ${configPath} is not valid JSON; refusing to overwrite`);
+    }
+  }
+  const merged = { ...current, mcpServers };
+  const json = JSON.stringify(merged, null, 2) + '\n';
+  const b64 = Buffer.from(json, 'utf-8').toString('base64');
+  await execOnMachine(
+    entry,
+    `mkdir -p ${shq(dir)} && printf %s ${shq(b64)} | base64 -d > ${shq(configPath)}`,
+    dir,
+  );
+}
+
+/** Run a command on the machine via the exec broker; throws on transport/exec error. */
+async function execOnMachine(entry: MachineEntry, command: string, cwd: string) {
+  const target = `${entry.callbackUrl.replace(/\/$/, '')}${MACHINE_PATHS.exec}`;
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token),
+      },
+      body: JSON.stringify({ command, cwd, env: {} }),
+    });
+  } catch (err) {
+    throw httpError(502, 'machine_unreachable', `machine "${entry.machineId}" unreachable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!upstream.ok) {
+    const t = await upstream.text().catch(() => '');
+    throw httpError(502, 'machine_exec_failed', `machine "${entry.machineId}" exec HTTP ${upstream.status}: ${t.slice(0, 200)}`);
+  }
+  const reply = machineExecReplySchema.parse(await upstream.json());
+  if (reply.isError) {
+    throw httpError(502, 'machine_exec_failed', `command failed on "${entry.machineId}": ${reply.output.slice(0, 300)}`);
+  }
+  return reply;
+}
+
+/** POST /reload to the connector and return its fresh MCP capability. */
+async function reloadMachine(entry: MachineEntry) {
+  const target = `${entry.callbackUrl.replace(/\/$/, '')}${MACHINE_PATHS.reload}`;
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, {
+      method: 'POST',
+      headers: { [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token) },
+    });
+  } catch (err) {
+    throw httpError(502, 'machine_unreachable', `machine "${entry.machineId}" unreachable for reload: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!upstream.ok) {
+    const t = await upstream.text().catch(() => '');
+    throw httpError(502, 'machine_reload_failed', `machine "${entry.machineId}" reload HTTP ${upstream.status}: ${t.slice(0, 200)}`);
+  }
+  return machineReloadReplySchema.parse(await upstream.json());
 }
 
