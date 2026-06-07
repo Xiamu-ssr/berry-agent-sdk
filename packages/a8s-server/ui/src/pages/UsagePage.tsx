@@ -152,6 +152,18 @@ export function UsagePage() {
                     { title: '调用', dataIndex: 'calls', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
                     { title: 'Token', dataIndex: 'totalTokens', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
                     {
+                      // Per-call unit cost — totalCost / calls, both already on the
+                      // row. Lets the operator compare model price-points directly
+                      // (opus 单次比 sonnet 贵几倍) instead of inferring it from
+                      // the totals. Pure ratio, no new metric over the wire.
+                      title: '均/调用', dataIndex: 'totalCost', align: 'right' as const,
+                      render: (_v: number, row: UsageModelRow) => (
+                        <span className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>
+                          {row.calls > 0 ? money(row.totalCost / row.calls) : '—'}
+                        </span>
+                      ),
+                    },
+                    {
                       title: '占比', dataIndex: 'totalCost', align: 'right' as const, width: 132,
                       render: (v: number) => <CostShare value={v} total={totals.totalCost} />,
                     },
