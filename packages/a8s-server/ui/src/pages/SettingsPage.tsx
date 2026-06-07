@@ -247,7 +247,15 @@ function ProviderEditor({
       <div className="flex items-center justify-between">
         <div className="font-medium text-sm">
           {prov.label || prov.id}
-          <span className="font-normal ml-2 text-xs" style={{ color: 'var(--color-text-4)' }}>{preset?.label ?? prov.presetId}</span>
+          {/* Only show the preset name as a secondary hint when it differs from
+              the primary label — otherwise it reads as a duplicated title. */}
+          {(() => {
+            const secondary = preset?.label ?? prov.presetId;
+            const primary = prov.label || prov.id;
+            return secondary && secondary !== primary ? (
+              <span className="font-normal ml-2 text-xs" style={{ color: 'var(--color-text-4)' }}>{secondary}</span>
+            ) : null;
+          })()}
         </div>
         <Button type="text" size="mini" status="danger" onClick={onRemove}>Remove</Button>
       </div>
