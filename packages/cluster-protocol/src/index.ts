@@ -761,6 +761,66 @@ export const operatorSkillInstallResponseSchema = z.object({
 }).strict();
 export type OperatorSkillInstallResponse = z.infer<typeof operatorSkillInstallResponseSchema>;
 
+// ============================================================
+// Product credentials — operator issues/revokes scoped tokens
+// ============================================================
+// a8s is multi-tenant: a product authenticates with a `bp_…` token that
+// scopes it to its own agents. The operator issues/rotates/revokes these.
+// The full token value is returned ONLY at issue time (it isn't stored in
+// recoverable form for listing — list returns metadata without the token).
+
+/** One product credential as surfaced to the operator (no token value). */
+export const productCredentialInfoSchema = z.object({
+  product: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+  label: z.string().optional(),
+}).strict();
+export type ProductCredentialInfo = z.infer<typeof productCredentialInfoSchema>;
+
+export const productCredentialListResponseSchema = z.object({
+  credentials: z.array(productCredentialInfoSchema),
+}).strict();
+export type ProductCredentialListResponse = z.infer<typeof productCredentialListResponseSchema>;
+
+/** Issue (or rotate) a product's credential. */
+export const productCredentialIssueRequestSchema = z.object({
+  product: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'product must be kebab-case'),
+  label: z.string().min(1).optional(),
+}).strict();
+export type ProductCredentialIssueRequest = z.infer<typeof productCredentialIssueRequestSchema>;
+
+/** The issue response carries the token ONCE — the operator must copy it now. */
+export const productCredentialIssueResponseSchema = z.object({
+  product: z.string().min(1),
+  token: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+  label: z.string().optional(),
+}).strict();
+export type ProductCredentialIssueResponse = z.infer<typeof productCredentialIssueResponseSchema>;
+
+// ============================================================
+// Audit log query — operator reads the append-only action log
+// ============================================================
+
+/** One audit row (mirrors a8s-server's AuditEntry). */
+export const auditEntrySchema = z.object({
+  ts: z.number().int().nonnegative(),
+  action: z.string().min(1),
+  actor: z.string().min(1),
+  sourceIp: z.string().optional(),
+  target: z.string().optional(),
+  outcome: z.enum(['ok', 'err']),
+  details: z.record(z.unknown()).optional(),
+}).strict();
+export type AuditEntryWire = z.infer<typeof auditEntrySchema>;
+
+export const auditQueryResponseSchema = z.object({
+  entries: z.array(auditEntrySchema),
+  /** True if the result was capped at `limit` (more rows exist). */
+  truncated: z.boolean(),
+}).strict();
+export type AuditQueryResponse = z.infer<typeof auditQueryResponseSchema>;
+
 /** Pause the current turn. */
 export const agentPauseRequestSchema = z.object({
   reason: z.string().optional(),
@@ -1318,6 +1378,12 @@ export const A8S_PATHS = {
   /** Install a registry skill onto an agent: POST .../agents/:id/skills/:name */
   operatorAgentInstallSkill: (agentId: string, name: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
+  /** Product-scoped credentials (issue/revoke/list bp_… tokens). */
+  operatorCredentials: `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials`,
+  operatorCredential: (product: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials/${encodeURIComponent(product)}`,
+  /** Operator audit log query. */
+  operatorAudit: `/${CLUSTER_PROTOCOL_VERSION}/operator/audit`,
 } as const;
 
 export const WORKER_PATHS = {

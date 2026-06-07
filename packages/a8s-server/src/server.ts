@@ -42,6 +42,8 @@ import { healthRoutes, uiRoutes } from './routes/health.js';
 import { machineRoutes } from './routes/machines.js';
 import { handRecipeRoutes } from './routes/hand-recipes.js';
 import { skillRegistryRoutes } from './routes/skills.js';
+import { productCredentialRoutes } from './routes/product-credentials.js';
+import { auditRoutes } from './routes/audit.js';
 import { modelsRoutes } from './routes/models.js';
 import { operatorRoutes } from './routes/operator.js';
 import { sessionRoutes } from './routes/sessions.js';
@@ -212,6 +214,8 @@ export class A8sServer<TEntry = unknown> {
       ...machineRoutes(this.deps),
       ...handRecipeRoutes(this.deps),
       ...skillRegistryRoutes(this.deps),
+      ...productCredentialRoutes(this.deps),
+      ...auditRoutes(this.deps),
     ];
     // Wrap each route. Metrics first (so 429s still get counted), then
     // rate limit (except for streaming and the unbounded send call).

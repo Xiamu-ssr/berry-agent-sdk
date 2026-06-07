@@ -370,6 +370,87 @@ export function useCancelWake() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['wakes'] }); },
   });
 }
+export function useScheduleWake() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { agentId: string; dueAt: number; reason: string; sessionId?: string }) =>
+      api<{ wakeId: string; dueAt: number }>('/v1/wakes/schedule', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['wakes'] }); },
+  });
+}
+
+// ---- Product credentials (scoped bp_… tokens) ----
+
+export interface ProductCredentialInfo {
+  product: string;
+  createdAt: number;
+  label?: string;
+}
+export function useCredentials() {
+  return useQuery({
+    queryKey: ['credentials'],
+    queryFn: () => api<{ credentials: ProductCredentialInfo[] }>('/v1/operator/credentials').then((r) => r.credentials),
+    refetchInterval: 15_000,
+  });
+}
+export interface IssuedCredential {
+  product: string;
+  token: string;
+  createdAt: number;
+  label?: string;
+}
+export function useIssueCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { product: string; label?: string }) =>
+      api<IssuedCredential>('/v1/operator/credentials', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['credentials'] }); },
+  });
+}
+export function useRevokeCredential() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (product: string) =>
+      api(`/v1/operator/credentials/${encodeURIComponent(product)}`, { method: 'DELETE' }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['credentials'] }); },
+  });
+}
+
+// ---- Audit log ----
+
+export interface AuditEntry {
+  ts: number;
+  action: string;
+  actor: string;
+  sourceIp?: string;
+  target?: string;
+  outcome: 'ok' | 'err';
+  details?: Record<string, unknown>;
+}
+export interface AuditQuery {
+  from?: number;
+  to?: number;
+  action?: string;
+  outcome?: 'ok' | 'err';
+  limit?: number;
+}
+export function useAudit(q: AuditQuery) {
+  const params = new URLSearchParams();
+  if (q.from != null) params.set('from', String(q.from));
+  if (q.to != null) params.set('to', String(q.to));
+  if (q.action) params.set('action', q.action);
+  if (q.outcome) params.set('outcome', q.outcome);
+  if (q.limit != null) params.set('limit', String(q.limit));
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ['audit', qs],
+    queryFn: () => api<{ entries: AuditEntry[]; truncated: boolean }>(`/v1/operator/audit${qs ? `?${qs}` : ''}`),
+    refetchInterval: 10_000,
+  });
+}
 
 // ---- Models template ----
 

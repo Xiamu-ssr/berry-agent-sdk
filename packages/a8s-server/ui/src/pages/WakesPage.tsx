@@ -1,11 +1,13 @@
-import { Table, Card, Button, Popconfirm, Message } from '@arco-design/web-react';
-import { useWakes, useCancelWake } from '../api/queries.js';
+import { useState } from 'react';
+import { Table, Card, Button, Modal, Input, Popconfirm, Message, DatePicker } from '@arco-design/web-react';
+import { useWakes, useCancelWake, useScheduleWake } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { WakeStatePill, relativeTime } from '../components/StatusPill.js';
 
 export function WakesPage() {
   const wakes = useWakes();
   const cancel = useCancelWake();
+  const [showSchedule, setShowSchedule] = useState(false);
 
   if (wakes.error) return <ErrorBanner error={wakes.error} />;
   if (!wakes.data) return <Spinner />;
@@ -37,15 +39,79 @@ export function WakesPage() {
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Wake queue" subtitle={`${wakes.data.length} scheduled · auto-refresh 5s`} />
+      <PageHeader
+        title="Wake queue"
+        subtitle={`${wakes.data.length} scheduled · auto-refresh 5s`}
+        actions={<Button type="primary" onClick={() => setShowSchedule(true)}>手动排期</Button>}
+      />
 
       {wakes.data.length === 0 ? (
-        <EmptyState icon="⏰" title="没有排期的 wake" hint="产品调用 POST /v1/wakes/schedule 时会触发 wake。" />
+        <EmptyState icon="⏰" title="没有排期的 wake" hint="产品调用 POST /v1/wakes/schedule 时会触发 wake;也可以点「手动排期」。" />
       ) : (
         <Card bordered bodyStyle={{ padding: 0 }}>
           <Table rowKey="wakeId" columns={columns} data={wakes.data} pagination={false} size="small" />
         </Card>
       )}
+
+      {showSchedule && <ScheduleModal onClose={() => setShowSchedule(false)} />}
     </div>
+  );
+}
+
+function ScheduleModal({ onClose }: { onClose: () => void }) {
+  const schedule = useScheduleWake();
+  const [agentId, setAgentId] = useState('');
+  const [reason, setReason] = useState('');
+  const [dueAt, setDueAt] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState('');
+  const canSubmit = agentId.trim() && reason.trim() && dueAt != null && !schedule.isPending;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    await schedule.mutateAsync({
+      agentId: agentId.trim(),
+      dueAt: dueAt!,
+      reason: reason.trim(),
+      sessionId: sessionId.trim() || undefined,
+    });
+    Message.success(`已为 ${agentId.trim()} 排期 wake`);
+    onClose();
+  };
+
+  return (
+    <Modal
+      visible
+      title="手动排期 wake"
+      onCancel={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={schedule.isPending} disabled={!canSubmit} onClick={submit}>排期</Button>
+        </div>
+      }
+    >
+      <label className="block mb-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>Agent ID</span>
+        <Input className="mt-1 font-mono" value={agentId} onChange={setAgentId} placeholder="e.g. helper-1" autoFocus />
+      </label>
+      <label className="block mb-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>触发时间</span>
+        <DatePicker
+          showTime
+          className="mt-1 w-full"
+          onChange={(_s, d) => setDueAt(d ? d.valueOf() : null)}
+          placeholder="选择日期与时间"
+        />
+      </label>
+      <label className="block mb-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>原因</span>
+        <Input className="mt-1" value={reason} onChange={setReason} placeholder="为什么唤醒它?" />
+      </label>
+      <label className="block">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>Session ID(可选)</span>
+        <Input className="mt-1 font-mono" value={sessionId} onChange={setSessionId} placeholder="留空则用 agent 的活跃 session" />
+      </label>
+      {schedule.error ? <div className="text-sm mt-2" style={{ color: 'rgb(var(--red-6))' }}>{schedule.error instanceof Error ? schedule.error.message : String(schedule.error)}</div> : null}
+    </Modal>
   );
 }

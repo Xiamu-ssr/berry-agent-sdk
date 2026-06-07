@@ -13,7 +13,7 @@
 // daily for tractability (audit.YYYY-MM-DD.jsonl), with a stable
 // `audit.jsonl` symlink to the current day.
 
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export interface AuditEntry {
@@ -73,6 +73,76 @@ export class AuditLog {
     const day = new Date(now).toISOString().slice(0, 10);
     return join(this.auditRoot, `audit.${day}.jsonl`);
   }
+
+  /**
+   * Read back recent audit entries, newest first. Reads the per-day JSONL
+   * files spanning [from, to], parses each line, filters, and caps at `limit`.
+   * Best-effort: a missing day file (no actions that day) is skipped silently;
+   * a malformed line is dropped. Returns `{ entries, truncated }`.
+   *
+   * This is the read side of the append-only log — the operator's Audit page
+   * calls it. It deliberately reads the files (not a DB) to stay consistent
+   * with the "files are the fact source" rule the writer follows.
+   */
+  async query(opts: AuditQueryOptions = {}): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
+    const to = opts.to ?? Date.now();
+    // Default window: 7 days back, so the page isn't empty on first open.
+    const from = opts.from ?? to - 7 * 24 * 60 * 60 * 1000;
+    const limit = Math.min(Math.max(opts.limit ?? 200, 1), 2000);
+
+    // Collect the day files covering [from, to] (inclusive), newest day first.
+    const days: string[] = [];
+    const oneDay = 24 * 60 * 60 * 1000;
+    // Walk by calendar day from `to` back to `from`.
+    for (let t = to; t >= from - oneDay; t -= oneDay) {
+      const day = new Date(t).toISOString().slice(0, 10);
+      if (!days.includes(day)) days.push(day);
+    }
+
+    const matched: AuditEntry[] = [];
+    let truncated = false;
+    for (const day of days) {
+      let raw: string;
+      try {
+        raw = await readFile(join(this.auditRoot, `audit.${day}.jsonl`), 'utf-8');
+      } catch {
+        continue; // no file for this day
+      }
+      const lines = raw.split('\n');
+      // Newest first within a day: iterate bottom-up.
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        let entry: AuditEntry;
+        try {
+          entry = JSON.parse(line) as AuditEntry;
+        } catch {
+          continue; // drop malformed line
+        }
+        if (typeof entry.ts !== 'number' || entry.ts < from || entry.ts > to) continue;
+        if (opts.action && entry.action !== opts.action) continue;
+        if (opts.outcome && entry.outcome !== opts.outcome) continue;
+        matched.push(entry);
+        if (matched.length >= limit) { truncated = true; break; }
+      }
+      if (truncated) break;
+    }
+    return { entries: matched, truncated };
+  }
+}
+
+/** Filters for {@link AuditLog.query}. */
+export interface AuditQueryOptions {
+  /** Lower bound (Unix ms), inclusive. Default: 7 days before `to`. */
+  from?: number;
+  /** Upper bound (Unix ms), inclusive. Default: now. */
+  to?: number;
+  /** Only this action verb. */
+  action?: string;
+  /** Only this outcome. */
+  outcome?: 'ok' | 'err';
+  /** Max rows (1–2000). Default 200. */
+  limit?: number;
 }
 
 /** No-op audit log for tests / dev. */
@@ -82,5 +152,8 @@ export class NullAuditLog extends AuditLog {
   }
   async log(_entry: AuditEntry): Promise<void> {
     // intentionally empty
+  }
+  async query(): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
+    return { entries: [], truncated: false };
   }
 }
