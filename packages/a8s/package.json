@@ -16,11 +16,11 @@
   },
   "dependencies": {
     "@berry-agent/cluster-protocol": "*",
+    "@berry-agent/core": "*",
     "@berry-agent/runtime": "*",
     "@berry-agent/worker": "*"
   },
   "devDependencies": {
-    "@berry-agent/core": "*",
     "@berry-agent/models": "*",
     "@berry-agent/observe": "*",
     "@types/node": "^22.10.0",

@@ -23,6 +23,8 @@ export interface ModelPricing {
 }
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  'claude-opus-4.8': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  'anthropic/claude-opus-4.8': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
   'claude-sonnet-4-20250514': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   'claude-haiku-4-20250414': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
   'claude-3-5-sonnet-20241022': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
