@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Card, Button, Input, Select, Checkbox, Tag, Message } from '@arco-design/web-react';
 import {
   useModelsTemplate,
   usePutModelsTemplate,
@@ -24,12 +25,11 @@ export function SettingsPage() {
 // ============================================================
 // Models — human-friendly provider + model configuration
 // ============================================================
-// The cluster-wide models template (providers / models / tiers) drives
-// every worker (they pull it at register). Rather than make the operator
-// hand-write that JSON, this card is a form: pick a provider preset, paste
-// the API key, pull the live model list, tick the models to expose, and
-// map tiers. The JSON is still available under "Advanced" as an escape
-// hatch and to edit anything the form doesn't cover.
+// The cluster-wide models template (providers / models / tiers) drives every
+// worker (they pull it at register). Rather than make the operator hand-write
+// that JSON, this card is a form: pick a provider preset, paste the API key,
+// pull the live model list, tick the models to expose, and map tiers. The JSON
+// is still available under "Advanced" as an escape hatch.
 
 interface DraftProvider {
   /** Local key in the template's providers map. */
@@ -108,29 +108,29 @@ function ModelsCard() {
 
   if (template.error) return <ErrorBanner error={template.error} />;
   if (template.isLoading || presets.isLoading) {
-    return <div className="card"><Spinner /></div>;
+    return <Card bordered><Spinner /></Card>;
   }
 
   const canSave = providers.length > 0 && providers.every((p) => p.apiKey && p.models.length > 0);
 
   return (
-    <div className="card">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400">
-          Models
-        </h2>
+    <Card
+      bordered
+      title={<span className="text-sm font-semibold uppercase tracking-wider">Models</span>}
+      extra={
         <div className="flex items-center gap-3">
           {template.data?.updatedAt && (
-            <span className="text-xs text-ink-400">
+            <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>
               updated {new Date(template.data.updatedAt).toLocaleString()}
             </span>
           )}
-          <button className="text-xs text-ink-500 hover:underline" onClick={() => setAdvanced((a) => !a)}>
+          <Button type="text" size="small" onClick={() => setAdvanced((a) => !a)}>
             {advanced ? '← Form' : 'Advanced (JSON)'}
-          </button>
+          </Button>
         </div>
-      </div>
-      <p className="text-sm text-ink-500 dark:text-ink-400 mb-4">
+      }
+    >
+      <p className="text-sm mb-4" style={{ color: 'var(--color-text-3)' }}>
         Providers and models shared across the cluster. Workers pull this at register time. API keys
         are copied to each worker — treat this as a secret.
       </p>
@@ -166,22 +166,22 @@ function ModelsCard() {
           />
 
           {allModels.length > 0 && (
-            <div className="border-t border-ink-200 dark:border-ink-800 pt-3">
-              <div className="text-xs font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 mb-2">
+            <div className="pt-3" style={{ borderTop: '1px solid var(--color-border-2)' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-3)' }}>
                 Tiers <span className="font-normal normal-case">— map an alias agents request (e.g. <code className="text-xs">tier:strong</code>) to a model</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {TIER_SLOTS.map((slot) => (
                   <label key={slot} className="text-sm">
-                    <span className="block text-xs text-ink-500 mb-1">{slot}</span>
-                    <select
-                      className="input"
+                    <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>{slot}</span>
+                    <Select
                       value={tiers[slot] ?? ''}
-                      onChange={(e) => setTiers((t) => ({ ...t, [slot]: e.target.value }))}
+                      onChange={(v) => setTiers((t) => ({ ...t, [slot]: v }))}
+                      allowClear
+                      placeholder="(none)"
                     >
-                      <option value="">(none)</option>
-                      {allModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
+                      {allModels.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
+                    </Select>
                   </label>
                 ))}
               </div>
@@ -190,18 +190,19 @@ function ModelsCard() {
 
           {put.error && <ErrorBanner error={put.error} />}
           <div className="flex items-center justify-end gap-2">
-            {put.isSuccess && <span className="text-xs text-emerald-600">✓ Saved</span>}
-            <button
-              className="btn btn-primary"
-              disabled={!canSave || put.isPending}
-              onClick={() => put.mutate(buildTemplate())}
+            {put.isSuccess && <span className="text-xs" style={{ color: 'rgb(var(--green-6))' }}>✓ Saved</span>}
+            <Button
+              type="primary"
+              loading={put.isPending}
+              disabled={!canSave}
+              onClick={() => put.mutate(buildTemplate(), { onSuccess: () => Message.success('已保存 models 模板') })}
             >
-              {put.isPending ? 'Saving…' : 'Save'}
-            </button>
+              保存
+            </Button>
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -236,50 +237,40 @@ function ProviderEditor({
     setManual('');
   };
 
-  // The probe fell back to a hardcoded list (live fetch failed or the
-  // provider has no /models endpoint). Showing that as if "pulled" is
-  // worse than nothing — flag it and steer to manual entry.
+  // The probe fell back to a hardcoded list (live fetch failed or the provider
+  // has no /models endpoint). Showing that as if "pulled" is worse than nothing
+  // — flag it and steer to manual entry.
   const isCached = probe.data?.source === 'known';
 
   return (
-    <div className="rounded-md border border-ink-200 dark:border-ink-800 p-3 space-y-2">
+    <div className="rounded-md p-3 space-y-2" style={{ border: '1px solid var(--color-border-2)' }}>
       <div className="flex items-center justify-between">
         <div className="font-medium text-sm">
           {prov.label || prov.id}
-          <span className="text-ink-400 font-normal ml-2 text-xs">{preset?.label ?? prov.presetId}</span>
+          <span className="font-normal ml-2 text-xs" style={{ color: 'var(--color-text-4)' }}>{preset?.label ?? prov.presetId}</span>
         </div>
-        <button className="btn btn-ghost text-xs" onClick={onRemove}>Remove</button>
+        <Button type="text" size="mini" status="danger" onClick={onRemove}>Remove</Button>
       </div>
 
       <label className="block text-sm">
-        <span className="block text-xs text-ink-500 mb-1">API key</span>
-        <input
-          type="password"
-          className="input"
-          value={prov.apiKey}
-          placeholder="sk-..."
-          onChange={(e) => onChange({ ...prov, apiKey: e.target.value })}
-        />
+        <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>API key</span>
+        <Input.Password value={prov.apiKey} placeholder="sk-..." onChange={(v) => onChange({ ...prov, apiKey: v })} />
       </label>
       {preset?.apiKeyDocsUrl && (
-        <a className="text-xs text-berry-600 hover:underline" href={preset.apiKeyDocsUrl} target="_blank" rel="noreferrer">
+        <a className="text-xs hover:underline" style={{ color: 'rgb(var(--arcoblue-6))' }} href={preset.apiKeyDocsUrl} target="_blank" rel="noreferrer">
           Where do I get a key? ↗
         </a>
       )}
 
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          className="btn btn-default text-xs"
-          disabled={!prov.apiKey || probe.isPending}
-          onClick={runProbe}
-        >
-          {probe.isPending ? 'Pulling…' : 'Pull model list'}
-        </button>
+        <Button size="small" disabled={!prov.apiKey} loading={probe.isPending} onClick={runProbe}>
+          Pull model list
+        </Button>
         {probe.data?.source === 'live' && (
-          <span className="text-xs text-emerald-600">✓ {available.length} live models</span>
+          <span className="text-xs" style={{ color: 'rgb(var(--green-6))' }}>✓ {available.length} live models</span>
         )}
         {isCached && (
-          <span className="text-xs text-amber-600">
+          <span className="text-xs" style={{ color: 'rgb(var(--orange-6))' }}>
             ⚠ couldn't pull a live list{probe.data?.warning ? ` (${probe.data.warning})` : ''} — type model ids below
           </span>
         )}
@@ -290,26 +281,24 @@ function ProviderEditor({
           provider has no catalog endpoint or returns the wrong shape. */}
       <div className="flex items-end gap-2">
         <label className="text-sm flex-1">
-          <span className="block text-xs text-ink-500 mb-1">Add model id manually</span>
-          <input
-            className="input"
+          <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Add model id manually</span>
+          <Input
             value={manual}
             placeholder="e.g. anthropic/claude-opus-4.7"
-            onChange={(e) => setManual(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManual(); } }}
+            onChange={setManual}
+            onPressEnter={addManual}
           />
         </label>
-        <button className="btn btn-default" disabled={!manual.trim()} onClick={addManual}>Add</button>
+        <Button disabled={!manual.trim()} onClick={addManual}>Add</Button>
       </div>
 
       {available.length > 0 && (
-        <div className="max-h-44 overflow-auto rounded border border-ink-200 dark:border-ink-800 p-2">
+        <div className="max-h-44 overflow-auto rounded p-2" style={{ border: '1px solid var(--color-border-2)' }}>
           {available.map((m) => {
             const on = prov.models.includes(m);
             return (
               <label key={m} className="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={on}
                   onChange={() => onChange({
                     ...prov,
@@ -351,13 +340,12 @@ function AddProvider({
   return (
     <div className="flex items-end gap-2">
       <label className="text-sm flex-1">
-        <span className="block text-xs text-ink-500 mb-1">Add provider</span>
-        <select className="input" value={presetId} onChange={(e) => setPresetId(e.target.value)}>
-          <option value="">Choose a provider…</option>
-          {presets.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-        </select>
+        <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Add provider</span>
+        <Select value={presetId} onChange={setPresetId} placeholder="Choose a provider…">
+          {presets.map((p) => <Select.Option key={p.id} value={p.id}>{p.label}</Select.Option>)}
+        </Select>
       </label>
-      <button className="btn btn-default" disabled={!presetId} onClick={add}>Add</button>
+      <Button disabled={!presetId} onClick={add}>Add</Button>
     </div>
   );
 }
@@ -367,16 +355,16 @@ function AdvancedJson({ template, onApply }: { template: ModelsTemplate; onApply
   const [err, setErr] = useState<string | null>(null);
   return (
     <div className="space-y-2">
-      <textarea
-        className="input font-mono text-xs h-80 resize-y"
+      <Input.TextArea
+        className="font-mono"
         value={draft}
         spellCheck={false}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={setDraft}
+        style={{ height: 320, fontSize: 12, resize: 'vertical' }}
       />
       {err && <FieldError>{err}</FieldError>}
       <div className="flex justify-end">
-        <button
-          className="btn btn-default"
+        <Button
           onClick={() => {
             try {
               const t = JSON.parse(draft) as ModelsTemplate;
@@ -389,14 +377,14 @@ function AdvancedJson({ template, onApply }: { template: ModelsTemplate; onApply
           }}
         >
           Apply to form
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
 function FieldError({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs text-berry-600 dark:text-berry-400">{children}</div>;
+  return <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>{children}</div>;
 }
 
 // ============================================================
@@ -411,11 +399,8 @@ function AdminAgentCard() {
   const templateReady = useMemo(() => !!template.data?.template, [template.data]);
 
   return (
-    <div className="card">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 mb-2">
-        Admin agent
-      </h2>
-      <p className="text-sm text-ink-500 dark:text-ink-400 mb-3">
+    <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Admin agent</span>}>
+      <p className="text-sm mb-3" style={{ color: 'var(--color-text-3)' }}>
         <code className="font-mono text-xs">berry-admin</code> is the chat agent that operates
         the cluster for you (drain workers, generate join scripts, report status). It mounts on an
         active worker and gets the cluster-admin tools automatically.
@@ -424,28 +409,29 @@ function AdminAgentCard() {
       {status.isLoading ? (
         <Spinner />
       ) : status.data?.present ? (
-        <div className="text-sm">
-          <span className="pill pill-muted mr-2">running</span>
+        <div className="text-sm flex items-center gap-2">
+          <Tag color="green" size="small">running</Tag>
           mounted on worker <code className="font-mono text-xs">{status.data.workerId}</code>.
           Chat with it on the <strong>Admin chat</strong> page.
         </div>
       ) : (
         <div className="space-y-2">
           {!templateReady && (
-            <div className="text-xs text-berry-600 dark:text-berry-400">
+            <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>
               Configure models above first.
             </div>
           )}
           {ensure.error && <ErrorBanner error={ensure.error} />}
-          <button
-            className="btn btn-primary"
-            disabled={!templateReady || ensure.isPending}
+          <Button
+            type="primary"
+            loading={ensure.isPending}
+            disabled={!templateReady}
             onClick={() => ensure.mutate()}
           >
-            {ensure.isPending ? 'Starting…' : 'Bootstrap admin agent'}
-          </button>
+            Bootstrap admin agent
+          </Button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

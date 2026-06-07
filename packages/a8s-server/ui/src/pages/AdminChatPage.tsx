@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Card, Button, Input } from '@arco-design/web-react';
 import {
   useAdminChat,
   useSessions,
@@ -91,17 +92,13 @@ export function AdminChatPage() {
       <PageHeader
         title="berry-admin"
         subtitle="Chat with the cluster admin agent. Conversations persist as SDK sessions — pick a past session to continue it."
-        actions={
-          <button type="button" className="btn btn-default" onClick={() => selectSession(null)}>
-            New chat
-          </button>
-        }
+        actions={<Button onClick={() => selectSession(null)}>New chat</Button>}
       />
 
       <div className="flex-1 grid grid-cols-[220px_1fr] gap-3 min-h-0">
         {/* Session list — durable, survives tab switches */}
-        <div className="card overflow-y-auto p-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 px-2 py-1">
+        <Card bordered bodyStyle={{ padding: 8 }} className="overflow-y-auto">
+          <div className="text-xs font-semibold uppercase tracking-wider px-2 py-1" style={{ color: 'var(--color-text-3)' }}>
             Sessions
           </div>
           {sessions.isLoading ? (
@@ -111,62 +108,64 @@ export function AdminChatPage() {
               {sessions.data.map((s) => (
                 <li key={s.id}>
                   <button
-                    className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
-                      sessionId === s.id
-                        ? 'bg-berry-50 dark:bg-berry-950/30 text-ink-900 dark:text-ink-100'
-                        : 'hover:bg-ink-50 dark:hover:bg-ink-900 text-ink-600 dark:text-ink-400'
-                    }`}
+                    className="w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
+                    style={sessionId === s.id
+                      ? { background: 'var(--color-fill-2)', color: 'var(--color-text-1)' }
+                      : { color: 'var(--color-text-2)' }}
                     onClick={() => selectSession(s.id)}
                   >
                     <div className="font-mono truncate">{s.title || s.id}</div>
-                    <div className="text-ink-400 mt-0.5">{relativeTime(s.lastActiveAt)} · {s.messageCount ?? 0} msg</div>
+                    <div className="mt-0.5" style={{ color: 'var(--color-text-4)' }}>{relativeTime(s.lastActiveAt)} · {s.messageCount ?? 0} msg</div>
                   </button>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="text-xs text-ink-400 px-2 py-3">No sessions yet. Send a message to start one.</div>
+            <div className="text-xs px-2 py-3" style={{ color: 'var(--color-text-4)' }}>No sessions yet. Send a message to start one.</div>
           )}
-        </div>
+        </Card>
 
         {/* Conversation */}
         <div className="flex flex-col min-h-0">
-          <div ref={containerRef} className="flex-1 overflow-y-auto card mb-3 p-4 space-y-3">
-            {history.isLoading && sessionId && <Spinner />}
-            {messages.length === 0 && !history.isLoading && (
-              <div className="text-center text-sm text-ink-500 dark:text-ink-400 py-12">
-                <div className="text-4xl mb-2">✦</div>
-                Ask me anything: <em>"how is the cluster?"</em> · <em>"drain worker X"</em> · <em>"how do I add a worker?"</em>
-              </div>
-            )}
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${
-                    m.role === 'user'
-                      ? 'bg-berry-600 text-white rounded-br-sm'
-                      : m.role === 'assistant'
-                      ? 'bg-ink-100 text-ink-900 rounded-bl-sm dark:bg-ink-800 dark:text-ink-100'
-                      : 'bg-amber-50 text-amber-800 text-xs italic dark:bg-amber-950/40 dark:text-amber-300'
-                  }`}
-                >
-                  {m.text}
+          <Card bordered bodyStyle={{ padding: 16 }} className="flex-1 overflow-y-auto mb-3">
+            <div ref={containerRef} className="space-y-3 h-full">
+              {history.isLoading && sessionId && <Spinner />}
+              {messages.length === 0 && !history.isLoading && (
+                <div className="text-center text-sm py-12" style={{ color: 'var(--color-text-3)' }}>
+                  <div className="text-4xl mb-2">✦</div>
+                  Ask me anything: <em>"how is the cluster?"</em> · <em>"drain worker X"</em> · <em>"how do I add a worker?"</em>
                 </div>
-              </div>
-            ))}
-            {send.isPending && (
-              <div className="flex justify-start">
-                <div className="bg-ink-100 dark:bg-ink-800 rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm text-ink-500 dark:text-ink-400 italic">
-                  thinking…
+              )}
+              {messages.map((m) => (
+                <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className="max-w-[80%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap"
+                    style={
+                      m.role === 'user'
+                        ? { background: 'rgb(var(--arcoblue-6))', color: '#fff', borderBottomRightRadius: 4 }
+                        : m.role === 'assistant'
+                        ? { background: 'var(--color-fill-2)', color: 'var(--color-text-1)', borderBottomLeftRadius: 4 }
+                        : { background: 'var(--color-warning-light-1)', color: 'rgb(var(--orange-7))', fontStyle: 'italic', fontSize: 12 }
+                    }
+                  >
+                    {m.text}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              ))}
+              {send.isPending && (
+                <div className="flex justify-start">
+                  <div className="rounded-2xl px-4 py-2.5 text-sm italic" style={{ background: 'var(--color-fill-2)', color: 'var(--color-text-3)', borderBottomLeftRadius: 4 }}>
+                    thinking…
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
 
           <div className="flex gap-2">
-            <textarea
+            <Input.TextArea
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={setDraft}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
@@ -175,16 +174,16 @@ export function AdminChatPage() {
               }}
               placeholder="Type a message and Cmd/Ctrl+Enter to send…"
               rows={3}
-              className="input flex-1 font-sans resize-none"
+              style={{ flex: 1, resize: 'none' }}
             />
-            <button
-              type="button"
+            <Button
+              type="primary"
               onClick={() => { void submit(); }}
               disabled={!draft.trim() || send.isPending}
-              className="btn btn-primary px-6 self-stretch"
+              style={{ height: 'auto', paddingLeft: 24, paddingRight: 24 }}
             >
               Send
-            </button>
+            </Button>
           </div>
         </div>
       </div>

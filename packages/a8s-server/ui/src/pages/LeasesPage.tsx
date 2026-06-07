@@ -1,18 +1,26 @@
+import { Table, Card } from '@arco-design/web-react';
 import { useLeases } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
-import { relativeTime } from '../components/StatusPill.js';
-
-const LEASE_PILL: Record<string, string> = {
-  active: 'pill pill-success',
-  released: 'pill pill-muted',
-  expired: 'pill pill-danger',
-};
+import { StatusPill, relativeTime } from '../components/StatusPill.js';
 
 export function LeasesPage() {
   const leases = useLeases();
 
   if (leases.error) return <ErrorBanner error={leases.error} />;
   if (!leases.data) return <Spinner />;
+
+  const columns = [
+    { title: 'Lease', dataIndex: 'leaseId', render: (v: string) => <code className="font-mono text-xs">{v.slice(0, 16)}</code> },
+    { title: 'Agent', dataIndex: 'agentId', render: (v: string) => <code className="font-mono text-xs">{v}</code> },
+    {
+      title: 'Worker',
+      dataIndex: 'workerId',
+      render: (v: string | null) => <code className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>{v ?? '—'}</code>,
+    },
+    { title: 'State', dataIndex: 'state', render: (v: string) => <StatusPill state={leaseState(v)} /> },
+    { title: 'Acquired', dataIndex: 'acquiredAt', render: (v: number) => <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>{relativeTime(v)}</span> },
+    { title: 'Expires', dataIndex: 'expiresAt', render: (v: number) => <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>{relativeTime(v)}</span> },
+  ];
 
   return (
     <div className="animate-fade-in">
@@ -24,41 +32,21 @@ export function LeasesPage() {
       {leases.data.length === 0 ? (
         <EmptyState
           icon="📄"
-          title="No leases"
-          hint="A lease is held while an agent is mounted on a worker. None are active right now."
+          title="没有 lease"
+          hint="agent 挂在某个 worker 上时会持有一个 lease。当前没有活跃的。"
         />
       ) : (
-        <div className="card overflow-hidden p-0">
-          <table className="w-full">
-            <thead>
-              <tr>
-                <th className="table-head">Lease</th>
-                <th className="table-head">Agent</th>
-                <th className="table-head">Worker</th>
-                <th className="table-head">State</th>
-                <th className="table-head">Acquired</th>
-                <th className="table-head">Expires</th>
-              </tr>
-            </thead>
-            <tbody>
-              {leases.data.map((l) => (
-                <tr key={l.leaseId} className="hover:bg-ink-50 dark:hover:bg-ink-900/50">
-                  <td className="table-cell font-mono text-xs">{l.leaseId.slice(0, 16)}</td>
-                  <td className="table-cell font-mono text-xs">{l.agentId}</td>
-                  <td className="table-cell font-mono text-xs text-ink-500 dark:text-ink-400">
-                    {l.workerId ?? '—'}
-                  </td>
-                  <td className="table-cell">
-                    <span className={LEASE_PILL[l.state] ?? 'pill pill-muted'}>{l.state}</span>
-                  </td>
-                  <td className="table-cell text-ink-500 dark:text-ink-400 text-xs">{relativeTime(l.acquiredAt)}</td>
-                  <td className="table-cell text-ink-500 dark:text-ink-400 text-xs">{relativeTime(l.expiresAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card bordered bodyStyle={{ padding: 0 }}>
+          <Table rowKey="leaseId" columns={columns} data={leases.data} pagination={false} size="small" />
+        </Card>
       )}
     </div>
   );
+}
+
+// Map lease state → the WorkerState palette StatusPill understands.
+function leaseState(state: string): string {
+  if (state === 'active') return 'active';
+  if (state === 'expired') return 'evicted';
+  return 'withdrawn';
 }

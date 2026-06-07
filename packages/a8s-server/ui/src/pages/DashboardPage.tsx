@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Card } from '@arco-design/web-react';
 import { useCluster, useWorkers, useAgents } from '../api/queries.js';
 import { StatCard } from '../components/StatCard.js';
 import { Sparkline } from '../components/Sparkline.js';
@@ -39,14 +40,14 @@ export function DashboardPage() {
       />
 
       {/* Hero: capacity trend */}
-      <div className="card-elevated bg-gradient-to-br from-snow-50/80 to-white dark:from-ink-900 dark:to-ink-900">
+      <Card bordered>
         <div className="flex items-start justify-between gap-6">
           <div>
-            <div className="section-title">Capacity used</div>
-            <div className="mt-1 text-4xl font-semibold tabular-nums">
-              {capacityPct}<span className="text-2xl text-ink-400">%</span>
+            <div className="text-sm font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-3)' }}>Capacity used</div>
+            <div className="mt-1 text-4xl font-semibold tabular-nums" style={{ color: 'var(--color-text-1)' }}>
+              {capacityPct}<span className="text-2xl" style={{ color: 'var(--color-text-4)' }}>%</span>
             </div>
-            <div className="mt-1 text-sm text-ink-500 dark:text-ink-400">
+            <div className="mt-1 text-sm" style={{ color: 'var(--color-text-3)' }}>
               {c.capacity.used} of {c.capacity.total} slots · {c.capacity.available} available
             </div>
           </div>
@@ -58,7 +59,7 @@ export function DashboardPage() {
             className="mt-1"
           />
         </div>
-      </div>
+      </Card>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -67,28 +68,19 @@ export function DashboardPage() {
           hint={`${c.workerCount.total} total · ${c.workerCount.draining} draining`}
           tone={c.workerCount.active === 0 ? 'warn' : 'success'}
         />
-        <StatCard
-          label="Agents"
-          value={c.agentCount}
-          hint="assigned to workers"
-        />
+        <StatCard label="Agents" value={c.agentCount} hint="assigned to workers" />
         <StatCard
           label="Available slots"
           value={c.capacity.available}
           tone={c.capacity.available === 0 ? 'danger' : 'default'}
         />
-        <StatCard
-          label="Total capacity"
-          value={c.capacity.total}
-          hint={`${c.capacity.used} in use`}
-        />
+        <StatCard label="Total capacity" value={c.capacity.total} hint={`${c.capacity.used} in use`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="card-elevated">
-          <h2 className="section-title mb-3">Worker pool</h2>
+        <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Worker pool</span>}>
           {activeWorkers.length === 0 ? (
-            <div className="text-sm text-ink-500 dark:text-ink-400">No active workers — agents cannot be scheduled.</div>
+            <div className="text-sm" style={{ color: 'var(--color-text-3)' }}>没有活跃 worker —— agent 无法被调度。</div>
           ) : (
             <ul className="space-y-2">
               {activeWorkers.map((w) => {
@@ -96,13 +88,13 @@ export function DashboardPage() {
                 return (
                   <li key={w.workerId} className="text-sm">
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-ink-700 dark:text-ink-200">{w.workerId}</span>
-                      <span className="text-ink-500 dark:text-ink-400 tabular-nums">{w.used} / {w.capacity}</span>
+                      <span className="font-mono" style={{ color: 'var(--color-text-2)' }}>{w.workerId}</span>
+                      <span className="tabular-nums" style={{ color: 'var(--color-text-3)' }}>{w.used} / {w.capacity}</span>
                     </div>
-                    <div className="mt-1 h-1.5 rounded-full bg-ink-100 dark:bg-ink-800 overflow-hidden">
+                    <div className="mt-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
                       <div
-                        className={`h-full rounded-full ${pct > 80 ? 'bg-berry-500' : 'bg-snow-500'}`}
-                        style={{ width: `${pct}%` }}
+                        className="h-full rounded-full"
+                        style={{ width: `${pct}%`, background: pct > 80 ? 'rgb(var(--red-5))' : 'rgb(var(--arcoblue-6))' }}
                       />
                     </div>
                   </li>
@@ -110,25 +102,24 @@ export function DashboardPage() {
               })}
             </ul>
           )}
-        </div>
+        </Card>
 
-        <div className="card-elevated">
-          <h2 className="section-title mb-3">Latest agents</h2>
+        <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Latest agents</span>}>
           {recentAgents.length === 0 ? (
-            <div className="text-sm text-ink-500 dark:text-ink-400">No agents yet.</div>
+            <div className="text-sm" style={{ color: 'var(--color-text-3)' }}>还没有 agent。</div>
           ) : (
             <ul className="space-y-2">
               {recentAgents.map((a) => (
                 <li key={a.agentId} className="flex items-center justify-between text-sm">
-                  <span className="font-mono text-ink-700 dark:text-ink-200">{a.agentId}</span>
-                  <span className="text-ink-500 dark:text-ink-400 font-mono text-xs">
+                  <span className="font-mono" style={{ color: 'var(--color-text-2)' }}>{a.agentId}</span>
+                  <span className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>
                     {a.workerId ?? '(stranded)'}
                   </span>
                 </li>
               ))}
             </ul>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );
