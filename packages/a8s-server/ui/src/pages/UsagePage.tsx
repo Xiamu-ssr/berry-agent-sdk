@@ -340,6 +340,10 @@ function ModelAgents({
                 <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
               </div>
               <span className="font-mono text-xs w-10 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{compact(a.calls)}</span>
+              {/* Per-call unit cost for this agent on this model — same model run
+                  by two agents can still differ in $/call (longer context, more
+                  retries). cost/calls, both already on the slice. */}
+              <span className="font-mono text-xs w-14 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{a.calls > 0 ? `${money(a.cost / a.calls)}/次` : '—'}</span>
               <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(a.cost)}</span>
             </div>
           );
@@ -374,6 +378,9 @@ function AgentExpanded({ agent }: { agent: UsageAgentRow }) {
                     <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
                   </div>
                   <span className="font-mono text-xs w-10 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{compact(m.calls)}</span>
+                  {/* Per-call unit cost on this model — cost/calls, both on the
+                      breakdown. Symmetric with the 按模型 rung's 均/调用 column. */}
+                  <span className="font-mono text-xs w-14 text-right shrink-0" style={{ color: 'var(--color-text-4)' }}>{m.calls > 0 ? `${money(m.totalCost / m.calls)}/次` : '—'}</span>
                   <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(m.totalCost)}</span>
                 </div>
               );
