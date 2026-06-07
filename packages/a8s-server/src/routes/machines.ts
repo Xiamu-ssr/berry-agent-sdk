@@ -266,18 +266,31 @@ export function machineRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition
       middleware: [requireAdminToken(deps)],
       handler: ({ res }) => {
         const now = Date.now();
-        const machines = deps.machines.list().map((m) => operatorMachineSchema.parse({
-          machineId: m.machineId,
-          state: deps.machines.stateOf(m, now),
-          callbackUrl: m.callbackUrl,
-          platform: m.platform,
-          labels: m.labels,
-          mcpServers: m.mcpServers,
-          mcpToolCount: m.mcpTools.length,
-          registeredAt: m.registeredAt,
-          heartbeatAt: m.heartbeatAt,
-          heartbeatExpiresAt: m.heartbeatAt + m.heartbeatTtlMs,
-        }));
+        const machines = deps.machines.list().map((m) => {
+          // Per-server health: a server in the connected list (mcpServers) is
+          // healthy; its tool count comes from the manifest. (A server in the
+          // machine's .mcp.json that failed to connect simply isn't here.)
+          const toolCountByServer = new Map<string, number>();
+          for (const t of m.mcpTools) toolCountByServer.set(t.server, (toolCountByServer.get(t.server) ?? 0) + 1);
+          const mcpServerDetails = m.mcpServers.map((server) => ({
+            server,
+            toolCount: toolCountByServer.get(server) ?? 0,
+            healthy: true,
+          }));
+          return operatorMachineSchema.parse({
+            machineId: m.machineId,
+            state: deps.machines.stateOf(m, now),
+            callbackUrl: m.callbackUrl,
+            platform: m.platform,
+            labels: m.labels,
+            mcpServers: m.mcpServers,
+            mcpToolCount: m.mcpTools.length,
+            mcpServerDetails,
+            registeredAt: m.registeredAt,
+            heartbeatAt: m.heartbeatAt,
+            heartbeatExpiresAt: m.heartbeatAt + m.heartbeatTtlMs,
+          });
+        });
         writeJson(res, 200, operatorMachineListResponseSchema.parse({ machines }));
       },
     },

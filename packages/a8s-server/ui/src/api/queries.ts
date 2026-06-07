@@ -76,6 +76,11 @@ export function useJoinScript() {
 
 // ---- Machines (machine layer) ----
 
+export interface MachineMcpServerInfo {
+  server: string;
+  toolCount: number;
+  healthy: boolean;
+}
 export interface Machine {
   machineId: string;
   state: 'active' | 'withdrawn' | 'expired';
@@ -84,6 +89,7 @@ export interface Machine {
   labels?: Record<string, string>;
   mcpServers: string[];
   mcpToolCount: number;
+  mcpServerDetails: MachineMcpServerInfo[];
   registeredAt: number;
   heartbeatAt: number;
   heartbeatExpiresAt: number;
@@ -108,6 +114,7 @@ export function useMachineJoinScript() {
 
 // ---- Hand recipes (the Hand market) ----
 
+export type HandToolGroup = 'workspace' | 'web';
 export interface HandRecipe {
   id: string;
   name: string;
@@ -116,6 +123,8 @@ export interface HandRecipe {
   machineId: string;
   /** Free-assembly convenience grouping for the market view (e.g. 系统预装). */
   group?: string;
+  /** Common tool families granted besides the machine's always-on exec. */
+  toolGroups: HandToolGroup[];
   /** Subset of the machine's exposed MCP server names this Hand references. */
   mcpServerRefs: string[];
 }

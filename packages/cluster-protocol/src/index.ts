@@ -248,6 +248,17 @@ export const machineExecReplySchema = z.object({
 }).strict();
 export type MachineExecReply = z.infer<typeof machineExecReplySchema>;
 
+/** One MCP server the machine exposes, with a health hint for the wizard. */
+export const machineMcpServerInfoSchema = z.object({
+  /** Server id from the machine's .mcp.json (e.g. "playwright"). */
+  server: z.string().min(1),
+  /** Tools the connector listed from it. >0 ⇒ connected & healthy. */
+  toolCount: z.number().int().nonnegative(),
+  /** True when the connector currently holds a live connection to it. */
+  healthy: z.boolean(),
+}).strict();
+export type MachineMcpServerInfo = z.infer<typeof machineMcpServerInfoSchema>;
+
 /** Operator view of one registered machine. */
 export const operatorMachineSchema = z.object({
   machineId: z.string().min(1),
@@ -258,6 +269,8 @@ export const operatorMachineSchema = z.object({
   mcpServers: z.array(z.string()).default([]),
   /** Count of MCP tools the machine proxies (manifest size). UI hint. */
   mcpToolCount: z.number().int().nonnegative().default(0),
+  /** Per-server breakdown with health — drives the Hand wizard's MCP step. */
+  mcpServerDetails: z.array(machineMcpServerInfoSchema).default([]),
   registeredAt: z.number().int(),
   heartbeatAt: z.number().int(),
   heartbeatExpiresAt: z.number().int(),
@@ -322,43 +335,26 @@ export const machineGetMcpResponseSchema = z.object({
 export type MachineGetMcpResponse = z.infer<typeof machineGetMcpResponseSchema>;
 
 // ============================================================
-// Hand recipes — machine-bound capability bundles (B4 / 甲1)
+// Hand recipes — capability bundles assembled over a machine
 // ============================================================
 //
-// A Hand recipe is one Hand in the market: a group of capabilities (shell
-// exec + a group of MCP servers) bound to ONE machine. The binding is
-// machine-inborn — chosen when the recipe is authored (`machineId`), not at
-// selection time. A market card == one Hand == "this group of capabilities on
-// that machine."
-//
-// Two distinct actions, deliberately decoupled:
-//   - SELECT a Hand onto an agent → grants the machine (merges `machineId`
-//     into the agent's `labels.machines`; the agent gets `machine_<id>_exec`
-//     and reaches the machine's MCP via berry-mcp). Reference only.
-//   - LAND a recipe onto a machine → writes the `.mcp.json` fragment over the
-//     exec broker + runs install + asks the connector to /reload. This is a
-//     separate operator step (Machines / Hand-market "land" button).
-//
-// Secrets never live in a recipe. A recipe references env var *names*
-// (`GITHUB_TOKEN`), and the value is the machine owner's asset, present in
-// the machine's own environment. a8s writes `${GITHUB_TOKEN}` into the
-// landed config — a name, never a value.
-
-// ============================================================
-// Hand recipes — capability bundles that reference a machine's MCP
-// ============================================================
-//
-// A Hand recipe is one Hand in the market: pick an environment (a machine,
-// which provides shell exec + the common tool list) and reference a subset of
-// the MCP servers that machine already exposes. The Hand carries NO MCP config
-// of its own — the machine's `.mcp.json` is the single source of truth for what
-// MCP exists. Many Hands can target the same machine; the basis is free.
+// A Hand recipe is one Hand in the market, assembled as a pipeline:
+//   1. pick an ENVIRONMENT — a machine (provides shell exec).
+//   2. pick TOOL GROUPS — the common-tool families to grant (workspace, web).
+//   3. reference a subset of the machine's exposed MCP servers.
+// The Hand carries NO MCP config — the machine's `.mcp.json` is the single
+// source of truth for what MCP exists (set on the Machines page). Many Hands
+// can target the same machine; the basis is free.
 //
 // Selecting a Hand onto an agent grants that machine (merges `machineId` into
 // the agent's `labels.machines`; the agent gets `machine_<id>_exec` and reaches
-// the machine's MCP via berry-mcp). The MCP a Hand references is provisioned on
-// the machine separately (Machines page → set MCP), because the machine owns
-// its config. There is no "land" step — there is nothing to land.
+// the machine's MCP via berry-mcp). There is no "land" step.
+
+/** Common-tool families a Hand can grant. `exec` (machine shell) is implicit in
+ *  every machine Hand; these are the env-level extras the SDK projects. */
+export const HAND_TOOL_GROUPS = ['workspace', 'web'] as const;
+export const handToolGroupSchema = z.enum(HAND_TOOL_GROUPS);
+export type HandToolGroup = z.infer<typeof handToolGroupSchema>;
 
 export const handRecipeSchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, 'recipe id must be kebab-case'),
@@ -375,10 +371,15 @@ export const handRecipeSchema = z.object({
    */
   group: z.string().min(1).optional(),
   /**
+   * Common tool families this Hand grants (besides the machine's always-on
+   * `exec`). `workspace` = file/shell/search; `web` = fetch/search. Empty = a
+   * pure exec/MCP Hand.
+   */
+  toolGroups: z.array(handToolGroupSchema).default([]),
+  /**
    * Subset of the machine's exposed MCP server names this Hand grasps. These
    * are references — the actual MCP config lives in the machine's `.mcp.json`
-   * (the single source of truth). Empty = an exec-only Hand (shell + common
-   * tools, no MCP).
+   * (the single source of truth). Empty = no MCP for this Hand.
    */
   mcpServerRefs: z.array(z.string().min(1)).default([]),
 }).strict();
