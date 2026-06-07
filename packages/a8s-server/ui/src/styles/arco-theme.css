@@ -1,30 +1,16 @@
 /* ============================================================
    Arco theme — 雪山引擎 / Snow Mountain
    ============================================================
-   Arco's native palette IS the 火山引擎 (Volcano Engine) design language:
-   primary blue #165DFF (--arcoblue-6: 22,93,255), 4px radii. In LIGHT mode we
-   render it stock — no override needed.
+   雪山引擎 mirrors 火山引擎 (Volcano Engine): a LIGHT, clean console — white
+   canvas, pale-gray sidebar, blue (#165DFF) used only as accent. We pin light
+   mode in main.tsx (body[arco-theme='light']) and never follow the OS, so the
+   look is identical everywhere.
 
-   DARK mode is the catch: Arco shifts the whole arcoblue ramp one step lighter
-   for dark backgrounds, so the primary that components read (--arcoblue-6)
-   becomes 60,126,255 — a brighter, cyan-leaning blue that drifts off Volcano.
-   We pin the ramp back to Volcano's canonical (light) values under
-   body[arco-theme='dark'] so the brand blue is identical in both themes. We
-   only pin the brand ramp; all other dark tokens (bg/border/text) stay Arco's.
+   Arco's NATIVE light palette already IS Volcano's: --arcoblue-6 = 22,93,255
+   (#165DFF), 4px radii. So light mode needs no override — Arco renders it
+   correctly out of the box. This file is kept as the single, documented place
+   for any future deliberate token tweak; currently there are none.
 
    The Snow Mountain identity lives where it belongs: the peak logo + the
    snow/ink/berry Tailwind palette used by a few custom bits (EventStream,
    Sparkline). It does not override Arco's component colors. */
-
-body[arco-theme='dark'] {
-  --arcoblue-1: 232, 243, 255;
-  --arcoblue-2: 190, 218, 255;
-  --arcoblue-3: 148, 191, 255;
-  --arcoblue-4: 106, 161, 255;
-  --arcoblue-5: 64, 128, 255;
-  --arcoblue-6: 22, 93, 255;   /* #165DFF — Volcano primary */
-  --arcoblue-7: 14, 66, 210;
-  --arcoblue-8: 7, 44, 166;
-  --arcoblue-9: 3, 26, 121;
-  --arcoblue-10: 0, 13, 77;
-}

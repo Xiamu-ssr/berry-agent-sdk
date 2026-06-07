@@ -7,15 +7,11 @@ import { App } from './App.js';
 import './styles/globals.css';
 import './styles/arco-theme.css';
 
-// Keep Arco and Tailwind dark mode in lockstep with the OS. Tailwind uses
-// darkMode:'media' (auto from prefers-color-scheme); Arco is toggled by a
-// body[arco-theme] attribute. Drive the attribute from the same media query,
-// BEFORE first paint (not in a useEffect) so there's no light→dark flash.
-const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-const applyTheme = (dark: boolean) =>
-  document.body.setAttribute('arco-theme', dark ? 'dark' : 'light');
-applyTheme(prefersDark.matches);
-prefersDark.addEventListener('change', (e) => applyTheme(e.matches));
+// 雪山引擎 follows 火山引擎 (Volcano Engine): a LIGHT, clean console — white
+// canvas, pale-gray sidebar, blue only as accent. We pin light mode (Arco's
+// body[arco-theme='light']) regardless of OS, so the brand identity is the same
+// everywhere and doesn't flip to dark on machines whose OS prefers dark.
+document.body.setAttribute('arco-theme', 'light');
 
 const queryClient = new QueryClient({
   defaultOptions: {

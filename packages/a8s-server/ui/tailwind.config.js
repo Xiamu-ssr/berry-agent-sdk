@@ -3,7 +3,10 @@ import colors from 'tailwindcss/colors';
 
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
-  darkMode: 'media',
+  // 雪山引擎 is a light console (like 火山引擎). We never auto-switch to dark
+  // from the OS. Using class-strategy with no `dark` class ever set means all
+  // `dark:` utilities stay inert — light is the only theme.
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
