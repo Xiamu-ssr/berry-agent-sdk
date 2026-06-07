@@ -52,6 +52,13 @@ export function UsagePage() {
 
   const { totals, byProduct, byModel } = usage.data;
   const empty = agents.length === 0;
+  // Cluster-wide inference count + its blended unit cost. Each call belongs to
+  // exactly one model, so Σ byModel.calls is the cluster total (no double count);
+  // totalCost / calls is the blended $/call the operator pays on average — the
+  // single number that says "is our spend efficient right now". Pure front-end
+  // fold over data already on the wire; no new metric, no protocol change.
+  const clusterCalls = byModel.reduce((acc, m) => acc + m.calls, 0);
+  const blendedPerCall = clusterCalls > 0 ? totals.totalCost / clusterCalls : 0;
 
   return (
     <div className="animate-fade-in">
@@ -67,7 +74,12 @@ export function UsagePage() {
 
       {/* Cluster totals */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="总成本" value={money(totals.totalCost)} accent />
+        <StatCard
+          label="总成本"
+          value={money(totals.totalCost)}
+          accent
+          sub={clusterCalls > 0 ? `均 ${money(blendedPerCall)}/次 · ${compact(clusterCalls)} 次调用` : undefined}
+        />
         <StatCard label="总 Token" value={compact(totals.totalTokens)} />
         <StatCard label="会话数" value={String(totals.sessionCount)} />
         <StatCard label="Agent 数" value={String(totals.agentCount)} />
@@ -247,7 +259,7 @@ export function UsagePage() {
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatCard({ label, value, accent, sub }: { label: string; value: string; accent?: boolean; sub?: string }) {
   return (
     <Card bordered bodyStyle={{ padding: 16 }}>
       <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>{label}</div>
@@ -255,6 +267,9 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
         style={{ color: accent ? 'rgb(var(--arcoblue-6))' : 'var(--color-text-1)' }}>
         {value}
       </div>
+      {sub && (
+        <div className="text-xs mt-1 font-mono" style={{ color: 'var(--color-text-4)' }}>{sub}</div>
+      )}
     </Card>
   );
 }
