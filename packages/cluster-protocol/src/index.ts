@@ -1300,6 +1300,66 @@ export const SSE_SESSION_QUERY_PARAM = 'session' as const;
 
 export const CLUSTER_PROTOCOL_VERSION = 'v1' as const;
 
+// ============================================================
+// Usage / consumption (read-only rollup from each worker's observe.db)
+// ============================================================
+// The observe package already records every inference (tokens + cost) on
+// each worker's private observe.db and rolls it up to session/agent. These
+// schemas carry that agent-level rollup over the wire so a8s can proxy it
+// (per agent) and fan-in aggregate it (per cluster) without holding any
+// usage state itself. Shape mirrors observe's AgentMetrics — declared here
+// rather than imported, so cluster-protocol stays dependency-free.
+
+export const agentUsageToolStatSchema = z.object({
+  name: z.string(),
+  count: z.number().int().nonnegative(),
+}).strict();
+
+export const agentUsageSchema = z.object({
+  agentId: z.string().min(1),
+  sessionCount: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  avgSessionCost: z.number().nonnegative(),
+  topTools: z.array(agentUsageToolStatSchema).default([]),
+  modelUsage: z.record(z.number().int().nonnegative()).default({}),
+}).strip();
+export type AgentUsage = z.infer<typeof agentUsageSchema>;
+
+/** Worker's reply for GET /agents/:id/usage. usage=null → no recorded data. */
+export const agentUsageResponseSchema = z.object({
+  present: z.boolean(),
+  usage: agentUsageSchema.nullable(),
+}).strict();
+export type AgentUsageResponse = z.infer<typeof agentUsageResponseSchema>;
+
+/** a8s operator rollup for GET /operator/usage — cluster totals + per-agent rows. */
+export const operatorUsageAgentRowSchema = agentUsageSchema.extend({
+  /** Owning product (labels.owner), null when operator-created/unowned. */
+  owner: z.string().nullable(),
+  workerId: z.string().nullable(),
+}).strip();
+export type OperatorUsageAgentRow = z.infer<typeof operatorUsageAgentRowSchema>;
+
+export const operatorUsageResponseSchema = z.object({
+  totals: z.object({
+    agentCount: z.number().int().nonnegative(),
+    sessionCount: z.number().int().nonnegative(),
+    totalCost: z.number().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict(),
+  /** Per-product subtotals, aggregated upward from agent rows (no re-recording). */
+  byProduct: z.array(z.object({
+    product: z.string(),
+    agentCount: z.number().int().nonnegative(),
+    sessionCount: z.number().int().nonnegative(),
+    totalCost: z.number().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict()),
+  agents: z.array(operatorUsageAgentRowSchema),
+}).strict();
+export type OperatorUsageResponse = z.infer<typeof operatorUsageResponseSchema>;
+
 export const A8S_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
   workersRegister: `/${CLUSTER_PROTOCOL_VERSION}/workers/register`,
@@ -1345,6 +1405,9 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
+  /** Per-agent consumption rollup (proxied to the owning worker's observe.db). */
+  agentUsage: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage`,
   agentPause: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
   agentInterject: (agentId: string) =>
@@ -1389,6 +1452,8 @@ export const A8S_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials/${encodeURIComponent(product)}`,
   /** Operator audit log query. */
   operatorAudit: `/${CLUSTER_PROTOCOL_VERSION}/operator/audit`,
+  /** Cluster-wide consumption rollup (fan-in over workers' observe.db). */
+  operatorUsage: `/${CLUSTER_PROTOCOL_VERSION}/operator/usage`,
 } as const;
 
 export const WORKER_PATHS = {
@@ -1430,6 +1495,9 @@ export const WORKER_PATHS = {
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
   agentContextSize: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/context-size`,
+  /** Per-agent consumption rollup straight from this worker's observe.db. */
+  agentUsage: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage`,
   agentPause: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
   agentInterject: (agentId: string) =>

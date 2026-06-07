@@ -58,6 +58,8 @@ import {
   agentPauseResponseSchema,
   agentInterjectRequestSchema,
   agentInterjectResponseSchema,
+  agentUsageResponseSchema,
+  type AgentUsage,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
 import type { Worker, WorkerAgentSpec } from '@berry-agent/worker';
@@ -94,6 +96,14 @@ export interface WorkerDaemonOptions<TEntry = unknown> {
   }) => WorkerAgentSpec;
   /** Built-in version string surfaced via /health. */
   version?: string;
+  /**
+   * Resolve an agent's consumption rollup from this worker's observe.db.
+   * Returns the agent-level metrics, or null when nothing's been recorded
+   * for it yet. Optional — when absent, GET /agents/:id/usage replies
+   * `{present:false, usage:null}` so the read path degrades cleanly on
+   * hosts that wire no observer.
+   */
+  usage?: (agentId: string) => AgentUsage | null;
 }
 
 export class WorkerDaemon<TEntry = unknown> {
@@ -229,6 +239,12 @@ export class WorkerDaemon<TEntry = unknown> {
     }
     if (sessionListMatch && req.method === 'POST') {
       return this.handleSessionCreate(decodeURIComponent(sessionListMatch[1]), res);
+    }
+
+    // /agents/:id/usage — per-agent consumption rollup from observe.db
+    const usageMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage(?:\?.*)?$/);
+    if (usageMatch && req.method === 'GET') {
+      return this.handleAgentUsage(decodeURIComponent(usageMatch[1]), res);
     }
 
     // /agents/:id/{run,stop,send,active-session,has}
@@ -562,8 +578,22 @@ export class WorkerDaemon<TEntry = unknown> {
     writeJson(res, 200, sessionListResponseSchema.parse({ sessions }));
   }
 
-  // ----- Session write ops (D-sessions). Delegate to mount.runtime (same
-  // object AgentSession wraps). a8s proxies these verbatim. -----
+  /**
+   * GET /agents/:id/usage — the agent's consumption rollup straight from
+   * this worker's observe.db. Unlike the session routes this does NOT
+   * require the agent to be currently mounted: usage is historical, keyed
+   * by agentId in the observe store, so a stopped agent still reports what
+   * it spent. Degrades to {present:false} when the host wired no resolver.
+   */
+  private handleAgentUsage(agentId: string, res: ServerResponse): void {
+    if (!this.options.usage) {
+      writeJson(res, 200, agentUsageResponseSchema.parse({ present: false, usage: null }));
+      return;
+    }
+    const usage = this.options.usage(agentId);
+    writeJson(res, 200, agentUsageResponseSchema.parse({ present: usage !== null, usage }));
+  }
+
 
   /** Map a full AgentSessionView → the opaque wire shape. */
   private toSessionViewWire(v: {

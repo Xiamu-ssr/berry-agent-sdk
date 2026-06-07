@@ -47,6 +47,7 @@ import { auditRoutes } from './routes/audit.js';
 import { modelsRoutes } from './routes/models.js';
 import { operatorRoutes } from './routes/operator.js';
 import { sessionRoutes } from './routes/sessions.js';
+import { usageRoutes } from './routes/usage.js';
 import { wakeRoutes } from './routes/wakes.js';
 import { workerRoutes } from './routes/workers.js';
 
@@ -208,6 +209,7 @@ export class A8sServer<TEntry = unknown> {
       ...workerRoutes(this.deps),
       ...agentRoutes(this.deps),
       ...sessionRoutes(this.deps),
+      ...usageRoutes(this.deps),
       ...wakeRoutes(this.deps),
       ...operatorRoutes(this.deps),
       ...modelsRoutes(this.deps),

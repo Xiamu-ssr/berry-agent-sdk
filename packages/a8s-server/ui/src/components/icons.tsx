@@ -126,8 +126,15 @@ export function AuditIcon(props: IconProps) {
   );
 }
 
-export function ChevronIcon(props: IconProps) {
+export function UsageIcon(props: IconProps) {
   return (
+    <svg {...base(props)}>
+      <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+    </svg>
+  );
+}
+
+export function ChevronIcon(props: IconProps) {  return (
     <svg {...base({ width: 16, height: 16, ...props })}>
       <path d="m9 18 6-6-6-6" />
     </svg>

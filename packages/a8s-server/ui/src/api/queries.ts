@@ -188,6 +188,39 @@ export function useSetMachineMcp() {
   });
 }
 
+// ---- Usage / consumption (read-only rollup from workers' observe.db) ----
+
+export interface UsageAgentRow {
+  agentId: string;
+  owner: string | null;
+  workerId: string | null;
+  sessionCount: number;
+  totalCost: number;
+  totalTokens: number;
+  avgSessionCost: number;
+  topTools: Array<{ name: string; count: number }>;
+  modelUsage: Record<string, number>;
+}
+export interface UsageProductRow {
+  product: string;
+  agentCount: number;
+  sessionCount: number;
+  totalCost: number;
+  totalTokens: number;
+}
+export interface OperatorUsage {
+  totals: { agentCount: number; sessionCount: number; totalCost: number; totalTokens: number };
+  byProduct: UsageProductRow[];
+  agents: UsageAgentRow[];
+}
+export function useUsage() {
+  return useQuery({
+    queryKey: ['usage'],
+    queryFn: () => api<OperatorUsage>('/v1/operator/usage'),
+    refetchInterval: 10_000,
+  });
+}
+
 // ---- Skill registry (the skill market) ----
 
 export interface RegistrySkill {

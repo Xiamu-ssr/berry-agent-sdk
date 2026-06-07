@@ -2,6 +2,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   createContext,
   useContext,
 } from 'react';
@@ -15,11 +16,23 @@ type Fetcher = typeof fetch;
  */
 export const ObserveFetcherContext = createContext<Fetcher | null>(null);
 
+/**
+ * Returns a STABLE fetcher reference. The previous implementation returned
+ * `window.fetch.bind(window)` fresh on every render; because the fetcher fed
+ * `refresh`'s `useCallback` deps (and `refresh` fed a `useEffect`), every
+ * render produced a new function → new callback → effect re-run → setState →
+ * re-render, i.e. an infinite "Maximum update depth exceeded" loop whenever
+ * the network answered fast enough. Memoising the fallback bind fixes it.
+ */
 function useFetcher(): Fetcher {
   const fromCtx = useContext(ObserveFetcherContext);
+  const fallbackRef = useRef<Fetcher | null>(null);
   if (fromCtx) return fromCtx;
-  if (typeof window !== 'undefined') return window.fetch.bind(window);
-  return fetch;
+  if (!fallbackRef.current) {
+    fallbackRef.current =
+      typeof window !== 'undefined' ? window.fetch.bind(window) : fetch;
+  }
+  return fallbackRef.current;
 }
 
 /** Generic fetch hook for observe API endpoints */

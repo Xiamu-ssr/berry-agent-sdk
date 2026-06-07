@@ -27,7 +27,7 @@ import {
 } from '@berry-agent/cluster-protocol';
 import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
-import { createObserver } from '@berry-agent/observe';
+import { createObserver, MetricsCalculator } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
 import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withAdminOpsEnv, withMachineHostTools } from './index.js';
 import { parseBuiltinHands, selectBuiltinHands } from './builtin-hands.js';
@@ -297,10 +297,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   // ---- Build the WorkerEnvironment ----
+  const observer = createObserver({ dbPath: observerDbPath });
+  // MetricsCalculator exposes the agent-level rollup (agentMetrics) the
+  // Analyzer doesn't surface directly; it reads the same observe.db.
+  const metrics = new MetricsCalculator(observer.analyzer, observer.db);
   const env: WorkerEnvironment = {
     registry,
     credentials: new DefaultCredentialStore({ filePath: credentialsPath }),
-    observer: createObserver({ dbPath: observerDbPath }),
+    observer,
   };
 
   // ---- Build the Worker ----
@@ -351,6 +355,9 @@ async function main(argv: string[]): Promise<number> {
     bindHost: config.bindHost,
     version: '0.5.0-alpha.1',
     resolveSpec,
+    // Consumption read path: serve the agent-level rollup observe.db already
+    // keeps. agentMetrics returns null when nothing's recorded for the agent.
+    usage: (agentId) => metrics.agentMetrics(agentId),
   });
 
   const info = await daemon.start();
