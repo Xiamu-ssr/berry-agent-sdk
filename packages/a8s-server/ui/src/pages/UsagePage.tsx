@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Card, Input, Table, Tag, Typography } from '@arco-design/web-react';
-import { useUsage, type UsageAgentRow } from '../api/queries.js';
+import { useUsage, type UsageAgentRow, type UsageProductRow } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 
 // ============================================================
@@ -50,7 +50,7 @@ export function UsagePage() {
   if (usage.error) return <ErrorBanner error={usage.error} />;
   if (!usage.data) return <Spinner />;
 
-  const { totals, byProduct } = usage.data;
+  const { totals, byProduct, byModel } = usage.data;
   const empty = agents.length === 0;
 
   return (
@@ -86,6 +86,15 @@ export function UsagePage() {
                 pagination={false}
                 size="small"
                 data={byProduct}
+                expandedRowRender={(row: UsageProductRow) => (
+                  <ProductAgents product={row.product} agents={agents} productCost={row.totalCost} />
+                )}
+                expandProps={{
+                  // Drill-down only where it adds something: a product with a
+                  // single agent has nothing the 按 Agent table below doesn't
+                  // already show, so it gets no chevron.
+                  rowExpandable: (row: UsageProductRow) => row.agentCount > 1,
+                }}
                 columns={[
                   {
                     title: '产品', dataIndex: 'product',
@@ -110,6 +119,41 @@ export function UsagePage() {
               />
             </Card>
           </section>
+
+          {/* Per-model cluster rollup — fan-in over every agent's modelBreakdown.
+              Same "向上聚合,不重复记录" rule: each agent owns its per-model
+              split; a8s sums it across the cluster. Tells the operator which
+              models the spend actually went to, independent of who ran them. */}
+          {byModel.length > 0 && (
+            <section className="mb-6">
+              <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text-2)' }}>按模型</h2>
+              <Card bordered bodyStyle={{ padding: 0 }}>
+                <Table
+                  rowKey="model"
+                  pagination={false}
+                  size="small"
+                  data={byModel}
+                  columns={[
+                    {
+                      title: '模型', dataIndex: 'model',
+                      render: (v: string) => <code className="font-mono text-xs">{shortModel(v)}</code>,
+                    },
+                    { title: 'Agent', dataIndex: 'agentCount', align: 'right' as const, render: (v: number) => <Num v={v} /> },
+                    { title: '调用', dataIndex: 'calls', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
+                    { title: 'Token', dataIndex: 'totalTokens', align: 'right' as const, render: (v: number) => <Num v={compact(v)} /> },
+                    {
+                      title: '占比', dataIndex: 'totalCost', align: 'right' as const, width: 132,
+                      render: (v: number) => <CostShare value={v} total={totals.totalCost} />,
+                    },
+                    {
+                      title: '成本', dataIndex: 'totalCost', align: 'right' as const,
+                      render: (v: number) => <span className="font-mono text-sm" style={{ color: 'rgb(var(--arcoblue-6))' }}>{money(v)}</span>,
+                    },
+                  ]}
+                />
+              </Card>
+            </section>
+          )}
 
           {/* Per-agent detail */}
           <section>
@@ -193,6 +237,46 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
 
 function Num({ v }: { v: number | string }) {
   return <span className="font-mono text-sm" style={{ color: 'var(--color-text-2)' }}>{v}</span>;
+}
+
+// Drill-down for a product row: the agents that roll up into this product,
+// ranked by their share of the product's cost. Pure re-slice of the agents
+// array we already have — owner === product (null owner ⇒ "(unowned)"); no
+// new metric, just the product→agent structure made navigable.
+function ProductAgents({
+  product,
+  agents,
+  productCost,
+}: {
+  product: string;
+  agents: UsageAgentRow[];
+  productCost: number;
+}) {
+  const mine = agents
+    .filter((a) => (a.owner ?? '(unowned)') === product)
+    .sort((x, y) => y.totalCost - x.totalCost);
+  if (mine.length === 0) {
+    return <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>没有 Agent 明细</span>;
+  }
+  return (
+    <div className="py-1 pl-1 pr-3">
+      <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>该产品下的 Agent(按成本)</div>
+      <div className="flex flex-col gap-1.5 max-w-2xl">
+        {mine.map((a) => {
+          const pct = productCost > 0 ? (a.totalCost / productCost) * 100 : 0;
+          return (
+            <div key={a.agentId} className="flex items-center gap-2">
+              <code className="font-mono text-xs w-44 shrink-0 truncate" style={{ color: 'var(--color-text-2)' }}>{a.agentId}</code>
+              <div className="flex-1 h-2.5 rounded-sm overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
+                <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: 'rgb(var(--arcoblue-5))' }} />
+              </div>
+              <span className="font-mono text-xs w-12 text-right shrink-0" style={{ color: 'var(--color-text-3)' }}>{money(a.totalCost)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // Expanded-row content for the per-agent table: the tool-call distribution
