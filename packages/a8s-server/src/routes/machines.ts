@@ -314,11 +314,15 @@ npm install -g @berry-agent/machine-connector
 echo "[berry-join] starting connector (machine '$MACHINE_ID' on port $PORT)..."
 echo "This machine will register with a8s and accept commands the cluster"
 echo "sends — install it only on hosts you intend an agent to operate."
+# Declare an .mcp.json path up-front (created on first remote 'set MCP') so the
+# operator can author this machine's MCP capability from a8s — the machine is
+# the single source of truth for MCP, this is where it lives.
 berry-machine start \\
   --a8s "$A8S_URL" \\
   --admin-token "$ADMIN_TOKEN" \\
   --machine-id "$MACHINE_ID" \\
-  --port "$PORT"
+  --port "$PORT" \\
+  --mcp-config "$HOME/.berry/machine.mcp.json"
 `;
         writeJson(res, 200, operatorMachineJoinScriptResponseSchema.parse({
           script,
