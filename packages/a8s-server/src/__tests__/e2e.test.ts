@@ -32,6 +32,8 @@ import {
   sessionTodosResponseSchema,
   sessionAppendEventResponseSchema,
   SSE_LAST_EVENT_ID_HEADER,
+  agentUsageResponseSchema,
+  operatorUsageResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
 import {
@@ -40,6 +42,7 @@ import {
 } from '@berry-agent/runtime';
 import { Worker } from '@berry-agent/worker';
 import { makeTestWorkerEnv } from '@berry-agent/worker/test-utils';
+import { MetricsCalculator } from '@berry-agent/observe';
 import {
   WorkerDaemon,
   WorkerRegistrationClient,
@@ -91,7 +94,11 @@ async function startTestWorker(opts: {
 }): Promise<{ worker: Worker<TestEntry>; stop: () => Promise<void> }> {
   const workerId = opts.workerId ?? 'test-worker';
   const agentsRoot = join(opts.root, 'agents');
-  const worker = new Worker<TestEntry>({ env: makeTestWorkerEnv(opts.root) });
+  const env = makeTestWorkerEnv(opts.root);
+  const worker = new Worker<TestEntry>({ env });
+  // Consumption read path: serve the agent rollup from this worker's observe
+  // store, exactly like the CLI wires it.
+  const metrics = new MetricsCalculator(env.observer.analyzer, env.observer.db);
   const base = (wire: import('@berry-agent/worker-daemon').WireResolveInput) => {
     const workspace = wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace);
     return {
@@ -109,7 +116,10 @@ async function startTestWorker(opts: {
   resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
 
   const wPort = await pickPort();
-  const daemon = new WorkerDaemon<TestEntry>({ worker, workerId, port: wPort, bindHost: '127.0.0.1', resolveSpec });
+  const daemon = new WorkerDaemon<TestEntry>({
+    worker, workerId, port: wPort, bindHost: '127.0.0.1', resolveSpec,
+    usage: (agentId) => metrics.agentMetrics(agentId),
+  });
   const dInfo = await daemon.start();
   const reg = new WorkerRegistrationClient({
     a8sUrl: opts.a8sUrl,
@@ -1877,6 +1887,58 @@ describe('a8s-server + worker-daemon E2E', () => {
     // An unknown token is rejected outright.
     const bad = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, { headers: { authorization: 'Bearer bp_nope' } });
     expect(bad.status).toBe(401);
+
+    await w.stop();
+    await a8s.stop();
+  });
+
+  it('usage read path: per-agent usage proxies to the owning worker; operator rollup fans in + aggregates by product', async () => {
+    const orchestrator = new RuntimeOrchestrator({ store: new MemoryRuntimeOrchestrationStore() });
+    const a8sPort = await pickPort();
+    const a8s = new A8sServer<TestEntry>({ port: a8sPort, controlPlane: { orchestrator }, adminToken: 'op-secret' });
+    const a8sInfo = await a8s.start();
+    const root = mkdtempSync(join(tmpdir(), 'wd-usage-'));
+    const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'op-secret', workerId: 'w-usage', root });
+
+    // Product A creates an agent (owner stamped from its scope).
+    const tokenA = a8s.products.issue('prod-a').token;
+    const createA = await fetch(`${a8sInfo.url}${A8S_PATHS.agents}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tokenA}`, 'content-type': 'application/json' },
+      body: JSON.stringify(createAgentRequestSchema.parse({
+        spec: { agentId: 'a-usage', workspace: 'a-usage', model: 'tier:strong', ensureDefaultMcpConfig: false },
+        entry: { tag: 'A' },
+      })),
+    });
+    expect(createA.status).toBe(200);
+
+    // Per-agent usage proxies to the owning worker. No real inference has run,
+    // so observe.db has nothing recorded → present:false, usage:null. The
+    // point is the a8s → worker → observe wiring round-trips and validates.
+    const perAgent = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsage('a-usage')}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(perAgent.status).toBe(200);
+    const perAgentBody = agentUsageResponseSchema.parse(await perAgent.json());
+    expect(perAgentBody.present).toBe(false);
+    expect(perAgentBody.usage).toBeNull();
+
+    // Operator rollup fans in over all agents and aggregates upward. With no
+    // recorded usage the agent rows are empty but the envelope is well-formed.
+    const op = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorUsage}`, {
+      headers: { authorization: 'Bearer op-secret' },
+    });
+    expect(op.status).toBe(200);
+    const opBody = operatorUsageResponseSchema.parse(await op.json());
+    expect(opBody.totals.totalCost).toBe(0);
+    expect(Array.isArray(opBody.agents)).toBe(true);
+    expect(Array.isArray(opBody.byProduct)).toBe(true);
+
+    // A product token cannot reach the operator rollup.
+    const opAsProduct = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorUsage}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(opAsProduct.status).toBe(401);
 
     await w.stop();
     await a8s.stop();

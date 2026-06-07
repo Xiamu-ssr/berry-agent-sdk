@@ -58,7 +58,7 @@ const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; ic
     label: '平台',
     items: [
       { key: 'models', label: 'Models', icon: ModelIcon },
-      { key: 'usage', label: '消耗', icon: GridIcon },
+      { key: 'usage', label: '消耗', icon: UsageIcon },
       { key: 'credentials', label: 'Credentials', icon: KeyIcon },
       { key: 'audit', label: 'Audit log', icon: AuditIcon },
     ],

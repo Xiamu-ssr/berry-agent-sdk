@@ -76,7 +76,7 @@ export function UsagePage() {
                     title: '成本', dataIndex: 'totalCost', align: 'right' as const,
                     render: (v: number) => <span className="font-mono text-sm" style={{ color: 'rgb(var(--arcoblue-6))' }}>{money(v)}</span>,
                   },
-                ] as Array<Record<string, unknown>>}
+                ]}
               />
             </Card>
           </section>
@@ -122,7 +122,7 @@ export function UsagePage() {
                     title: '成本', dataIndex: 'totalCost', align: 'right' as const,
                     render: (v: number) => <span className="font-mono text-sm" style={{ color: 'rgb(var(--arcoblue-6))' }}>{money(v)}</span>,
                   },
-                ] as Array<Record<string, unknown>>}
+                ]}
               />
             </Card>
           </section>
@@ -152,6 +152,3 @@ function Num({ v }: { v: number | string }) {
 function shortModel(model: string): string {
   return model.replace(/^.*\//, '').replace(/-\d{8}$/, '');
 }
-
-// Avoid "declared but never used" if UsageProductRow isn't referenced as a value.
-void (null as unknown as UsageProductRow);
