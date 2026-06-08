@@ -10,13 +10,22 @@
 // most common case) so existing configs keep working.
 
 import type { TierId } from './types.js';
-import { TIER_IDS } from './types.js';
 
 export type ModelRef =
   | { kind: 'tier'; tier: TierId }
   | { kind: 'model'; modelId: string };
 
-/** Parse a model reference string into a structured ModelRef. */
+/**
+ * Parse a model reference string into a structured ModelRef.
+ *
+ * `tier:X` is parsed *syntactically* — any non-empty tier name is accepted.
+ * The tier vocabulary is operator data (the models template defines which
+ * tiers exist), NOT a hardcoded enum: validation belongs to the resolver,
+ * which checks `tier:X` against the live registry and throws
+ * `tier_unconfigured` with a precise message. Gating here against a fixed
+ * list would reject operator-defined tiers (e.g. `cheap`) that the template
+ * and UI legitimately offer.
+ */
 export function parseModelRef(spec: string): ModelRef {
   const trimmed = spec.trim();
   if (!trimmed) {
@@ -25,9 +34,7 @@ export function parseModelRef(spec: string): ModelRef {
 
   if (trimmed.startsWith('tier:')) {
     const tier = trimmed.slice('tier:'.length).trim();
-    if (!isTierId(tier)) {
-      throw new Error(`Unknown tier "${tier}". Known tiers: ${TIER_IDS.join(', ')}`);
-    }
+    if (!tier) throw new Error('Empty tier name after "tier:"');
     return { kind: 'tier', tier };
   }
 
@@ -43,8 +50,4 @@ export function parseModelRef(spec: string): ModelRef {
 
   // Bare string → treat as model id (Layer 2).
   return { kind: 'model', modelId: trimmed };
-}
-
-function isTierId(value: string): value is TierId {
-  return (TIER_IDS as readonly string[]).includes(value);
 }

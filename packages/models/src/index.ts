@@ -12,7 +12,6 @@ export type {
   TierConfig,
   ModelsRegistry,
 } from './types.js';
-export { TIER_IDS } from './types.js';
 
 // Presets (Layer 1 catalog)
 export {

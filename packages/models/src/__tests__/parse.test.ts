@@ -8,8 +8,17 @@ describe('parseModelRef', () => {
     expect(parseModelRef('tier:fast')).toEqual({ kind: 'tier', tier: 'fast' });
   });
 
-  it('rejects unknown tiers', () => {
-    expect(() => parseModelRef('tier:legendary')).toThrow(/Unknown tier/);
+  it('parses operator-defined tiers syntactically (vocabulary is template data, not a fixed enum)', () => {
+    // The template/UI let operators define tiers like `cheap`; parse must not
+    // gate against a hardcoded list. Whether the tier is *configured* is the
+    // resolver's job (it checks the registry), not the parser's.
+    expect(parseModelRef('tier:cheap')).toEqual({ kind: 'tier', tier: 'cheap' });
+    expect(parseModelRef('tier:legendary')).toEqual({ kind: 'tier', tier: 'legendary' });
+  });
+
+  it('rejects an empty tier name', () => {
+    expect(() => parseModelRef('tier:')).toThrow(/Empty tier name/);
+    expect(() => parseModelRef('tier:   ')).toThrow(/Empty tier name/);
   });
 
   it('parses model:X forms', () => {

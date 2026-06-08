@@ -210,4 +210,15 @@ describe('createTierResolver', () => {
     reg.tiers.strong = 'not-a-real-model';
     expect(() => createTierResolver('strong', reg)).toThrow(/does not exist/);
   });
+
+  it('resolves an operator-defined tier name (e.g. cheap), not just the legacy enum', () => {
+    // Regression: parse.ts used to gate tier:X against a hardcoded
+    // ['strong','balanced','fast'] list, so a `cheap` tier the template/UI
+    // let operators configure threw at parse time. Tiers are template data —
+    // any configured tier must resolve through to its model.
+    const reg = mkRegistry();
+    reg.tiers.cheap = 'single-provider';
+    const resolver = createTierResolver('cheap', reg);
+    expect(resolver.resolve().apiKey).toBe('sk-corp');
+  });
 });

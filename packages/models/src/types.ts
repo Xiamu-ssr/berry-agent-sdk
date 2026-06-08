@@ -16,13 +16,16 @@ import type { ProviderType } from '@berry-agent/core';
 // ──────────────────────────────────────────────
 
 /**
- * Internal tier identifier used by code / APIs / LLM-facing text.
- * Keep these short, English, and semantic — the UI layer picks its
- * own display label ("传说 · Strong" etc.).
+ * A tier identifier — a short, semantic alias agents request as `tier:X`.
+ *
+ * This is an OPEN vocabulary, not a fixed enum: the operator's models
+ * template defines which tiers exist (`strong`, `fast`, `cheap`, …) and the
+ * registry's `tiers` map is the single source of truth. Code that needs to
+ * know "is this tier configured?" checks `registry.tiers[id]`, never a
+ * hardcoded list. The alias is `string` to document intent while staying
+ * faithful to the template-driven model.
  */
-export type TierId = 'strong' | 'balanced' | 'fast';
-
-export const TIER_IDS: readonly TierId[] = ['strong', 'balanced', 'fast'] as const;
+export type TierId = string;
 
 // ──────────────────────────────────────────────
 // Layer 1 — Provider Instance + Preset
