@@ -268,6 +268,7 @@ async function handleCreateAgent<TEntry>(
     workspace: parsed.spec.workspace,
     projectRoot: parsed.spec.projectRoot,
     model: parsed.spec.model,
+    classifierModel: parsed.spec.classifierModel,
     reasoningEffort: parsed.spec.reasoningEffort,
     toolDenylist: parsed.spec.toolDenylist,
     ensureDefaultMcpConfig: parsed.spec.ensureDefaultMcpConfig,

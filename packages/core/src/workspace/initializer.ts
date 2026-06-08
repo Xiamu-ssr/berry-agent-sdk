@@ -50,6 +50,11 @@ export interface AgentMetadata {
    * NOT in agent.json.
    */
   model?: string;
+  /**
+   * Model reference for the auto-approval safety classifier. Distinct from the
+   * main `model`. `setClassifierModel()` writes this. Absent → SDK default.
+   */
+  classifierModel?: string;
   /** Reasoning effort level. `setReasoningEffort()` writes this. */
   reasoningEffort?: ReasoningEffort;
   /** Compaction tuning. `switchCompaction()` (if ever added) rewrites this. */
@@ -76,6 +81,8 @@ export interface AgentMetadata {
 export interface InitWorkspaceSeed {
   /** Model reference string (e.g. "tier:strong") written on first init only. */
   model?: string;
+  /** Classifier model reference written on first init only. */
+  classifierModel?: string;
   /** Reasoning effort for the initial model. */
   reasoningEffort?: ReasoningEffort;
   compaction?: CompactionConfig;
@@ -101,6 +108,7 @@ export const zAgentMetadata = z.object({
   name: z.string().min(1),
   createdAt: z.string().min(1),
   model: z.string().min(1).optional(),
+  classifierModel: z.string().min(1).optional(),
   reasoningEffort: zReasoningEffort.optional(),
   compaction: z.object({
     threshold: z.number().optional(),
@@ -157,6 +165,7 @@ export function initWorkspaceSync(root: string, seed?: InitWorkspaceSeed): Agent
     name: basename(root),
     createdAt: new Date().toISOString(),
     ...(seed?.model && { model: seed.model }),
+    ...(seed?.classifierModel && { classifierModel: seed.classifierModel }),
     ...(seed?.reasoningEffort && { reasoningEffort: seed.reasoningEffort }),
     ...(seed?.compaction && { compaction: seed.compaction }),
     ...(seed?.skills && { skills: seed.skills }),

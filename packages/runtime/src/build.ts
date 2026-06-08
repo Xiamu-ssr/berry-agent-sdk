@@ -84,6 +84,10 @@ function assembleManagedRuntime(
     config: {
       provider: buildProviderInput(options, options.model),
       model: options.model,
+      // Seed the classifier model into agent.json so a restart rehydrates it
+      // (mirrors `model`). The runtime classifier itself is still built from
+      // safety.classifier below; this only makes the choice durable.
+      classifierModel: options.safety?.classifier?.model,
       reasoningEffort: options.reasoningEffort,
       promptPack: options.promptPack,
       promptPackDir: options.promptPackDir,

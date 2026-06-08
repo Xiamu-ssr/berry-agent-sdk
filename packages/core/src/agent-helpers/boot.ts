@@ -71,6 +71,7 @@ export function bootAgent(config: AgentConfig): AgentBootState {
 
   const metadata = initWorkspaceSync(home.root, {
     model: config.model,
+    classifierModel: config.classifierModel,
     reasoningEffort: config.reasoningEffort,
     compaction: config.compaction,
     skills: config.skillDirs

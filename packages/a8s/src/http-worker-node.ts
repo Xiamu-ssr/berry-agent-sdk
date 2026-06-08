@@ -92,6 +92,7 @@ export class HttpWorkerNode<TEntry = unknown> implements WorkerNode<TEntry> {
       workspace: spec.workspace,
       projectRoot: spec.projectRoot,
       model: spec.model,
+      classifierModel: spec.classifierModel,
       reasoningEffort: spec.reasoningEffort,
       toolDenylist: spec.toolDenylist,
       ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,

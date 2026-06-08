@@ -24,6 +24,12 @@ export interface AgentConfig {
    * subsequent launches the on-disk `model` field is authoritative.
    */
   model?: string;
+  /**
+   * Model reference for the auto-approval safety classifier, seeded into
+   * agent.json on first launch. On subsequent launches the on-disk
+   * `classifierModel` field is authoritative. Distinct from the main `model`.
+   */
+  classifierModel?: string;
   /** Resolve model refs from agent.json / switchModel into ProviderInput. */
   modelResolver?: ModelRefResolver;
   /** Unified reasoning effort level injected into provider config. */

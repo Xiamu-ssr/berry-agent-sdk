@@ -331,6 +331,9 @@ async function main(argv: string[]): Promise<number> {
       projectRoot: wire.projectRoot,
       model: wire.model,
       ensureDefaultMcpConfig: wire.ensureDefaultMcpConfig,
+      ...(wire.classifierModel
+        ? { safety: { classifier: { model: wire.classifierModel } } }
+        : {}),
       ...(builtinHands.workspace === false ? { workspaceTools: false } : {}),
       ...(builtinHands.web === false ? { webTools: false } : {}),
     };
@@ -491,6 +494,7 @@ async function loadAgentSpecFromDisk(agentId: string, agentsRoot: string): Promi
   const meta = JSON.parse(raw) as {
     id?: string;
     model?: string;
+    classifierModel?: string;
     reasoningEffort?: WorkerAgentSpec['reasoningEffort'];
     hands?: { builtin?: string[] };
   };
@@ -507,6 +511,9 @@ async function loadAgentSpecFromDisk(agentId: string, agentsRoot: string): Promi
     home,
     model: meta.model,
     ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
+    ...(meta.classifierModel
+      ? { safety: { classifier: { model: meta.classifierModel } } }
+      : {}),
     ensureDefaultMcpConfig: false,
     ...(builtinHands.workspace === false ? { workspaceTools: false } : {}),
     ...(builtinHands.web === false ? { webTools: false } : {}),

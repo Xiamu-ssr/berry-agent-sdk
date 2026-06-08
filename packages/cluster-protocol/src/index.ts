@@ -410,6 +410,9 @@ export const wireAgentSpecSchema = z.object({
   workspace: z.string().min(1),
   projectRoot: z.string().optional(),
   model: z.string().min(1),
+  /** Model used by the auto-approval safety classifier (defaults to the SDK
+   *  default when omitted). Distinct from the main `model`. */
+  classifierModel: z.string().min(1).optional(),
   reasoningEffort: z.string().optional(),
   toolDenylist: z.array(z.string()).optional(),
   ensureDefaultMcpConfig: z.boolean().optional(),

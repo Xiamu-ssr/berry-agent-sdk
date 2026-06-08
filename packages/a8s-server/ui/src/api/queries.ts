@@ -448,6 +448,8 @@ export function useDeleteAgent() {
 export interface CreateAgentInput {
   agentId: string;
   model: string;
+  /** Auto-approval safety classifier model (optional; SDK default when omitted). */
+  classifierModel?: string;
   workspace?: string;
   preferredMachine?: string;
   labels?: Record<string, string>;
@@ -468,6 +470,7 @@ export function useCreateAgent() {
             agentId: input.agentId,
             workspace: input.workspace ?? input.agentId,
             model: input.model,
+            ...(input.classifierModel ? { classifierModel: input.classifierModel } : {}),
             ensureDefaultMcpConfig: false,
             labels: input.labels,
           },

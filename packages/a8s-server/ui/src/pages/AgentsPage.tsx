@@ -152,6 +152,7 @@ function CreateAgentModal({
 
   const [agentId, setAgentId] = useState('');
   const [model, setModel] = useState('');
+  const [classifierModel, setClassifierModel] = useState<string | null>(null);
   const [preferredMachine, setPreferredMachine] = useState('');
   const [selectedHands, setSelectedHands] = useState<string[]>([]);
   const [grantedMachines, setGrantedMachines] = useState<string[]>([]);
@@ -188,6 +189,7 @@ function CreateAgentModal({
       {
         agentId: agentId.trim(),
         model: model.trim(),
+        ...(classifierModel ? { classifierModel } : {}),
         preferredMachine: preferredMachine.trim() || undefined,
         labels: effectiveMachines.length > 0 ? { machines: effectiveMachines.join(',') } : undefined,
       },
@@ -241,6 +243,17 @@ function CreateAgentModal({
               onChange={(v) => setModel(v ?? '')}
               title="选择模型"
               placeholder="点击选择模型 / 档位…"
+            />
+          </Form.Item>
+
+          <Form.Item label="审批模型" extra="自动审批(安全分类器)用的模型。留空 = SDK 默认。">
+            <EntityPickerField
+              config={modelPickerConfig}
+              value={classifierModel}
+              onChange={setClassifierModel}
+              title="选择审批模型"
+              placeholder="点击选择(可留空用默认)…"
+              clearable
             />
           </Form.Item>
 

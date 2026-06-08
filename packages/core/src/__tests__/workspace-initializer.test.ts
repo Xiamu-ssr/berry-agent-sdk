@@ -57,6 +57,19 @@ describe('initWorkspaceSync — first-time init', () => {
     const reloaded = loadAgentConfigSync(root);
     expect(reloaded.hands?.builtin).toEqual(['workspace']);
   });
+
+  it('seeds the classifier model into agent.json so a restart rehydrates it', () => {
+    const root = freshDir();
+    const meta = initWorkspaceSync(root, {
+      model: 'tier:strong',
+      classifierModel: 'tier:cheap',
+    });
+    expect(meta.classifierModel).toBe('tier:cheap');
+
+    // Survives a reload — the daemon reads this back into safety.classifier.model.
+    const reloaded = loadAgentConfigSync(root);
+    expect(reloaded.classifierModel).toBe('tier:cheap');
+  });
 });
 
 describe('initWorkspaceSync — on-disk authority is preserved', () => {

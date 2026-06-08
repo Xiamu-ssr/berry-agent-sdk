@@ -36,6 +36,8 @@ export interface WireWorkerAgentSpec {
   workspace: string;
   projectRoot?: string;
   model: string;
+  /** Classifier (auto-approval) model. Distinct from the main `model`. */
+  classifierModel?: string;
   reasoningEffort?: string;
   toolDenylist?: string[];
   ensureDefaultMcpConfig?: boolean;
@@ -150,6 +152,9 @@ export class InProcessWorkerNode<TEntry = unknown> implements WorkerNode<TEntry>
           reasoningEffort: spec.reasoningEffort as WorkerAgentSpec['reasoningEffort'],
           toolDenylist: spec.toolDenylist,
           ensureDefaultMcpConfig: spec.ensureDefaultMcpConfig,
+          ...(spec.classifierModel
+            ? { safety: { classifier: { model: spec.classifierModel } } }
+            : {}),
         };
     if (this.worker.supervisor()) {
       await this.worker.runAgent(agentId, entry, fullSpec, hooks);

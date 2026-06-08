@@ -96,6 +96,7 @@ export interface WorkerDaemonOptions<TEntry = unknown> {
     workspace: string;
     projectRoot?: string;
     model: string;
+    classifierModel?: string;
     reasoningEffort?: string;
     toolDenylist?: string[];
     ensureDefaultMcpConfig?: boolean;
@@ -367,6 +368,7 @@ export class WorkerDaemon<TEntry = unknown> {
       workspace: parsed.spec.workspace,
       projectRoot: parsed.spec.projectRoot,
       model: parsed.spec.model,
+      classifierModel: parsed.spec.classifierModel,
       reasoningEffort: parsed.spec.reasoningEffort,
       toolDenylist: parsed.spec.toolDenylist,
       ensureDefaultMcpConfig: parsed.spec.ensureDefaultMcpConfig,
