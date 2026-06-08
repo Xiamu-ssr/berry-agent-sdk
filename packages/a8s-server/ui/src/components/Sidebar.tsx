@@ -1,7 +1,7 @@
 import { Layout, Menu, Button } from '@arco-design/web-react';
 import {
   PeakMark, GridIcon, AgentIcon, ChatIcon, WorkerIcon, MachineIcon,
-  LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon, HandIcon, SkillIcon, UsageIcon,
+  LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon, HandIcon, SkillIcon, UsageIcon, LogIcon,
 } from './icons.js';
 
 export type View =
@@ -16,6 +16,7 @@ export type View =
   | 'wakes'
   | 'models'
   | 'usage'
+  | 'logs'
   | 'credentials'
   | 'audit';
 
@@ -55,12 +56,18 @@ const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; ic
     items: [{ key: 'wakes', label: 'Wake queue', icon: ClockIcon }],
   },
   {
+    label: '可观测',
+    items: [
+      { key: 'logs', label: '日志', icon: LogIcon },
+      { key: 'usage', label: '消耗', icon: UsageIcon },
+      { key: 'audit', label: 'Audit log', icon: AuditIcon },
+    ],
+  },
+  {
     label: '平台',
     items: [
       { key: 'models', label: 'Models', icon: ModelIcon },
-      { key: 'usage', label: '消耗', icon: UsageIcon },
       { key: 'credentials', label: 'Credentials', icon: KeyIcon },
-      { key: 'audit', label: 'Audit log', icon: AuditIcon },
     ],
   },
 ];

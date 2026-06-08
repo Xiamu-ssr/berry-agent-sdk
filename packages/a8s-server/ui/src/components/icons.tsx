@@ -134,6 +134,17 @@ export function UsageIcon(props: IconProps) {
   );
 }
 
+export function LogIcon(props: IconProps) {
+  // Layered records magnified — a structured log inspected down to one entry.
+  return (
+    <svg {...base(props)}>
+      <path d="M4 6h10M4 10h7M4 14h5" />
+      <circle cx="16" cy="15" r="4" />
+      <path d="m19 18 2.5 2.5" />
+    </svg>
+  );
+}
+
 export function ChevronIcon(props: IconProps) {  return (
     <svg {...base({ width: 16, height: 16, ...props })}>
       <path d="m9 18 6-6-6-6" />

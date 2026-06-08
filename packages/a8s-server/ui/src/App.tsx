@@ -16,6 +16,7 @@ import { AdminChatPage } from './pages/AdminChatPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { CredentialsPage } from './pages/CredentialsPage.js';
 import { UsagePage } from './pages/UsagePage.js';
+import { LogsPage } from './pages/LogsPage.js';
 import { AuditPage } from './pages/AuditPage.js';
 
 export function App() {
@@ -53,6 +54,7 @@ export function App() {
             {view === 'wakes' && <WakesPage />}
             {view === 'models' && <SettingsPage />}
             {view === 'usage' && <UsagePage />}
+            {view === 'logs' && <LogsPage />}
             {view === 'credentials' && <CredentialsPage />}
             {view === 'audit' && <AuditPage />}
           </div>

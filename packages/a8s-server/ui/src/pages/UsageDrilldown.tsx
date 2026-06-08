@@ -35,21 +35,28 @@ type Level =
   | { kind: 'inferences'; sessionId: string; turnId: string }
   | { kind: 'inference'; sessionId: string; turnId: string; inferenceId: string };
 
-/** The drill-down modal, opened from a per-agent row on the 消耗 page. */
-export function UsageDrilldown({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+/**
+ * The drill body — breadcrumb + the four navigable rungs (session → engine
+ * loop → inference → full inference). Rendered both inside the modal (from the
+ * 消耗 page) and inline on the first-class 日志 page. The atom is one inference,
+ * shown in full; everything above it is a rollup. All data already recorded by
+ * observe — this only surfaces it.
+ */
+export function DrilldownBody({ agentId }: { agentId: string }) {
   const [stack, setStack] = useState<Level[]>([{ kind: 'sessions' }]);
   const level = stack[stack.length - 1];
   const push = (l: Level) => setStack((s) => [...s, l]);
   const popTo = (i: number) => setStack((s) => s.slice(0, i + 1));
 
+  // Reset to the session root when the agent changes (page reuse).
+  const [boundAgent, setBoundAgent] = useState(agentId);
+  if (boundAgent !== agentId) {
+    setBoundAgent(agentId);
+    setStack([{ kind: 'sessions' }]);
+  }
+
   return (
-    <Modal
-      visible
-      title={<span>消耗钻取 · <code className="font-mono text-sm">{agentId}</code></span>}
-      onCancel={onClose}
-      footer={null}
-      style={{ width: 960, top: 40 }}
-    >
+    <>
       <Breadcrumb className="mb-4">
         {stack.map((l, i) => (
           <Breadcrumb.Item
@@ -81,6 +88,21 @@ export function UsageDrilldown({ agentId, onClose }: { agentId: string; onClose:
           <InferenceLevel agentId={agentId} inferenceId={level.inferenceId} />
         )}
       </div>
+    </>
+  );
+}
+
+/** The drill-down modal, opened from a per-agent row on the 消耗 page. */
+export function UsageDrilldown({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+  return (
+    <Modal
+      visible
+      title={<span>消耗钻取 · <code className="font-mono text-sm">{agentId}</code></span>}
+      onCancel={onClose}
+      footer={null}
+      style={{ width: 960, top: 40 }}
+    >
+      <DrilldownBody agentId={agentId} />
     </Modal>
   );
 }
