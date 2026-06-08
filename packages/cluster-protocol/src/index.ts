@@ -1404,6 +1404,149 @@ export const operatorUsageResponseSchema = z.object({
 }).strict();
 export type OperatorUsageResponse = z.infer<typeof operatorUsageResponseSchema>;
 
+// ============================================================
+// Consumption drill-down: session → turn → inference → detail
+// ============================================================
+// The bottom rungs of the layering. observe.db already records every
+// inference in full (system prompt, messages, tool defs, tool_use, response,
+// cache, in/out tokens, latency/ttft); these schemas carry observe's
+// analyzer shapes over the wire verbatim so a8s can proxy a per-agent
+// drill-down to the owning worker. Declared here (not imported from observe)
+// to keep the protocol dependency-free.
+
+/** One session of an agent, with its rolled-up counts (observe SessionSummary). */
+export const usageSessionSchema = z.object({
+  id: z.string(),
+  agentId: z.string().nullable(),
+  startTime: z.number(),
+  endTime: z.number().nullable(),
+  totalCost: z.number().nonnegative(),
+  status: z.string(),
+  llmCallCount: z.number().int().nonnegative(),
+  toolCallCount: z.number().int().nonnegative(),
+  guardDecisionCount: z.number().int().nonnegative(),
+  compactionCount: z.number().int().nonnegative(),
+  eventCount: z.number().int().nonnegative(),
+}).strip();
+export type UsageSession = z.infer<typeof usageSessionSchema>;
+
+export const usageSessionListResponseSchema = z.object({
+  sessions: z.array(usageSessionSchema),
+}).strict();
+export type UsageSessionListResponse = z.infer<typeof usageSessionListResponseSchema>;
+
+/** One turn (engine loop) in a session — observe turnList row. */
+export const usageTurnSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  agentId: z.string().nullable(),
+  prompt: z.string().nullable(),
+  startTime: z.number(),
+  endTime: z.number().nullable(),
+  llmCallCount: z.number().int().nonnegative(),
+  toolCallCount: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  status: z.string(),
+  recoveredFromCrash: z.boolean(),
+  orphanedToolCount: z.number().int().nonnegative(),
+  previousTurnId: z.string().nullable(),
+}).strip();
+export type UsageTurn = z.infer<typeof usageTurnSchema>;
+
+export const usageTurnListResponseSchema = z.object({
+  turns: z.array(usageTurnSchema),
+}).strict();
+export type UsageTurnListResponse = z.infer<typeof usageTurnListResponseSchema>;
+
+/** Lightweight inference row for a turn (no request/response bodies). */
+export const usageInferenceSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  agentId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative(),
+  cacheWriteTokens: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  latencyMs: z.number().nonnegative(),
+  ttftMs: z.number().nonnegative().nullable(),
+  stopReason: z.string(),
+  messageCount: z.number().int().nonnegative(),
+  toolDefCount: z.number().int().nonnegative(),
+  systemBlockCount: z.number().int().nonnegative(),
+  hasImages: z.boolean(),
+  timestamp: z.number(),
+}).strip();
+export type UsageInference = z.infer<typeof usageInferenceSchema>;
+
+export const usageInferenceListResponseSchema = z.object({
+  inferences: z.array(usageInferenceSchema),
+}).strip();
+export type UsageInferenceListResponse = z.infer<typeof usageInferenceListResponseSchema>;
+
+/** One tool call recorded within an inference (observe inferenceToolCall). */
+export const usageInferenceToolCallSchema = z.object({
+  name: z.string(),
+  input: z.string().nullable(),
+  output: z.string().nullable(),
+  isError: z.boolean(),
+  durationMs: z.number().nonnegative(),
+}).strip();
+
+/** A guard decision recorded within an inference. */
+export const usageGuardDecisionSchema = z.object({
+  toolName: z.string().nullable().optional(),
+  decision: z.string(),
+  durationMs: z.number().nonnegative().optional(),
+}).passthrough();
+
+/**
+ * The full structured inference — system prompt, messages, tool list, the
+ * response, the tool calls it made, cache + token + timing. The JSON bodies
+ * are carried as strings exactly as observe stores them; the UI parses them
+ * for display. usage=null when the id isn't on this worker.
+ */
+export const usageInferenceDetailSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  agentId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative(),
+  cacheWriteTokens: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  latencyMs: z.number().nonnegative(),
+  ttftMs: z.number().nonnegative().nullable(),
+  stopReason: z.string(),
+  messageCount: z.number().int().nonnegative(),
+  toolDefCount: z.number().int().nonnegative(),
+  systemBlockCount: z.number().int().nonnegative(),
+  hasImages: z.boolean(),
+  requestSystem: z.string().nullable(),
+  requestMessages: z.string().nullable(),
+  requestTools: z.string().nullable(),
+  responseContent: z.string().nullable(),
+  providerRequest: z.string().nullable(),
+  providerResponse: z.string().nullable(),
+  providerDetail: z.string().nullable(),
+  timestamp: z.number(),
+  toolCalls: z.array(usageInferenceToolCallSchema).default([]),
+  guardDecisions: z.array(usageGuardDecisionSchema).default([]),
+}).strip();
+export type UsageInferenceDetail = z.infer<typeof usageInferenceDetailSchema>;
+
+export const usageInferenceDetailResponseSchema = z.object({
+  present: z.boolean(),
+  inference: usageInferenceDetailSchema.nullable(),
+}).strict();
+export type UsageInferenceDetailResponse = z.infer<typeof usageInferenceDetailResponseSchema>;
+
 export const A8S_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
   workersRegister: `/${CLUSTER_PROTOCOL_VERSION}/workers/register`,
@@ -1452,6 +1595,15 @@ export const A8S_PATHS = {
   /** Per-agent consumption rollup (proxied to the owning worker's observe.db). */
   agentUsage: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage`,
+  /** Consumption drill-down — all agent-scoped so a8s resolves the owning worker. */
+  agentUsageSessions: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/sessions`,
+  agentUsageTurns: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/sessions/${encodeURIComponent(sessionId)}/turns`,
+  agentUsageInferences: (agentId: string, turnId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/turns/${encodeURIComponent(turnId)}/inferences`,
+  agentUsageInferenceDetail: (agentId: string, inferenceId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/inferences/${encodeURIComponent(inferenceId)}`,
   agentPause: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
   agentInterject: (agentId: string) =>
@@ -1542,6 +1694,15 @@ export const WORKER_PATHS = {
   /** Per-agent consumption rollup straight from this worker's observe.db. */
   agentUsage: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage`,
+  /** Consumption drill-down served from this worker's observe.db. */
+  agentUsageSessions: (agentId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/sessions`,
+  agentUsageTurns: (agentId: string, sessionId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/sessions/${encodeURIComponent(sessionId)}/turns`,
+  agentUsageInferences: (agentId: string, turnId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/turns/${encodeURIComponent(turnId)}/inferences`,
+  agentUsageInferenceDetail: (agentId: string, inferenceId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/usage/inferences/${encodeURIComponent(inferenceId)}`,
   agentPause: (agentId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/agents/${encodeURIComponent(agentId)}/pause`,
   agentInterject: (agentId: string) =>

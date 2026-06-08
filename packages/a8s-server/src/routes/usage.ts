@@ -19,6 +19,10 @@ import {
   WORKER_PATHS,
   agentUsageResponseSchema,
   operatorUsageResponseSchema,
+  usageSessionListResponseSchema,
+  usageTurnListResponseSchema,
+  usageInferenceListResponseSchema,
+  usageInferenceDetailResponseSchema,
   workerAuthHeader,
   type AgentUsage,
   type OperatorUsageAgentRow,
@@ -42,6 +46,50 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
           present: usage !== null,
           usage,
         }));
+      },
+    },
+    // ----- Drill-down: session → turn → inference → detail. All agent-scoped
+    // so a8s resolves the owning worker via resolveAgentWorker and proxies the
+    // GET verbatim (same pattern as sessions.ts). The worker reads its
+    // observe.db; a8s holds no state. -----
+    {
+      method: 'GET',
+      pattern: '/v1/agents/:agentId/usage/sessions',
+      name: 'GET /v1/agents/:id/usage/sessions',
+      middleware: [requireAgentScope(deps)],
+      handler: async ({ params, res }) => {
+        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageSessions(params.agentId));
+        writeJson(res, 200, usageSessionListResponseSchema.parse(body));
+      },
+    },
+    {
+      method: 'GET',
+      pattern: '/v1/agents/:agentId/usage/sessions/:sessionId/turns',
+      name: 'GET /v1/agents/:id/usage/sessions/:sid/turns',
+      middleware: [requireAgentScope(deps)],
+      handler: async ({ params, res }) => {
+        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageTurns(params.agentId, params.sessionId));
+        writeJson(res, 200, usageTurnListResponseSchema.parse(body));
+      },
+    },
+    {
+      method: 'GET',
+      pattern: '/v1/agents/:agentId/usage/turns/:turnId/inferences',
+      name: 'GET /v1/agents/:id/usage/turns/:tid/inferences',
+      middleware: [requireAgentScope(deps)],
+      handler: async ({ params, res }) => {
+        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageInferences(params.agentId, params.turnId));
+        writeJson(res, 200, usageInferenceListResponseSchema.parse(body));
+      },
+    },
+    {
+      method: 'GET',
+      pattern: '/v1/agents/:agentId/usage/inferences/:inferenceId',
+      name: 'GET /v1/agents/:id/usage/inferences/:iid',
+      middleware: [requireAgentScope(deps)],
+      handler: async ({ params, res }) => {
+        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageInferenceDetail(params.agentId, params.inferenceId));
+        writeJson(res, 200, usageInferenceDetailResponseSchema.parse(body));
       },
     },
     {
@@ -149,4 +197,22 @@ async function fetchAgentUsage<TEntry>(deps: ServerDeps<TEntry>, agentId: string
 
 function sum<T>(rows: T[], pick: (r: T) => number): number {
   return rows.reduce((acc, r) => acc + pick(r), 0);
+}
+
+/**
+ * Proxy a GET to the agent's owning worker at the given subpath and return the
+ * parsed JSON body. Used by the drill-down routes — a8s resolves the worker,
+ * forwards with the worker token, and lets the route's own zod schema validate
+ * the shape. Throws an HttpError on a non-2xx worker reply.
+ */
+async function proxyUsageGet<TEntry>(deps: ServerDeps<TEntry>, agentId: string, subpath: string): Promise<unknown> {
+  const entry = resolveAgentWorker(deps, agentId);
+  const response = await fetch(`${entry.callbackUrl}${subpath}`, {
+    method: 'GET',
+    headers: { [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token) },
+  });
+  if (!response.ok) {
+    throw httpError(response.status, 'worker_usage_failed', `worker returned ${response.status}`);
+  }
+  return response.json();
 }

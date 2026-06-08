@@ -404,6 +404,7 @@ export class Analyzer {
       cacheWriteTokens: llmCalls.cacheWriteTokens,
       totalCost: llmCalls.totalCost,
       latencyMs: llmCalls.latencyMs,
+      ttftMs: llmCalls.ttftMs,
       stopReason: llmCalls.stopReason,
       messageCount: llmCalls.messageCount,
       toolDefCount: llmCalls.toolDefCount,

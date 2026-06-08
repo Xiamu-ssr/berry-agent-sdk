@@ -34,6 +34,10 @@ import {
   SSE_LAST_EVENT_ID_HEADER,
   agentUsageResponseSchema,
   operatorUsageResponseSchema,
+  usageSessionListResponseSchema,
+  usageTurnListResponseSchema,
+  usageInferenceListResponseSchema,
+  usageInferenceDetailResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { AgentHome } from '@berry-agent/core';
 import {
@@ -119,6 +123,10 @@ async function startTestWorker(opts: {
   const daemon = new WorkerDaemon<TestEntry>({
     worker, workerId, port: wPort, bindHost: '127.0.0.1', resolveSpec,
     usage: (agentId) => metrics.agentMetrics(agentId),
+    usageSessions: (agentId) => env.observer.analyzer.recentSessions(100, agentId),
+    usageTurns: (sessionId) => env.observer.analyzer.turnList({ sessionId, limit: 200 }),
+    usageInferences: (turnId) => env.observer.analyzer.inferenceList({ turnId, limit: 200 }),
+    usageInferenceDetail: (inferenceId) => env.observer.analyzer.inferenceDetail(inferenceId),
   });
   const dInfo = await daemon.start();
   const reg = new WorkerRegistrationClient({
@@ -1939,6 +1947,36 @@ describe('a8s-server + worker-daemon E2E', () => {
       headers: { authorization: `Bearer ${tokenA}` },
     });
     expect(opAsProduct.status).toBe(401);
+
+    // Drill-down read path: session → turn → inference → detail all proxy to
+    // the owning worker's observe.db. Nothing's recorded, so the lists are
+    // empty and the detail is present:false — the point is each level round-
+    // trips through a8s → worker → observe and validates against its schema.
+    const sessions = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsageSessions('a-usage')}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(sessions.status).toBe(200);
+    expect(usageSessionListResponseSchema.parse(await sessions.json()).sessions).toEqual([]);
+
+    const turns = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsageTurns('a-usage', 'sess-x')}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(turns.status).toBe(200);
+    expect(usageTurnListResponseSchema.parse(await turns.json()).turns).toEqual([]);
+
+    const infs = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsageInferences('a-usage', 'turn-x')}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(infs.status).toBe(200);
+    expect(usageInferenceListResponseSchema.parse(await infs.json()).inferences).toEqual([]);
+
+    const detail = await fetch(`${a8sInfo.url}${A8S_PATHS.agentUsageInferenceDetail('a-usage', 'inf-x')}`, {
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(detail.status).toBe(200);
+    const detailBody = usageInferenceDetailResponseSchema.parse(await detail.json());
+    expect(detailBody.present).toBe(false);
+    expect(detailBody.inference).toBeNull();
 
     await w.stop();
     await a8s.stop();

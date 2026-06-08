@@ -133,11 +133,21 @@ describe('a8s usage rollup E2E', () => {
         { model: 'claude-sonnet', calls: 4, totalCost: 1.2, totalTokens: 700 },
         { model: 'gpt-4o', calls: 2, totalCost: 0.8, totalTokens: 500 },
       ],
+      // Two days; 06-02 overlaps with beta so the cluster fan-in must merge them.
+      dailyTrend: [
+        { date: '2026-06-01', calls: 2, totalCost: 0.5 },
+        { date: '2026-06-02', calls: 4, totalCost: 1.5 },
+      ],
     });
     KNOWN['beta'] = fakeUsage('beta', {
       totalCost: 1, totalTokens: 800, sessionCount: 1,
       modelBreakdown: [
         { model: 'claude-sonnet', calls: 3, totalCost: 1, totalTokens: 800 },
+      ],
+      // Shares 06-02 with alpha, plus a later-only day 06-03.
+      dailyTrend: [
+        { date: '2026-06-02', calls: 3, totalCost: 0.6 },
+        { date: '2026-06-03', calls: 1, totalCost: 0.4 },
       ],
     });
 
@@ -187,6 +197,20 @@ describe('a8s usage rollup E2E', () => {
     const gpt = op.byModel.find((m) => m.model === 'gpt-4o')!;
     expect(gpt.agentCount).toBe(1);
     expect(gpt.totalCost).toBeCloseTo(0.8, 6);
+
+    // Cluster cost trend — the time rung. Fan-in over both agents' dailyTrend,
+    // keyed by UTC date, ascending. 06-01 alpha-only; 06-02 alpha+beta merged;
+    // 06-03 beta-only. Pure upward aggregation, never re-recorded.
+    expect(op.trend.map((d) => d.date)).toEqual(['2026-06-01', '2026-06-02', '2026-06-03']);
+    const d1 = op.trend.find((d) => d.date === '2026-06-01')!;
+    expect(d1.totalCost).toBeCloseTo(0.5, 6);
+    expect(d1.calls).toBe(2);
+    const d2 = op.trend.find((d) => d.date === '2026-06-02')!;
+    expect(d2.totalCost).toBeCloseTo(2.1, 6); // 1.5 (alpha) + 0.6 (beta)
+    expect(d2.calls).toBe(7);                  // 4 + 3
+    const d3 = op.trend.find((d) => d.date === '2026-06-03')!;
+    expect(d3.totalCost).toBeCloseTo(0.4, 6);
+    expect(d3.calls).toBe(1);
 
     await reg.withdraw(true).catch(() => {});
     await daemon.stop();

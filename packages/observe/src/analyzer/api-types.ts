@@ -192,6 +192,7 @@ export const inferenceRecordSchema = z.object({
   cacheWriteTokens: nonNegativeInt,
   totalCost: nonNegativeNumber,
   latencyMs: nonNegativeNumber,
+  ttftMs: nonNegativeNumber.nullable(),
   stopReason: z.string(),
   messageCount: nonNegativeInt,
   toolDefCount: nonNegativeInt,

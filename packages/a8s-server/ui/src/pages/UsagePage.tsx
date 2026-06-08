@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Card, Input, Table, Tag, Typography } from '@arco-design/web-react';
+import { Card, Input, Table, Tag, Typography, Button } from '@arco-design/web-react';
 import { useUsage, type UsageAgentRow, type UsageModelRow, type UsageProductRow, type UsageTrendPoint } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
+import { UsageDrilldown } from './UsageDrilldown.js';
 
 // ============================================================
 // 消耗 — real consumption, aggregated upward from each worker's observe.db
@@ -37,6 +38,7 @@ export function UsagePage() {
   // which blanked the whole page once real usage data arrived. Read agents
   // defensively from usage.data so the memo dependency is stable across states.
   const [query, setQuery] = useState('');
+  const [drillAgent, setDrillAgent] = useState<string | null>(null);
   const agents = usage.data?.agents ?? EMPTY_AGENTS;
   const filteredAgents = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -276,12 +278,23 @@ export function UsagePage() {
                     title: '成本', dataIndex: 'totalCost', align: 'right' as const,
                     render: (v: number) => <span className="font-mono text-sm" style={{ color: 'rgb(var(--arcoblue-6))' }}>{money(v)}</span>,
                   },
+                  {
+                    title: '', dataIndex: '__drill', align: 'right' as const, width: 80,
+                    // The bottom rungs of the layering live here: click to walk
+                    // 会话 → Engine Loop → 推理 → 完整推理 detail, all read live
+                    // from the owning worker's observe.db.
+                    render: (_: unknown, row: UsageAgentRow) => (
+                      <Button size="mini" type="text" onClick={() => setDrillAgent(row.agentId)}>钻取</Button>
+                    ),
+                  },
                 ]}
               />
             </Card>
           </section>
         </>
       )}
+
+      {drillAgent && <UsageDrilldown agentId={drillAgent} onClose={() => setDrillAgent(null)} />}
     </div>
   );
 }

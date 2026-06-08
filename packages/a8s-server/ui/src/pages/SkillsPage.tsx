@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Table, Card, Button, Modal, Input, Select, Tag, Popconfirm, Message } from '@arco-design/web-react';
+import { Table, Card, Button, Modal, Input, Tag, Popconfirm, Message } from '@arco-design/web-react';
 import {
   useSkills, useSkillDetail, useRegisterSkill, useDeleteSkill,
   useInstallSkillOnAgent, useAgents,
   type RegistrySkill,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
+import { EntityPicker } from '../components/EntityPicker.js';
+import { agentPickerConfig } from '../components/entityConfigs.js';
 
 // ============================================================
 // Skill 市场 — a8s's catalog of installable skills
@@ -125,8 +127,8 @@ function InstallModal({ skill, onClose, onDone }: {
 }) {
   const agents = useAgents();
   const install = useInstallSkillOnAgent();
-  const options = (agents.data ?? []).map((a) => a.agentId);
-  const [agentId, setAgentId] = useState<string>(options[0] ?? '');
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const hasAgents = (agents.data?.length ?? 0) > 0;
   return (
     <Modal
       visible
@@ -139,22 +141,20 @@ function InstallModal({ skill, onClose, onDone }: {
             type="primary"
             loading={install.isPending}
             disabled={!agentId}
-            onClick={async () => { await install.mutateAsync({ agentId, name: skill.name }); onDone(agentId); }}
+            onClick={async () => { if (!agentId) return; await install.mutateAsync({ agentId, name: skill.name }); onDone(agentId); }}
           >
             安装
           </Button>
         </div>
       }
     >
-      {options.length === 0 ? (
+      {!hasAgents ? (
         <div className="text-sm" style={{ color: 'rgb(var(--red-6))' }}>还没有 agent。先在「Agents」里创建一个。</div>
       ) : (
-        <label className="block">
-          <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>目标 agent</span>
-          <Select className="mt-1" value={agentId} onChange={setAgentId}>
-            {options.map((a) => <Select.Option key={a} value={a}>{a}</Select.Option>)}
-          </Select>
-        </label>
+        <div>
+          <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>选择要安装到的 Agent</div>
+          <EntityPicker config={agentPickerConfig} value={agentId} onPick={(id) => setAgentId(id)} />
+        </div>
       )}
       {install.error && <div className="text-sm mt-3" style={{ color: 'rgb(var(--red-6))' }}>{install.error instanceof Error ? install.error.message : String(install.error)}</div>}
     </Modal>

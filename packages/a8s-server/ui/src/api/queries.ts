@@ -242,6 +242,108 @@ export function useUsage() {
   });
 }
 
+// ---- Consumption drill-down: session → turn → inference → detail ----
+// Each level is proxied to the agent's owning worker, which reads its
+// observe.db. The atoms (one inference) live at the bottom; everything above
+// is the worker's own GROUP BY. These power the 「消耗」page's drill-down.
+
+export interface UsageSession {
+  id: string;
+  agentId: string | null;
+  startTime: number;
+  endTime: number | null;
+  totalCost: number;
+  status: string;
+  llmCallCount: number;
+  toolCallCount: number;
+  guardDecisionCount: number;
+  compactionCount: number;
+  eventCount: number;
+}
+export interface UsageTurn {
+  id: string;
+  sessionId: string;
+  agentId: string | null;
+  prompt: string | null;
+  startTime: number;
+  endTime: number | null;
+  llmCallCount: number;
+  toolCallCount: number;
+  totalCost: number;
+  status: string;
+  recoveredFromCrash: boolean;
+  orphanedToolCount: number;
+  previousTurnId: string | null;
+}
+export interface UsageInference {
+  id: string;
+  sessionId: string;
+  agentId: string | null;
+  turnId: string | null;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalCost: number;
+  latencyMs: number;
+  ttftMs: number | null;
+  stopReason: string;
+  messageCount: number;
+  toolDefCount: number;
+  systemBlockCount: number;
+  hasImages: boolean;
+  timestamp: number;
+}
+export interface UsageInferenceToolCall {
+  name: string;
+  input: string | null;
+  output: string | null;
+  isError: boolean;
+  durationMs: number;
+}
+export interface UsageInferenceDetail extends UsageInference {
+  requestSystem: string | null;
+  requestMessages: string | null;
+  requestTools: string | null;
+  responseContent: string | null;
+  providerRequest: string | null;
+  providerResponse: string | null;
+  providerDetail: string | null;
+  toolCalls: UsageInferenceToolCall[];
+  guardDecisions: Array<Record<string, unknown>>;
+}
+
+export function useUsageSessions(agentId: string | null) {
+  return useQuery({
+    queryKey: ['usage-sessions', agentId],
+    queryFn: () => api<{ sessions: UsageSession[] }>(`/v1/agents/${encodeURIComponent(agentId!)}/usage/sessions`).then((r) => r.sessions),
+    enabled: !!agentId,
+  });
+}
+export function useUsageTurns(agentId: string | null, sessionId: string | null) {
+  return useQuery({
+    queryKey: ['usage-turns', agentId, sessionId],
+    queryFn: () => api<{ turns: UsageTurn[] }>(`/v1/agents/${encodeURIComponent(agentId!)}/usage/sessions/${encodeURIComponent(sessionId!)}/turns`).then((r) => r.turns),
+    enabled: !!agentId && !!sessionId,
+  });
+}
+export function useUsageInferences(agentId: string | null, turnId: string | null) {
+  return useQuery({
+    queryKey: ['usage-inferences', agentId, turnId],
+    queryFn: () => api<{ inferences: UsageInference[] }>(`/v1/agents/${encodeURIComponent(agentId!)}/usage/turns/${encodeURIComponent(turnId!)}/inferences`).then((r) => r.inferences),
+    enabled: !!agentId && !!turnId,
+  });
+}
+export function useUsageInferenceDetail(agentId: string | null, inferenceId: string | null) {
+  return useQuery({
+    queryKey: ['usage-inference-detail', agentId, inferenceId],
+    queryFn: () => api<{ present: boolean; inference: UsageInferenceDetail | null }>(`/v1/agents/${encodeURIComponent(agentId!)}/usage/inferences/${encodeURIComponent(inferenceId!)}`).then((r) => r.inference),
+    enabled: !!agentId && !!inferenceId,
+  });
+}
+
 // ---- Skill registry (the skill market) ----
 
 export interface RegistrySkill {

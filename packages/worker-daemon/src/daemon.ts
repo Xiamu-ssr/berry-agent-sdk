@@ -59,7 +59,15 @@ import {
   agentInterjectRequestSchema,
   agentInterjectResponseSchema,
   agentUsageResponseSchema,
+  usageSessionListResponseSchema,
+  usageTurnListResponseSchema,
+  usageInferenceListResponseSchema,
+  usageInferenceDetailResponseSchema,
   type AgentUsage,
+  type UsageSession,
+  type UsageTurn,
+  type UsageInference,
+  type UsageInferenceDetail,
   type HealthResponse,
 } from '@berry-agent/cluster-protocol';
 import type { Worker, WorkerAgentSpec } from '@berry-agent/worker';
@@ -104,6 +112,20 @@ export interface WorkerDaemonOptions<TEntry = unknown> {
    * hosts that wire no observer.
    */
   usage?: (agentId: string) => AgentUsage | null;
+  /**
+   * Consumption drill-down resolvers, reading this worker's observe.db.
+   * All optional — absent → the route replies with an empty list (or
+   * {present:false} for a detail), so a host with no observer degrades
+   * cleanly. Each maps 1:1 to an observe Analyzer method:
+   *   usageSessions    → analyzer.recentSessions(limit, agentId)
+   *   usageTurns       → analyzer.turnList({ sessionId })
+   *   usageInferences  → analyzer.inferenceList({ turnId })   (no bodies)
+   *   usageInferenceDetail → analyzer.inferenceDetail(id)     (full bodies)
+   */
+  usageSessions?: (agentId: string) => UsageSession[];
+  usageTurns?: (sessionId: string) => UsageTurn[];
+  usageInferences?: (turnId: string) => UsageInference[];
+  usageInferenceDetail?: (inferenceId: string) => UsageInferenceDetail | null;
 }
 
 export class WorkerDaemon<TEntry = unknown> {
@@ -241,6 +263,27 @@ export class WorkerDaemon<TEntry = unknown> {
       return this.handleSessionCreate(decodeURIComponent(sessionListMatch[1]), res);
     }
 
+    // Consumption drill-down (match the deeper paths before the bare /usage).
+    // /agents/:id/usage/sessions/:sid/turns
+    const usageTurnsMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage\/sessions\/([^/]+)\/turns(?:\?.*)?$/);
+    if (usageTurnsMatch && req.method === 'GET') {
+      return this.handleUsageTurns(decodeURIComponent(usageTurnsMatch[2]), res);
+    }
+    // /agents/:id/usage/sessions
+    const usageSessionsMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage\/sessions(?:\?.*)?$/);
+    if (usageSessionsMatch && req.method === 'GET') {
+      return this.handleUsageSessions(decodeURIComponent(usageSessionsMatch[1]), res);
+    }
+    // /agents/:id/usage/turns/:tid/inferences
+    const usageInfsMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage\/turns\/([^/]+)\/inferences(?:\?.*)?$/);
+    if (usageInfsMatch && req.method === 'GET') {
+      return this.handleUsageInferences(decodeURIComponent(usageInfsMatch[2]), res);
+    }
+    // /agents/:id/usage/inferences/:iid
+    const usageInfDetailMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage\/inferences\/([^/]+)(?:\?.*)?$/);
+    if (usageInfDetailMatch && req.method === 'GET') {
+      return this.handleUsageInferenceDetail(decodeURIComponent(usageInfDetailMatch[2]), res);
+    }
     // /agents/:id/usage — per-agent consumption rollup from observe.db
     const usageMatch = url.match(/^\/v1\/agents\/([^/]+)\/usage(?:\?.*)?$/);
     if (usageMatch && req.method === 'GET') {
@@ -592,6 +635,30 @@ export class WorkerDaemon<TEntry = unknown> {
     }
     const usage = this.options.usage(agentId);
     writeJson(res, 200, agentUsageResponseSchema.parse({ present: usage !== null, usage }));
+  }
+
+  // ----- Consumption drill-down: session → turn → inference → detail.
+  // Each reads this worker's observe.db via an injected resolver and degrades
+  // to an empty list (or {present:false}) when no observer is wired. -----
+
+  private handleUsageSessions(agentId: string, res: ServerResponse): void {
+    const sessions = this.options.usageSessions?.(agentId) ?? [];
+    writeJson(res, 200, usageSessionListResponseSchema.parse({ sessions }));
+  }
+
+  private handleUsageTurns(sessionId: string, res: ServerResponse): void {
+    const turns = this.options.usageTurns?.(sessionId) ?? [];
+    writeJson(res, 200, usageTurnListResponseSchema.parse({ turns }));
+  }
+
+  private handleUsageInferences(turnId: string, res: ServerResponse): void {
+    const inferences = this.options.usageInferences?.(turnId) ?? [];
+    writeJson(res, 200, usageInferenceListResponseSchema.parse({ inferences }));
+  }
+
+  private handleUsageInferenceDetail(inferenceId: string, res: ServerResponse): void {
+    const inference = this.options.usageInferenceDetail?.(inferenceId) ?? null;
+    writeJson(res, 200, usageInferenceDetailResponseSchema.parse({ present: inference !== null, inference }));
   }
 
 

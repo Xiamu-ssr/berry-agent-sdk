@@ -358,6 +358,13 @@ async function main(argv: string[]): Promise<number> {
     // Consumption read path: serve the agent-level rollup observe.db already
     // keeps. agentMetrics returns null when nothing's recorded for the agent.
     usage: (agentId) => metrics.agentMetrics(agentId),
+    // Drill-down: each maps 1:1 to an observe Analyzer query. The daemon
+    // parses every reply with a strict wire schema (.strip()), so passing the
+    // analyzer's richer rows straight through is safe — extras are dropped.
+    usageSessions: (agentId) => observer.analyzer.recentSessions(100, agentId),
+    usageTurns: (sessionId) => observer.analyzer.turnList({ sessionId, limit: 200 }),
+    usageInferences: (turnId) => observer.analyzer.inferenceList({ turnId, limit: 200 }),
+    usageInferenceDetail: (inferenceId) => observer.analyzer.inferenceDetail(inferenceId),
   });
 
   const info = await daemon.start();
