@@ -2,6 +2,7 @@ import { Layout, Menu, Button } from '@arco-design/web-react';
 import {
   PeakMark, GridIcon, AgentIcon, ChatIcon, WorkerIcon, MachineIcon,
   LeaseIcon, ClockIcon, ModelIcon, KeyIcon, AuditIcon, HandIcon, SkillIcon, UsageIcon, LogIcon,
+  SettingsIcon,
 } from './icons.js';
 
 export type View =
@@ -18,6 +19,7 @@ export type View =
   | 'usage'
   | 'logs'
   | 'credentials'
+  | 'settings'
   | 'audit';
 
 export interface SidebarProps {
@@ -68,6 +70,7 @@ const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; ic
     items: [
       { key: 'models', label: 'Models', icon: ModelIcon },
       { key: 'credentials', label: 'Credentials', icon: KeyIcon },
+      { key: 'settings', label: '设置', icon: SettingsIcon },
     ],
   },
 ];

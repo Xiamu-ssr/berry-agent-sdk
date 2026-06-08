@@ -14,6 +14,7 @@ import { SkillsPage } from './pages/SkillsPage.js';
 import { WakesPage } from './pages/WakesPage.js';
 import { AdminChatPage } from './pages/AdminChatPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
+import { ModelsPage } from './pages/ModelsPage.js';
 import { CredentialsPage } from './pages/CredentialsPage.js';
 import { UsagePage } from './pages/UsagePage.js';
 import { LogsPage } from './pages/LogsPage.js';
@@ -52,10 +53,11 @@ export function App() {
             {view === 'machines' && <MachinesPage />}
             {view === 'leases' && <LeasesPage />}
             {view === 'wakes' && <WakesPage />}
-            {view === 'models' && <SettingsPage />}
+            {view === 'models' && <ModelsPage />}
             {view === 'usage' && <UsagePage />}
             {view === 'logs' && <LogsPage />}
             {view === 'credentials' && <CredentialsPage />}
+            {view === 'settings' && <SettingsPage />}
             {view === 'audit' && <AuditPage />}
           </div>
         </Layout.Content>

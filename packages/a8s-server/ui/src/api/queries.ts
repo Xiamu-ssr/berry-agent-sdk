@@ -633,18 +633,29 @@ export function useAudit(q: AuditQuery) {
 
 // ---- Models template ----
 
+/** Per-protocol base URLs for a provider channel. */
+export interface ProviderEndpoints {
+  anthropic?: string;
+  openai?: string;
+}
+
+export type WireProtocol = 'anthropic' | 'openai';
+
 export interface ModelsTemplate {
   providers: Record<string, {
     presetId: string;
     apiKey: string;
-    baseUrl?: string;
+    endpoints?: ProviderEndpoints;
     label?: string;
+    knownModels?: string[];
     [k: string]: unknown;
   }>;
   models: Record<string, {
     label?: string;
     contextWindow?: number;
     providers: Array<{ providerId: string; remoteModelId?: string }>;
+    /** Inferred protocol family, attached by a8s on GET (UI never recomputes). */
+    family?: WireProtocol;
     [k: string]: unknown;
   }>;
   tiers: Record<string, string>;
@@ -671,13 +682,56 @@ export function usePutModelsTemplate() {
   });
 }
 
+/**
+ * Flattened, pickable model entries for the generic EntityPicker: every tier
+ * (`tier:strong`) plus every configured model, each tagged with its protocol
+ * family so the picker can badge it (and later disable cross-family choices).
+ * This is the single list any "pick a model" surface (agent create, classifier,
+ * admin) reuses — no page re-derives it.
+ */
+export interface ModelEntry {
+  /** The value an agent requests: `tier:strong` or a model id. */
+  id: string;
+  /** Display label (model label or the id). */
+  label: string;
+  /** anthropic / openai — drives the family badge and family-lock. */
+  family?: WireProtocol;
+  /** True for tier aliases (L3), false for concrete models (L2). */
+  isTier: boolean;
+  /** For tiers: the model id it points at. */
+  target?: string;
+}
+export function useModelEntries() {
+  const template = useModelsTemplate();
+  const entries: ModelEntry[] = (() => {
+    const t = template.data?.template;
+    if (!t) return [];
+    const models: ModelEntry[] = Object.entries(t.models).map(([id, m]) => ({
+      id,
+      label: m.label ?? id,
+      family: m.family,
+      isTier: false,
+    }));
+    const familyOf = new Map(models.map((m) => [m.id, m.family]));
+    const tiers: ModelEntry[] = Object.entries(t.tiers ?? {}).map(([slot, target]) => ({
+      id: `tier:${slot}`,
+      label: `tier:${slot}`,
+      family: familyOf.get(target),
+      isTier: true,
+      target,
+    }));
+    return [...tiers, ...models];
+  })();
+  return { ...template, data: entries };
+}
+
 // ---- Models: presets + live probe (human-friendly provider setup) ----
 
 export interface ModelsPreset {
   id: string;
   label: string;
-  type: 'anthropic' | 'openai';
-  baseUrl: string;
+  endpoints: ProviderEndpoints;
+  protocols: WireProtocol[];
   canList: boolean;
   apiKeyDocsUrl?: string;
 }
@@ -691,9 +745,9 @@ export function useModelsPresets() {
 
 export interface ModelsProbeInput {
   presetId?: string;
+  protocol?: WireProtocol;
   baseUrl?: string;
   apiKey: string;
-  type?: 'anthropic' | 'openai';
 }
 export interface ModelsProbeResult {
   models: string[];

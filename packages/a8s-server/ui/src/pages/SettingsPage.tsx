@@ -1,109 +1,102 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Button, Input, Select, Checkbox, Tag, Message } from '@arco-design/web-react';
+import { Card, Button, Input, Tag, Message } from '@arco-design/web-react';
 import {
   useModelsTemplate,
   usePutModelsTemplate,
   useModelsPresets,
-  useProbeModels,
   useAdminAgentStatus,
   useEnsureAdminAgent,
   type ModelsTemplate,
   type ModelsPreset,
+  type ProviderEndpoints,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner } from '../components/Page.js';
 
 export function SettingsPage() {
   return (
     <div className="animate-fade-in space-y-6">
-      <PageHeader title="Models" subtitle="Providers, models & tiers — the cluster-wide template every worker pulls" />
-      <ModelsCard />
+      <PageHeader
+        title="设置"
+        subtitle="供应商(L1)与平台 agent — 集群级配置"
+      />
+      <ProvidersCard />
       <AdminAgentCard />
     </div>
   );
 }
 
 // ============================================================
-// Models — human-friendly provider + model configuration
+// Providers (L1) — token channels
 // ============================================================
-// The cluster-wide models template (providers / models / tiers) drives every
-// worker (they pull it at register). Rather than make the operator hand-write
-// that JSON, this card is a form: pick a provider preset, paste the API key,
-// pull the live model list, tick the models to expose, and map tiers. The JSON
-// is still available under "Advanced" as an escape hatch.
+// L1 is just "where the tokens come from": a preset (or raw) + an API key, and
+// optionally an endpoint override. It does NOT define models — that's L2, on the
+// Models page. A provider may speak both protocols (e.g. ZenMux at two URLs);
+// the resolver picks the endpoint per model family, so the operator never picks
+// a protocol here. Both pages edit slices of one cluster template; this card
+// owns `providers` and round-trips `models`/`tiers` untouched.
 
 interface DraftProvider {
   /** Local key in the template's providers map. */
   id: string;
   presetId: string;
   apiKey: string;
-  baseUrl?: string;
+  /** Per-protocol endpoint overrides (raw providers must set at least one). */
+  endpoints?: ProviderEndpoints;
   label?: string;
-  /** Model ids the operator ticked for this provider. */
-  models: string[];
 }
 
-const TIER_SLOTS = ['strong', 'fast', 'cheap'] as const;
+const RAW_PRESET_ID = '__raw__';
 
-function ModelsCard() {
+function ProvidersCard() {
   const template = useModelsTemplate();
   const presets = useModelsPresets();
   const put = usePutModelsTemplate();
 
   const [providers, setProviders] = useState<DraftProvider[]>([]);
-  const [tiers, setTiers] = useState<Record<string, string>>({});
-  const [advanced, setAdvanced] = useState(false);
+  // The non-provider slices we must preserve when saving (Models page owns them).
+  const [carry, setCarry] = useState<{ models: ModelsTemplate['models']; tiers: ModelsTemplate['tiers'] }>(
+    { models: {}, tiers: {} },
+  );
   const [loadedOnce, setLoadedOnce] = useState(false);
 
-  // Hydrate the form from the saved template once.
   useEffect(() => {
     if (loadedOnce || !template.data) return;
     const t = template.data.template;
     if (t) {
-      const provs: DraftProvider[] = Object.entries(t.providers).map(([id, p]) => ({
+      setProviders(Object.entries(t.providers).map(([id, p]) => ({
         id,
         presetId: p.presetId,
         apiKey: p.apiKey,
-        baseUrl: p.baseUrl,
+        endpoints: p.endpoints,
         label: p.label,
-        models: Object.entries(t.models)
-          .filter(([, m]) => m.providers.some((mp) => mp.providerId === id))
-          .map(([modelId]) => modelId),
-      }));
-      setProviders(provs);
-      setTiers(t.tiers ?? {});
+      })));
+      setCarry({ models: t.models ?? {}, tiers: t.tiers ?? {} });
     }
     setLoadedOnce(true);
   }, [template.data, loadedOnce]);
 
-  // Every ticked model across all providers — the tier dropdowns choose from these.
-  const allModels = useMemo(
-    () => Array.from(new Set(providers.flatMap((p) => p.models))).sort(),
-    [providers],
-  );
-
-  // Compose the wire template from the form state.
   const buildTemplate = (): ModelsTemplate => {
     const providersOut: ModelsTemplate['providers'] = {};
-    const modelsOut: ModelsTemplate['models'] = {};
     for (const p of providers) {
       providersOut[p.id] = {
         presetId: p.presetId,
         apiKey: p.apiKey,
-        ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+        ...(p.endpoints && (p.endpoints.anthropic || p.endpoints.openai) ? { endpoints: p.endpoints } : {}),
         ...(p.label ? { label: p.label } : {}),
       };
-      for (const modelId of p.models) {
-        // A model exposed by multiple providers gets both as fallbacks.
-        const existing = modelsOut[modelId];
-        if (existing) existing.providers.push({ providerId: p.id });
-        else modelsOut[modelId] = { providers: [{ providerId: p.id }] };
-      }
     }
-    const tiersOut: Record<string, string> = {};
-    for (const [slot, modelId] of Object.entries(tiers)) {
-      if (modelId && modelsOut[modelId]) tiersOut[slot] = modelId;
+    // Keep model/tier slices, but drop any model that references a provider we
+    // just removed (else the template fails validation on save).
+    const validModels: ModelsTemplate['models'] = {};
+    for (const [mid, m] of Object.entries(carry.models)) {
+      const refs = m.providers.filter((r) => providersOut[r.providerId]);
+      if (refs.length > 0) validModels[mid] = { ...m, providers: refs };
     }
-    return { providers: providersOut, models: modelsOut, tiers: tiersOut };
+    const validTiers: ModelsTemplate['tiers'] = {};
+    for (const [slot, mid] of Object.entries(carry.tiers)) {
+      if (validModels[mid]) validTiers[slot] = mid;
+    }
+    return { providers: providersOut, models: validModels, tiers: validTiers };
   };
 
   if (template.error) return <ErrorBanner error={template.error} />;
@@ -111,97 +104,58 @@ function ModelsCard() {
     return <Card bordered><Spinner /></Card>;
   }
 
-  const canSave = providers.length > 0 && providers.every((p) => p.apiKey && p.models.length > 0);
+  const canSave =
+    providers.length > 0 &&
+    providers.every((p) => p.apiKey && (p.presetId !== RAW_PRESET_ID || p.endpoints?.anthropic || p.endpoints?.openai));
 
   return (
     <Card
       bordered
-      title={<span className="text-sm font-semibold uppercase tracking-wider">Models</span>}
+      title={<span className="text-sm font-semibold uppercase tracking-wider">供应商 · Providers</span>}
       extra={
-        <div className="flex items-center gap-3">
-          {template.data?.updatedAt && (
-            <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>
-              updated {new Date(template.data.updatedAt).toLocaleString()}
-            </span>
-          )}
-          <Button type="text" size="small" onClick={() => setAdvanced((a) => !a)}>
-            {advanced ? '← Form' : 'Advanced (JSON)'}
-          </Button>
-        </div>
+        template.data?.updatedAt && (
+          <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>
+            updated {new Date(template.data.updatedAt).toLocaleString()}
+          </span>
+        )
       }
     >
       <p className="text-sm mb-4" style={{ color: 'var(--color-text-3)' }}>
-        Providers and models shared across the cluster. Workers pull this at register time. API keys
-        are copied to each worker — treat this as a secret.
+        Token 渠道:选一个供应商预设、粘贴 API key 即可。一个渠道可同时讲两种协议(如 ZenMux),
+        路由按模型家族自动选端点,无需手动选协议。具体<strong>模型</strong>在 Models 页创建。
+        API key 会复制到每个 worker — 视作机密。
       </p>
 
-      {advanced ? (
-        <AdvancedJson
-          template={buildTemplate()}
-          onApply={(t) => {
-            // Re-hydrate the form from edited JSON.
-            setProviders(Object.entries(t.providers).map(([id, p]) => ({
-              id, presetId: p.presetId, apiKey: p.apiKey, baseUrl: p.baseUrl, label: p.label,
-              models: Object.entries(t.models).filter(([, m]) => m.providers.some((mp) => mp.providerId === id)).map(([mid]) => mid),
-            })));
-            setTiers(t.tiers ?? {});
-          }}
-        />
-      ) : (
-        <div className="space-y-4">
-          {providers.map((prov, i) => (
-            <ProviderEditor
-              key={i}
-              prov={prov}
-              presets={presets.data ?? []}
-              onChange={(next) => setProviders((ps) => ps.map((p, j) => (j === i ? next : p)))}
-              onRemove={() => setProviders((ps) => ps.filter((_, j) => j !== i))}
-            />
-          ))}
-
-          <AddProvider
+      <div className="space-y-4">
+        {providers.map((prov, i) => (
+          <ProviderEditor
+            key={i}
+            prov={prov}
             presets={presets.data ?? []}
-            existingIds={new Set(providers.map((p) => p.id))}
-            onAdd={(p) => setProviders((ps) => [...ps, p])}
+            onChange={(next) => setProviders((ps) => ps.map((p, j) => (j === i ? next : p)))}
+            onRemove={() => setProviders((ps) => ps.filter((_, j) => j !== i))}
           />
+        ))}
 
-          {allModels.length > 0 && (
-            <div className="pt-3" style={{ borderTop: '1px solid var(--color-border-2)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-3)' }}>
-                Tiers <span className="font-normal normal-case">— map an alias agents request (e.g. <code className="text-xs">tier:strong</code>) to a model</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {TIER_SLOTS.map((slot) => (
-                  <label key={slot} className="text-sm">
-                    <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>{slot}</span>
-                    <Select
-                      value={tiers[slot] ?? ''}
-                      onChange={(v) => setTiers((t) => ({ ...t, [slot]: v }))}
-                      allowClear
-                      placeholder="(none)"
-                    >
-                      {allModels.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
-                    </Select>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
+        <AddProvider
+          presets={presets.data ?? []}
+          existingIds={new Set(providers.map((p) => p.id))}
+          onAdd={(p) => setProviders((ps) => [...ps, p])}
+        />
 
-          {put.error && <ErrorBanner error={put.error} />}
-          <div className="flex items-center justify-end gap-2">
-            {put.isSuccess && <span className="text-xs" style={{ color: 'rgb(var(--green-6))' }}>✓ Saved</span>}
-            <Button
-              type="primary"
-              loading={put.isPending}
-              disabled={!canSave}
-              onClick={() => put.mutate(buildTemplate(), { onSuccess: () => Message.success('已保存 models 模板') })}
-            >
-              保存
-            </Button>
-          </div>
+        {put.error && <ErrorBanner error={put.error} />}
+        <div className="flex items-center justify-end gap-2">
+          {put.isSuccess && <span className="text-xs" style={{ color: 'rgb(var(--green-6))' }}>✓ Saved</span>}
+          <Button
+            type="primary"
+            loading={put.isPending}
+            disabled={!canSave}
+            onClick={() => put.mutate(buildTemplate(), { onSuccess: () => Message.success('已保存供应商') })}
+          >
+            保存
+          </Button>
         </div>
-      )}
+      </div>
     </Card>
   );
 }
@@ -217,38 +171,14 @@ function ProviderEditor({
   onChange(next: DraftProvider): void;
   onRemove(): void;
 }) {
-  const probe = useProbeModels();
-  const [available, setAvailable] = useState<string[]>(prov.models);
-  const [manual, setManual] = useState('');
   const preset = presets.find((p) => p.id === prov.presetId);
-
-  const runProbe = () => {
-    probe.mutate(
-      { presetId: prov.presetId, apiKey: prov.apiKey, baseUrl: prov.baseUrl },
-      { onSuccess: (r) => setAvailable(Array.from(new Set([...r.models, ...prov.models])).sort()) },
-    );
-  };
-
-  const addManual = () => {
-    const id = manual.trim();
-    if (!id) return;
-    setAvailable((a) => Array.from(new Set([...a, id])).sort());
-    if (!prov.models.includes(id)) onChange({ ...prov, models: [...prov.models, id] });
-    setManual('');
-  };
-
-  // The probe fell back to a hardcoded list (live fetch failed or the provider
-  // has no /models endpoint). Showing that as if "pulled" is worse than nothing
-  // — flag it and steer to manual entry.
-  const isCached = probe.data?.source === 'known';
+  const isRaw = prov.presetId === RAW_PRESET_ID;
 
   return (
     <div className="rounded-md p-3 space-y-2" style={{ border: '1px solid var(--color-border-2)' }}>
       <div className="flex items-center justify-between">
         <div className="font-medium text-sm">
           {prov.label || prov.id}
-          {/* Only show the preset name as a secondary hint when it differs from
-              the primary label — otherwise it reads as a duplicated title. */}
           {(() => {
             const secondary = preset?.label ?? prov.presetId;
             const primary = prov.label || prov.id;
@@ -256,6 +186,13 @@ function ProviderEditor({
               <span className="font-normal ml-2 text-xs" style={{ color: 'var(--color-text-4)' }}>{secondary}</span>
             ) : null;
           })()}
+          {preset && preset.protocols.length > 0 && (
+            <span className="ml-2 inline-flex gap-1 align-middle">
+              {preset.protocols.map((pr) => (
+                <Tag key={pr} size="small" color={pr === 'anthropic' ? 'arcoblue' : undefined}>{pr}</Tag>
+              ))}
+            </span>
+          )}
         </div>
         <Button type="text" size="mini" status="danger" onClick={onRemove}>Remove</Button>
       </div>
@@ -270,55 +207,30 @@ function ProviderEditor({
         </a>
       )}
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button size="small" disabled={!prov.apiKey} loading={probe.isPending} onClick={runProbe}>
-          Pull model list
-        </Button>
-        {probe.data?.source === 'live' && (
-          <span className="text-xs" style={{ color: 'rgb(var(--green-6))' }}>✓ {available.length} live models</span>
-        )}
-        {isCached && (
-          <span className="text-xs" style={{ color: 'rgb(var(--orange-6))' }}>
-            ⚠ couldn't pull a live list{probe.data?.warning ? ` (${probe.data.warning})` : ''} — type model ids below
-          </span>
-        )}
+      {/* Endpoint overrides. Raw providers MUST set at least one; preset
+          providers may override the built-in URL (rare). */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {(['anthropic', 'openai'] as const).map((proto) => {
+          const presetUrl = preset?.endpoints?.[proto];
+          const show = isRaw || presetUrl;
+          if (!show) return null;
+          return (
+            <label key={proto} className="text-sm">
+              <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>
+                {proto} endpoint{isRaw ? '' : ' (override)'}
+              </span>
+              <Input
+                value={prov.endpoints?.[proto] ?? ''}
+                placeholder={presetUrl ?? `https://… (${proto})`}
+                onChange={(v) => onChange({
+                  ...prov,
+                  endpoints: { ...prov.endpoints, [proto]: v.trim() || undefined },
+                })}
+              />
+            </label>
+          );
+        })}
       </div>
-      {probe.error && <FieldError>{probe.error instanceof Error ? probe.error.message : String(probe.error)}</FieldError>}
-
-      {/* Manual model-id entry — always available, the reliable path when a
-          provider has no catalog endpoint or returns the wrong shape. */}
-      <div className="flex items-end gap-2">
-        <label className="text-sm flex-1">
-          <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Add model id manually</span>
-          <Input
-            value={manual}
-            placeholder="e.g. anthropic/claude-opus-4.7"
-            onChange={setManual}
-            onPressEnter={addManual}
-          />
-        </label>
-        <Button disabled={!manual.trim()} onClick={addManual}>Add</Button>
-      </div>
-
-      {available.length > 0 && (
-        <div className="max-h-44 overflow-auto rounded p-2" style={{ border: '1px solid var(--color-border-2)' }}>
-          {available.map((m) => {
-            const on = prov.models.includes(m);
-            return (
-              <label key={m} className="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
-                <Checkbox
-                  checked={on}
-                  onChange={() => onChange({
-                    ...prov,
-                    models: on ? prov.models.filter((x) => x !== m) : [...prov.models, m],
-                  })}
-                />
-                <code className="text-xs">{m}</code>
-              </label>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -335,64 +247,41 @@ function AddProvider({
   const [presetId, setPresetId] = useState('');
 
   const add = () => {
+    if (!presetId) return;
     const preset = presets.find((p) => p.id === presetId);
-    if (!preset) return;
-    // Unique local id: preset id, then preset-2 etc. on collision.
-    let id = preset.id;
+    const baseId = preset ? preset.id : 'custom';
+    let id = baseId;
     let n = 2;
-    while (existingIds.has(id)) id = `${preset.id}-${n++}`;
-    onAdd({ id, presetId: preset.id, apiKey: '', label: preset.label, models: [] });
+    while (existingIds.has(id)) id = `${baseId}-${n++}`;
+    onAdd({
+      id,
+      presetId: preset ? preset.id : RAW_PRESET_ID,
+      apiKey: '',
+      label: preset?.label,
+      endpoints: preset ? undefined : { openai: '' },
+    });
     setPresetId('');
   };
 
+  // Native <select> keeps this dependency-light; the rich picker is for models.
   return (
     <div className="flex items-end gap-2">
       <label className="text-sm flex-1">
         <span className="block text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Add provider</span>
-        <Select value={presetId} onChange={setPresetId} placeholder="Choose a provider…">
-          {presets.map((p) => <Select.Option key={p.id} value={p.id}>{p.label}</Select.Option>)}
-        </Select>
+        <select
+          value={presetId}
+          onChange={(e) => setPresetId(e.target.value)}
+          className="w-full rounded-md px-3 py-2 text-sm"
+          style={{ border: '1px solid var(--color-border-2)', background: 'var(--color-bg-2)', color: 'var(--color-text-1)' }}
+        >
+          <option value="">Choose a provider…</option>
+          {presets.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          <option value={RAW_PRESET_ID}>Custom (raw endpoint)</option>
+        </select>
       </label>
       <Button disabled={!presetId} onClick={add}>Add</Button>
     </div>
   );
-}
-
-function AdvancedJson({ template, onApply }: { template: ModelsTemplate; onApply(t: ModelsTemplate): void }) {
-  const [draft, setDraft] = useState(() => JSON.stringify(template, null, 2));
-  const [err, setErr] = useState<string | null>(null);
-  return (
-    <div className="space-y-2">
-      <Input.TextArea
-        className="font-mono"
-        value={draft}
-        spellCheck={false}
-        onChange={setDraft}
-        style={{ height: 320, fontSize: 12, resize: 'vertical' }}
-      />
-      {err && <FieldError>{err}</FieldError>}
-      <div className="flex justify-end">
-        <Button
-          onClick={() => {
-            try {
-              const t = JSON.parse(draft) as ModelsTemplate;
-              if (!t.providers || !t.models || !t.tiers) throw new Error('need providers, models, tiers');
-              setErr(null);
-              onApply(t);
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : String(e));
-            }
-          }}
-        >
-          Apply to form
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function FieldError({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>{children}</div>;
 }
 
 // ============================================================
@@ -404,7 +293,10 @@ function AdminAgentCard() {
   const template = useModelsTemplate();
   const ensure = useEnsureAdminAgent();
 
-  const templateReady = useMemo(() => !!template.data?.template, [template.data]);
+  const templateReady = useMemo(
+    () => !!template.data?.template && Object.keys(template.data.template.models ?? {}).length > 0,
+    [template.data],
+  );
 
   return (
     <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Admin agent</span>}>
@@ -426,7 +318,7 @@ function AdminAgentCard() {
         <div className="space-y-2">
           {!templateReady && (
             <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>
-              Configure models above first.
+              先在 <strong>Models</strong> 页配置至少一个模型。
             </div>
           )}
           {ensure.error && <ErrorBanner error={ensure.error} />}

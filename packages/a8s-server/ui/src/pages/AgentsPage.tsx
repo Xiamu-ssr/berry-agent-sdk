@@ -17,6 +17,8 @@ import {
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { relativeTime } from '../components/StatusPill.js';
 import { EventStream } from '../components/EventStream.js';
+import { EntityPickerField } from '../components/EntityPicker.js';
+import { modelPickerConfig } from '../components/entityConfigs.js';
 
 export function AgentsPage() {
   const agents = useAgents();
@@ -154,15 +156,6 @@ function CreateAgentModal({
   const [selectedHands, setSelectedHands] = useState<string[]>([]);
   const [grantedMachines, setGrantedMachines] = useState<string[]>([]);
 
-  const modelOptions = useMemo(() => {
-    if (!template.data?.template) return { tiers: [] as string[], models: [] as string[] };
-    const t = template.data.template;
-    return {
-      tiers: Object.keys(t.tiers ?? {}).map((k) => `tier:${k}`),
-      models: Object.keys(t.models ?? {}),
-    };
-  }, [template.data]);
-
   const machineOptions = useMemo(() => {
     const set = new Set<string>();
     (workers.data ?? []).forEach((w) => {
@@ -241,19 +234,14 @@ function CreateAgentModal({
             <Input value={agentId} onChange={setAgentId} placeholder="e.g. helper-1" autoFocus />
           </Form.Item>
 
-          <Form.Item label="模型" extra="从集群级 models 模板里选。">
-            <Select value={model} onChange={setModel} placeholder="选一个模型…">
-              {modelOptions.tiers.length > 0 && (
-                <Select.OptGroup label="Tiers(推荐)">
-                  {modelOptions.tiers.map((t) => <Select.Option key={t} value={t}>{t}</Select.Option>)}
-                </Select.OptGroup>
-              )}
-              {modelOptions.models.length > 0 && (
-                <Select.OptGroup label="Models">
-                  {modelOptions.models.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
-                </Select.OptGroup>
-              )}
-            </Select>
+          <Form.Item label="模型" extra="从 Models 页配置的模型/档位里选。">
+            <EntityPickerField
+              config={modelPickerConfig}
+              value={model || null}
+              onChange={(v) => setModel(v ?? '')}
+              title="选择模型"
+              placeholder="点击选择模型 / 档位…"
+            />
           </Form.Item>
 
           <Form.Item

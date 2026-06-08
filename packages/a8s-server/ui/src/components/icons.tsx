@@ -152,6 +152,16 @@ export function ChevronIcon(props: IconProps) {  return (
   );
 }
 
+/** Settings — a gear. */
+export function SettingsIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.2 5.2l1.8 1.8M17 17l1.8 1.8M18.8 5.2 17 7M7 17l-1.8 1.8" />
+    </svg>
+  );
+}
+
 /** Hand — the capability an agent grasps. */
 export function HandIcon(props: IconProps) {
   return (

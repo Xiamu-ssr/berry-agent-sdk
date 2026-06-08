@@ -1,8 +1,9 @@
 import { Tag } from '@arco-design/web-react';
 import type { EntityPickerConfig } from './EntityPicker.js';
 import {
-  useAgents, useMachines, useHandRecipes, useSkills, useSessions,
+  useAgents, useMachines, useHandRecipes, useSkills, useSessions, useModelEntries,
   type Agent, type Machine, type HandRecipe, type RegistrySkill, type SessionSummary,
+  type ModelEntry,
 } from '../api/queries.js';
 
 // ============================================================
@@ -71,3 +72,27 @@ export function sessionPickerConfig(agentId: string | null): EntityPickerConfig<
     emptyText: '该 Agent 还没有会话',
   };
 }
+
+const FAMILY_COLOR: Record<string, string> = { anthropic: 'arcoblue' };
+
+/**
+ * The model picker every "pick a model" surface reuses (agent main model,
+ * classifier, admin). Lists tiers (L3, `tier:strong`) and concrete models (L2),
+ * each badged with its protocol family. Search spans id + family. Pass
+ * `disabledFamily`/`isDisabled` (P5) later to grey out cross-family choices.
+ */
+export const modelPickerConfig: EntityPickerConfig<ModelEntry> = {
+  useList: useModelEntries,
+  getId: (m) => m.id,
+  getLabel: (m) => <code className="font-mono text-xs">{m.label}</code>,
+  getHint: (m) => (m.isTier ? `档位 → ${m.target ?? '?'}` : undefined),
+  getBadge: (m) => (
+    <span className="flex items-center gap-1">
+      {m.isTier && <Tag size="small">tier</Tag>}
+      {m.family && <Tag size="small" color={FAMILY_COLOR[m.family]}>{m.family}</Tag>}
+    </span>
+  ),
+  getSearchText: (m) => `${m.id} ${m.family ?? ''} ${m.isTier ? 'tier' : ''}`.toLowerCase(),
+  placeholder: '搜索模型 / 档位…',
+  emptyText: '还没有配置模型 — 去 Models 页创建',
+};
