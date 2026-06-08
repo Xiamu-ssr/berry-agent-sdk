@@ -137,11 +137,14 @@ export async function startMachineConnector(
     mcpManifest: mcpHost?.manifest(),
     mcpConfigPath: mcpConfigPath,
     logger,
+    // Keep the daemon's /exec token in lockstep with the registration token —
+    // fires on the initial register and on every re-register (a8s restart),
+    // so exec never 401s on a stale token.
+    onToken: (token) => daemon.setAuthToken(token),
   });
 
   try {
-    const result = await reg.register();
-    daemon.setAuthToken(result.machineToken);
+    await reg.register();
   } catch (err) {
     // Registration failed — don't leave the port bound or MCP sessions open.
     await daemon.stop().catch(() => {});

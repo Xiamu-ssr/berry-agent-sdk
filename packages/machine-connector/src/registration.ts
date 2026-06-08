@@ -46,6 +46,14 @@ export interface MachineRegistrationClientOptions {
   heartbeatIntervalMs?: number;
   /** Bootstrap secret (a8s --admin-token). After register, switches to machine token. */
   adminToken?: string;
+  /**
+   * Fired whenever the machine token changes — on the initial register AND on
+   * every re-register (after a heartbeat 401/404/410 / a8s restart). The
+   * connector wires this to daemon.setAuthToken so the /exec validator always
+   * holds the live token. Without it the daemon keeps the first token and
+   * rejects a8s's calls with 401 after any re-register.
+   */
+  onToken?: (token: string) => void;
   /** Test injection. */
   fetch?: typeof fetch;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
@@ -108,6 +116,11 @@ export class MachineRegistrationClient {
     }
     const parsed = machineRegistrationResponseSchema.parse(await response.json());
     this.token = parsed.machineToken;
+    // Publish the (possibly new) token so the daemon's /exec validator tracks
+    // it. Fires on first register AND every re-register — the latter is the
+    // whole point: without this, a re-register after an a8s restart leaves the
+    // daemon on the stale token and every exec 401s.
+    this.options.onToken?.(parsed.machineToken);
     this.startHeartbeatLoop();
     this.logger.log?.(`[machine-connector] registered with a8s as ${parsed.machineId}`);
     return parsed;
