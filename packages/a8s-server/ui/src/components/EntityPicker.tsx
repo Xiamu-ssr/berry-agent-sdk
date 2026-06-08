@@ -28,6 +28,14 @@ export interface EntityPickerConfig<T> {
   getBadge?: (item: T) => ReactNode;
   /** Lowercased haystack for the search box (defaults to id). */
   getSearchText?: (item: T) => string;
+  /**
+   * Grey out + block selection for a row (e.g. cross-family models when a
+   * session is locked to one protocol family). Disabled rows still render so
+   * the user sees why a choice is unavailable.
+   */
+  isDisabled?: (item: T) => boolean;
+  /** Tooltip/hint shown on a disabled row explaining why it can't be picked. */
+  disabledHint?: (item: T) => string;
   placeholder?: string;
   emptyText?: string;
 }
@@ -82,14 +90,20 @@ export function EntityPicker<T>({
           rows.map((item) => {
             const id = config.getId(item);
             const on = id === value;
+            const disabled = config.isDisabled?.(item) ?? false;
+            const hint = disabled ? config.disabledHint?.(item) : undefined;
             return (
               <button
                 key={id}
-                onClick={() => onPick(id, item)}
+                disabled={disabled}
+                title={hint}
+                onClick={() => { if (!disabled) onPick(id, item); }}
                 className="text-left rounded-md p-2.5 transition-all"
                 style={{
                   border: on ? '2px solid rgb(var(--arcoblue-6))' : '1px solid var(--color-border-2)',
                   background: on ? 'var(--color-fill-1)' : 'var(--color-bg-2)',
+                  opacity: disabled ? 0.45 : 1,
+                  cursor: disabled ? 'not-allowed' : 'pointer',
                 }}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -97,8 +111,10 @@ export function EntityPicker<T>({
                     <div className="truncate text-sm" style={{ color: 'var(--color-text-1)' }}>
                       {config.getLabel ? config.getLabel(item) : <code className="font-mono text-xs">{id}</code>}
                     </div>
-                    {config.getHint && (
-                      <div className="truncate text-xs mt-0.5" style={{ color: 'var(--color-text-3)' }}>{config.getHint(item)}</div>
+                    {(hint || config.getHint) && (
+                      <div className="truncate text-xs mt-0.5" style={{ color: hint ? 'rgb(var(--orange-6))' : 'var(--color-text-3)' }}>
+                        {hint ?? (config.getHint ? config.getHint(item) : null)}
+                      </div>
                     )}
                   </div>
                   {config.getBadge && <div className="shrink-0">{config.getBadge(item)}</div>}

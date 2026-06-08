@@ -96,3 +96,22 @@ export const modelPickerConfig: EntityPickerConfig<ModelEntry> = {
   placeholder: '搜索模型 / 档位…',
   emptyText: '还没有配置模型 — 去 Models 页创建',
 };
+
+/**
+ * Family-locked variant of the model picker: when an agent/session is already
+ * pinned to a protocol family (anthropic vs openai), cross-family models are
+ * greyed out. A session can't mix families — thinking-block signatures are
+ * validated per backend, so switching family mid-session would poison history.
+ * The runtime guard is the real protection; this is the UI belt. Pass
+ * `currentFamily = null/undefined` (e.g. at create time) to impose no lock.
+ */
+export function modelPickerConfigForFamily(
+  currentFamily?: 'anthropic' | 'openai' | null,
+): EntityPickerConfig<ModelEntry> {
+  if (!currentFamily) return modelPickerConfig;
+  return {
+    ...modelPickerConfig,
+    isDisabled: (m) => m.family != null && m.family !== currentFamily,
+    disabledHint: (m) => `${m.family} 模型不能与当前 ${currentFamily} 会话混用`,
+  };
+}
