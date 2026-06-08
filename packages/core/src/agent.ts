@@ -113,6 +113,8 @@ export class Agent {
   private compactionStrategy?: CompactionStrategy;
   private onEvent?: (event: AgentEvent) => void;
   private toolGuard?: ToolGuard;
+  /** Rebuilds the tool guard for a new classifier model. See setClassifierModel. */
+  private classifierGuardBuilder?: (classifierModelRef: string) => ToolGuard;
   private middleware: Middleware[];
   private eventLogStore?: EventLogStore;
   private promptPack: PromptPack;
@@ -230,6 +232,7 @@ export class Agent {
     this.compactionStrategy = boot.compactionStrategy;
     this.onEvent = boot.onEvent;
     this.toolGuard = boot.toolGuard;
+    this.classifierGuardBuilder = config.classifierGuardBuilder;
     this.middleware = boot.middleware;
     this.eventLogStore = boot.eventLogStore;
     this.promptPack = boot.promptPack;
@@ -512,6 +515,25 @@ export class Agent {
    */
   setReasoningEffort(effort: ReasoningEffort): void {
     this.providerRuntime.setReasoningEffort(effort);
+  }
+
+  /**
+   * Swap the auto-approval safety classifier's model live. Rebuilds the tool
+   * guard via the captured `classifierGuardBuilder` and persists the choice to
+   * agent.json so a restart rehydrates it. Takes effect on the next turn
+   * (`this.toolGuard` is read fresh per turn). No-op-with-throw when the agent
+   * wasn't built with a classifier guard builder (e.g. safety level not `auto`).
+   */
+  setClassifierModel(classifierModelRef: string): void {
+    this.assertNotDisposed('setClassifierModel');
+    if (!this.classifierGuardBuilder) {
+      throw new Error(
+        'setClassifierModel: this agent has no classifier guard builder ' +
+        '(safety level is not "auto", or the runtime did not wire one)',
+      );
+    }
+    this.toolGuard = this.classifierGuardBuilder(classifierModelRef);
+    saveAgentConfigSync(this._home.root, { classifierModel: classifierModelRef });
   }
 
   /** Get current provider config (read-only) */

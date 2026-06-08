@@ -78,6 +78,19 @@ function assembleManagedRuntime(
       })
     : undefined;
 
+  // Build the managed tool guard, optionally overriding the classifier model
+  // (used by the live classifierGuardBuilder). Captures safetyLevel + scope so
+  // a rebuild keeps every other safety knob identical.
+  const buildGuard = (classifierModelOverride?: string) =>
+    buildManagedToolGuard(safetyLevel, {
+      scope,
+      askBridge: options.safety?.askBridge,
+      agentId: options.agentId,
+      classifier: safetyLevel === 'auto'
+        ? buildSafetyClassifier(options, classifierModelOverride)
+        : undefined,
+    });
+
   const runtime = ManagedAgentRuntime.create({
     agentId: options.agentId,
     toolDenylist: options.toolDenylist ?? [],
@@ -112,12 +125,14 @@ function assembleManagedRuntime(
         projectDir: options.projectRoot,
       }),
       ...buildSkillLoadout(options.agentId, options.home, options.skills),
-      toolGuard: buildManagedToolGuard(safetyLevel, {
-        scope,
-        askBridge: options.safety?.askBridge,
-        agentId: options.agentId,
-        classifier: safetyLevel === 'auto' ? buildSafetyClassifier(options) : undefined,
-      }),
+      toolGuard: buildGuard(),
+      // Let setClassifierModel() rebuild the guard live with a new classifier
+      // model, reusing the same safety level / scope / registry captured here.
+      // Only meaningful at safety level `auto`; at other levels the rebuilt
+      // guard simply has no classifier (the override is ignored downstream).
+      classifierGuardBuilder: safetyLevel === 'auto'
+        ? (classifierModelRef: string) => buildGuard(classifierModelRef)
+        : undefined,
       middleware: collector ? [collector.middleware] : undefined,
       onEvent: (event) => {
         collector?.eventListener(event);
@@ -308,9 +323,17 @@ function builtinHandIds(options: ManagedRuntimeBuildOptions): string[] {
   return ids;
 }
 
-function buildSafetyClassifier(options: ManagedRuntimeBuildOptions): ManagedToolGuardOptions['classifier'] {
+function buildSafetyClassifier(
+  options: ManagedRuntimeBuildOptions,
+  modelOverride?: string,
+): ManagedToolGuardOptions['classifier'] {
+  // The override (from setClassifierModel) wins over the configured model.
+  const configured = options.safety?.classifier;
+  const merged = modelOverride
+    ? { ...configured, model: modelOverride }
+    : configured;
   const resolved = resolveClassifierConfig({
-    safe: options.safety?.classifier === undefined ? undefined : { classifier: options.safety.classifier },
+    safe: merged === undefined ? undefined : { classifier: merged },
     registry: options.registry,
   });
   if (!resolved) return undefined;

@@ -86,6 +86,7 @@ export interface AgentSession {
   switchModel(modelRef: string): Promise<void>;
   setSystemPrompt(blocks: SystemPromptInput): Promise<void>;
   setReasoningEffort(effort: ReasoningEffort): Promise<void>;
+  setClassifierModel(classifierModelRef: string): Promise<void>;
   setToolDenylist(names?: string[]): Promise<void>;
 }
 
@@ -192,6 +193,10 @@ export class InProcessAgentSession implements AgentSession {
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
     this.runtime.setReasoningEffort(effort);
+  }
+
+  async setClassifierModel(classifierModelRef: string): Promise<void> {
+    this.runtime.setClassifierModel(classifierModelRef);
   }
 
   async setToolDenylist(names: string[] = []): Promise<void> {

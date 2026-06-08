@@ -160,6 +160,11 @@ export class ManagedAgentRuntime {
     this.agent.setReasoningEffort(effort);
   }
 
+  /** Swap the safety classifier's model live + persist to agent.json. */
+  setClassifierModel(classifierModelRef: string): void {
+    this.agent.setClassifierModel(classifierModelRef);
+  }
+
   setToolDenylist(names: string[] = []): void {
     this.agent.setToolDenylist(names);
   }

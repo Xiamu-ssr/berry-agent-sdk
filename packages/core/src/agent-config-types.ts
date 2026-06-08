@@ -82,6 +82,14 @@ export interface AgentConfig {
   middleware?: Middleware[];
   /** Tool execution guard. */
   toolGuard?: ToolGuard;
+  /**
+   * Rebuild the tool guard for a new classifier model, used by
+   * `setClassifierModel()` to swap the safety classifier live (mirrors
+   * `builtinHandBuilders`). The runtime builder captures the same safety
+   * level / scope / registry it used at construction. Absent → the classifier
+   * model cannot be changed at runtime.
+   */
+  classifierGuardBuilder?: (classifierModelRef: string) => ToolGuard;
   /** Append-only session event log. */
   eventLogStore?: EventLogStore;
   /**

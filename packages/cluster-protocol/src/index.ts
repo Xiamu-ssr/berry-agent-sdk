@@ -614,6 +614,8 @@ export type AgentHomeWriteResponse = z.infer<typeof agentHomeWriteResponseSchema
 export const agentSpecPatchRequestSchema = z.object({
   /** tier:X / model:X / bare model id — resolved by the worker's registry. */
   model: z.string().min(1).optional(),
+  /** Classifier (auto-approval) model. Rebuilds the safety guard live. */
+  classifierModel: z.string().min(1).optional(),
   reasoningEffort: z.string().optional(),
   /** Tool names refused regardless of safety guard. Empty array clears. */
   toolDenylist: z.array(z.string()).optional(),

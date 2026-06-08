@@ -518,6 +518,7 @@ export class WorkerDaemon<TEntry = unknown> {
     if (!mount) return;
     const patch = agentSpecPatchRequestSchema.parse(await readJson(req));
     if (patch.model !== undefined) await mount.runtime.switchModel(patch.model);
+    if (patch.classifierModel !== undefined) mount.runtime.setClassifierModel(patch.classifierModel);
     if (patch.reasoningEffort !== undefined) {
       mount.runtime.setReasoningEffort(patch.reasoningEffort as Parameters<typeof mount.runtime.setReasoningEffort>[0]);
     }

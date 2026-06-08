@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ManagedAgentRuntime } from '../runtime.js';
 import type { Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent } from '../index.js';
 import type { MemoryProvider } from '../memory/provider.js';
+import type { ToolGuard } from '../index.js';
+import { loadAgentConfigSync } from '../workspace/initializer.js';
 import { tmpHome } from './helpers.js';
 
 class StreamingProvider implements Provider {
@@ -197,5 +199,45 @@ describe('ManagedAgentRuntime', () => {
     expect(memory.init).toHaveBeenCalledOnce();
     await runtime.dispose();
     expect(memory.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ManagedAgentRuntime.setClassifierModel', () => {
+  it('rebuilds the guard via the captured builder and persists to agent.json', () => {
+    const home = tmpHome('berry-runtime-classifier-');
+    const builtFor: string[] = [];
+    const runtime = ManagedAgentRuntime.create({
+      agentId: 'agent_clf',
+      config: {
+        provider: { type: 'anthropic', model: 'fake-model', apiKey: 'test' },
+        providerInstance: new StreamingProvider(),
+        home,
+        classifierModel: 'tier:cheap',
+        // Stand-in for the runtime's real builder: records the model it was
+        // asked to build for and returns a trivial guard.
+        classifierGuardBuilder: (modelRef: string): ToolGuard => {
+          builtFor.push(modelRef);
+          return { evaluate: async () => ({ decision: 'allow' }) } as unknown as ToolGuard;
+        },
+      },
+    });
+
+    runtime.setClassifierModel('tier:strong');
+
+    expect(builtFor).toEqual(['tier:strong']);
+    // Persisted: a restart rehydrates the new classifier model.
+    expect(loadAgentConfigSync(home.root).classifierModel).toBe('tier:strong');
+  });
+
+  it('throws when the agent was built without a classifier guard builder', () => {
+    const runtime = ManagedAgentRuntime.create({
+      agentId: 'agent_no_clf',
+      config: {
+        provider: { type: 'anthropic', model: 'fake-model', apiKey: 'test' },
+        providerInstance: new StreamingProvider(),
+        home: tmpHome('berry-runtime-no-clf-'),
+      },
+    });
+    expect(() => runtime.setClassifierModel('tier:strong')).toThrow(/no classifier guard builder/);
   });
 });
