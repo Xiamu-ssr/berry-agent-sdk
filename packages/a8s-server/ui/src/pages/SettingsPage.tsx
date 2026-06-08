@@ -11,6 +11,8 @@ import {
   type ProviderEndpoints,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner } from '../components/Page.js';
+import { EntityPickerField } from '../components/EntityPicker.js';
+import { modelPickerConfig } from '../components/entityConfigs.js';
 
 export function SettingsPage() {
   return (
@@ -293,6 +295,12 @@ function AdminAgentCard() {
   const template = useModelsTemplate();
   const ensure = useEnsureAdminAgent();
 
+  // berry-admin goes through the normal agent config path — the operator picks
+  // its model + classifier like any agent (no hardcoded tier:strong). Empty =
+  // bootstrap default (tier:strong main, SDK-default classifier).
+  const [model, setModel] = useState<string | null>(null);
+  const [classifierModel, setClassifierModel] = useState<string | null>(null);
+
   const templateReady = useMemo(
     () => !!template.data?.template && Object.keys(template.data.template.models ?? {}).length > 0,
     [template.data],
@@ -315,18 +323,45 @@ function AdminAgentCard() {
           Chat with it on the <strong>Admin chat</strong> page.
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {!templateReady && (
             <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>
               先在 <strong>Models</strong> 页配置至少一个模型。
             </div>
           )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>主模型(留空 = tier:strong)</div>
+              <EntityPickerField
+                config={modelPickerConfig}
+                value={model}
+                onChange={setModel}
+                title="选择 admin 主模型"
+                placeholder="默认 tier:strong…"
+                clearable
+              />
+            </div>
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>审批模型(留空 = 默认)</div>
+              <EntityPickerField
+                config={modelPickerConfig}
+                value={classifierModel}
+                onChange={setClassifierModel}
+                title="选择 admin 审批模型"
+                placeholder="默认…"
+                clearable
+              />
+            </div>
+          </div>
           {ensure.error && <ErrorBanner error={ensure.error} />}
           <Button
             type="primary"
             loading={ensure.isPending}
             disabled={!templateReady}
-            onClick={() => ensure.mutate()}
+            onClick={() => ensure.mutate({
+              ...(model ? { model } : {}),
+              ...(classifierModel ? { classifierModel } : {}),
+            })}
           >
             Bootstrap admin agent
           </Button>

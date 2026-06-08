@@ -781,10 +781,21 @@ export function useAdminAgentStatus() {
     refetchInterval: 10_000,
   });
 }
+export interface EnsureAdminAgentInput {
+  model?: string;
+  classifierModel?: string;
+}
 export function useEnsureAdminAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api<AdminAgentStatus>('/v1/operator/admin-agent', { method: 'POST', body: '{}' }),
+    mutationFn: (input: EnsureAdminAgentInput = {}) =>
+      api<AdminAgentStatus>('/v1/operator/admin-agent', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.classifierModel ? { classifierModel: input.classifierModel } : {}),
+        }),
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-agent'] });
       void qc.invalidateQueries({ queryKey: ['agents'] });

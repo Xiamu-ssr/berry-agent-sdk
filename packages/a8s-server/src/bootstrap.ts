@@ -20,8 +20,10 @@ import { type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
 export interface AdminAgentConfig {
   /** Stable agent id; default 'berry-admin'. */
   agentId?: string;
-  /** Model ref; default 'tier:strong'. */
+  /** Main model ref. Default 'tier:strong' when the operator doesn't pick one. */
   model?: string;
+  /** Auto-approval classifier model. Omitted → SDK default. */
+  classifierModel?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export async function ensureAdminAgent(
     agentId,
     workspace: agentId,
     model: config.model ?? 'tier:strong',
+    ...(config.classifierModel ? { classifierModel: config.classifierModel } : {}),
     ensureDefaultMcpConfig: false,
     labels: { role: 'a8s-admin' },
   };

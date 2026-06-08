@@ -1199,6 +1199,19 @@ export const adminAgentStatusResponseSchema = z.object({
 }).strict();
 export type AdminAgentStatusResponse = z.infer<typeof adminAgentStatusResponseSchema>;
 
+/**
+ * POST body for scheduling berry-admin. The admin agent goes through the
+ * normal agent config path — the operator picks its model + classifier like any
+ * agent (no hardcoded tier). Both optional: omitted → bootstrap defaults
+ * (tier:strong main, SDK-default classifier). The `labels.role='a8s-admin'`
+ * wiring that injects cluster-admin tools is applied server-side, not here.
+ */
+export const adminAgentEnsureRequestSchema = z.object({
+  model: z.string().min(1).optional(),
+  classifierModel: z.string().min(1).optional(),
+}).strict();
+export type AdminAgentEnsureRequest = z.infer<typeof adminAgentEnsureRequestSchema>;
+
 // ============================================================
 // Operator: wake queue view
 // ============================================================

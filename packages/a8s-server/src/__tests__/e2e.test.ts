@@ -1034,6 +1034,14 @@ describe('a8s-server + worker-daemon E2E', () => {
     const agents2 = listAgentsResponseSchema.parse(await agentsResp2.json());
     expect(agents2.agents.filter((a) => a.agentId === 'berry-admin')).toHaveLength(1);
 
+    // ---- berry-admin's agent.json went through the normal config path:
+    // it carries a `model` (the default tier:strong, persisted like any agent)
+    // and the a8s-admin label wiring above still fired. No special shortcut. ----
+    const adminMeta = JSON.parse(
+      readFileSync(join(agentsRoot, 'berry-admin', 'agent.json'), 'utf-8'),
+    ) as { model?: string };
+    expect(adminMeta.model).toBe('tier:strong');
+
     await w.stop();
     await a8s.stop();
   });

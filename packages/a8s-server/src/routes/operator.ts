@@ -4,12 +4,13 @@
 
 import {
   A8S_PATHS,
+  adminAgentEnsureRequestSchema,
   adminAgentStatusResponseSchema,
   operatorClusterReportSchema,
   operatorLeaseListResponseSchema,
   operatorLeaseSchema,
 } from '@berry-agent/cluster-protocol';
-import { writeJson } from '../http-helpers.js';
+import { readJsonBody, writeJson } from '../http-helpers.js';
 import type { RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
 import { requireAdminToken } from '../auth.js';
@@ -101,11 +102,17 @@ export function operatorRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinitio
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'admin_agent.ensure', target: () => ADMIN_AGENT_ID }),
       ],
-      handler: async ({ res }) => {
+      handler: async ({ req, res }) => {
         // Idempotent: schedules berry-admin onto an active worker if it
         // isn't already running. The worker injects the cluster-admin
         // tools + seeds AGENTS.md via its resolveSpec (label-driven).
-        await ensureAdminAgent(deps.plane);
+        // The admin agent goes through the normal config path — the operator
+        // may pick its model + classifier; omitted fields fall back to defaults.
+        const body = adminAgentEnsureRequestSchema.parse((await readJsonBody(req)) ?? {});
+        await ensureAdminAgent(deps.plane, {
+          ...(body.model ? { model: body.model } : {}),
+          ...(body.classifierModel ? { classifierModel: body.classifierModel } : {}),
+        });
         const loc = deps.plane.getAgentLocation(ADMIN_AGENT_ID);
         writeJson(res, 200, adminAgentStatusResponseSchema.parse({
           agentId: ADMIN_AGENT_ID,
