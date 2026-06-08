@@ -17,8 +17,7 @@ describe('listModels', () => {
     const inst: ProviderInstance = {
       id: 'raw1',
       presetId: RAW_PRESET_ID,
-      baseUrl: 'https://example.com',
-      type: 'openai',
+      endpoints: { openai: 'https://example.com' },
       apiKey: 'x',
       knownModels: ['zeta', 'alpha'],
     };
@@ -112,22 +111,48 @@ describe('listModels', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it('supports the ZenMux OpenAI-compatible preset', async () => {
+  it('probes a dual-endpoint channel (ZenMux) on its anthropic endpoint by default', () => {
+    // ZenMux declares both endpoints; with no explicit protocol, listModels
+    // prefers the anthropic endpoint (richer catalog for most gateways).
     const inst: ProviderInstance = {
-      id: 'zenmux_openai',
-      presetId: 'zenmux-openai',
+      id: 'zenmux_01',
+      presetId: 'zenmux',
       apiKey: 'zen-key',
     };
-    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      expect(String(url)).toBe('https://zenmux.ai/api/v1/models');
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      expect(headers.Authorization).toBe('Bearer zen-key');
-      return new Response(JSON.stringify({
-        data: [{ id: 'google/gemini-3.1-pro-preview' }],
-      }), { status: 200 });
-    }) as unknown as typeof fetch;
-    const res = await listModels(inst, { fetch: fetchMock });
-    expect(res.source).toBe('live');
-    expect(res.models).toEqual(['google/gemini-3.1-pro-preview']);
+    return (async () => {
+      const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+        expect(String(url)).toBe('https://zenmux.ai/api/anthropic/v1/models');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers['x-api-key']).toBe('zen-key');
+        return new Response(JSON.stringify({
+          data: [{ id: 'anthropic/claude-opus-4.7' }],
+        }), { status: 200 });
+      }) as unknown as typeof fetch;
+      const res = await listModels(inst, { fetch: fetchMock });
+      expect(res.source).toBe('live');
+      expect(res.models).toEqual(['anthropic/claude-opus-4.7']);
+    })();
+  });
+
+  it('probes the openai endpoint when protocol is explicitly openai', () => {
+    const inst: ProviderInstance = {
+      id: 'zenmux_01',
+      presetId: 'zenmux',
+      apiKey: 'zen-key',
+    };
+    return (async () => {
+      const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+        // openai endpoint already ends in /v1; the preset path joins after it.
+        expect(String(url)).toBe('https://zenmux.ai/api/v1/v1/models');
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        expect(headers.Authorization).toBe('Bearer zen-key');
+        return new Response(JSON.stringify({
+          data: [{ id: 'google/gemini-3.1-pro-preview' }],
+        }), { status: 200 });
+      }) as unknown as typeof fetch;
+      const res = await listModels(inst, { fetch: fetchMock, protocol: 'openai' });
+      expect(res.source).toBe('live');
+      expect(res.models).toEqual(['google/gemini-3.1-pro-preview']);
+    })();
   });
 });

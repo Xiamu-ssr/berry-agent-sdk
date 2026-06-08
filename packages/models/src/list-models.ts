@@ -7,10 +7,17 @@
 
 import { z } from 'zod';
 import { errorMessage } from '@berry-agent/small-shared-core';
-import type { ProviderPreset, ProviderInstance } from './types.js';
+import type { ProviderPreset, ProviderInstance, WireProtocol } from './types.js';
 import { getPreset, RAW_PRESET_ID } from './presets.js';
 
 export interface ListModelsOptions {
+  /**
+   * Which protocol endpoint to probe. A channel may speak both protocols at
+   * different URLs; the caller picks which catalog to list. Defaults to
+   * whichever endpoint the provider declares (anthropic preferred when both
+   * exist, since that's the richer catalog for most gateways).
+   */
+  protocol?: WireProtocol;
   /** Override preset's listModelsPath. */
   listPath?: string;
   /** Request timeout in ms (default 10s). */
@@ -76,7 +83,19 @@ export async function listModels(
     return { models: sortUnique(preset.knownModels), source: 'known' };
   }
 
-  const baseUrl = instance.baseUrl ?? preset.baseUrl;
+  // Pick the protocol endpoint to probe: caller's choice, else the provider's
+  // declared endpoint (anthropic preferred when both exist).
+  const protocol = options.protocol
+    ?? (instance.endpoints?.anthropic ?? preset.endpoints.anthropic ? 'anthropic' : 'openai');
+  const baseUrl = instance.endpoints?.[protocol] ?? preset.endpoints[protocol];
+  if (!baseUrl) {
+    // The chosen protocol has no endpoint — fall back to the cached list.
+    return {
+      models: sortUnique(preset.knownModels),
+      source: 'known',
+      warning: `no ${protocol} endpoint configured: fell back to cached list`,
+    };
+  }
   const url = joinUrl(baseUrl, listPath);
   const timeoutMs = options.timeoutMs ?? 10_000;
   const doFetch = options.fetch ?? globalThis.fetch;
@@ -86,7 +105,7 @@ export async function listModels(
 
   try {
     const resp = await doFetch(url, {
-      headers: authHeaders(preset, instance.apiKey),
+      headers: authHeaders(protocol, instance.apiKey),
       signal: controller.signal,
     });
 
@@ -120,8 +139,8 @@ export async function listModels(
   }
 }
 
-function authHeaders(preset: ProviderPreset, apiKey: string): Record<string, string> {
-  if (preset.type === 'anthropic') {
+function authHeaders(protocol: WireProtocol, apiKey: string): Record<string, string> {
+  if (protocol === 'anthropic') {
     return {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',

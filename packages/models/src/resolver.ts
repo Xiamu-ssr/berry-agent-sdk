@@ -15,6 +15,7 @@ import type {
   TierId,
 } from './types.js';
 import { getPreset, RAW_PRESET_ID } from './presets.js';
+import { modelProtocolFamily } from './protocol.js';
 import { ModelResolverSnapshot, summarizeError } from './resolver-snapshot.js';
 
 /** Error thrown when the requested model or tier cannot be built into a resolver. */
@@ -25,36 +26,43 @@ export class ModelResolveError extends Error {
   }
 }
 
-/** Compose a ProviderConfig from a ModelProviderRef + the backing ProviderInstance. */
+/**
+ * Compose a ProviderConfig from a ModelProviderRef + the backing
+ * ProviderInstance.
+ *
+ * Protocol is decided HERE, by the model's family — not by the provider preset.
+ * The family picks both `type` (anthropic vs openai provider) and which of the
+ * channel's `endpoints` to call. This is what lets one vendor channel (zenmux)
+ * serve Claude over the anthropic protocol (restoring prompt cache) and
+ * everything else over openai, and it's the root fix for the cache regression
+ * where Claude routed through an openai-typed preset bypassed cache_control.
+ */
 export function buildProviderConfig(
   ref: ModelProviderRef,
   instance: ProviderInstance,
   modelId: string,
 ): ProviderConfig {
-  const preset = getPreset(instance.presetId);
+  const family = modelProtocolFamily(modelId, ref.remoteModelId);
+  const model = ref.remoteModelId ?? modelId;
 
-  // Raw instance: must carry baseUrl + type itself.
+  // Raw instance: endpoints come from the instance itself.
   if (instance.presetId === RAW_PRESET_ID) {
-    if (!instance.baseUrl) {
+    const baseUrl = instance.endpoints?.[family];
+    if (!baseUrl) {
       throw new ModelResolveError(
-        `Raw provider "${instance.id}" is missing baseUrl`,
-        'raw_missing_base_url',
-      );
-    }
-    if (!instance.type) {
-      throw new ModelResolveError(
-        `Raw provider "${instance.id}" is missing type`,
-        'raw_missing_type',
+        `Raw provider "${instance.id}" has no ${family} endpoint for model "${modelId}"`,
+        'raw_missing_endpoint',
       );
     }
     return {
-      type: instance.type,
-      baseUrl: instance.baseUrl,
+      type: family,
+      baseUrl,
       apiKey: instance.apiKey,
-      model: ref.remoteModelId ?? modelId,
+      model,
     };
   }
 
+  const preset = getPreset(instance.presetId);
   if (!preset) {
     throw new ModelResolveError(
       `Unknown preset "${instance.presetId}" for provider "${instance.id}"`,
@@ -62,11 +70,21 @@ export function buildProviderConfig(
     );
   }
 
+  // Instance endpoint override wins, else the preset's endpoint for this family.
+  const baseUrl = instance.endpoints?.[family] ?? preset.endpoints[family];
+  if (!baseUrl) {
+    throw new ModelResolveError(
+      `Provider "${instance.id}" (preset "${preset.id}") cannot serve ${family} model "${modelId}": ` +
+      `no ${family} endpoint configured`,
+      'provider_missing_protocol_endpoint',
+    );
+  }
+
   return {
-    type: preset.type,
-    baseUrl: instance.baseUrl ?? preset.baseUrl,
+    type: family,
+    baseUrl,
     apiKey: instance.apiKey,
-    model: ref.remoteModelId ?? modelId,
+    model,
   };
 }
 

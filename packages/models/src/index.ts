@@ -5,6 +5,8 @@
 // Types (3 layers + registry)
 export type {
   TierId,
+  WireProtocol,
+  ProviderEndpoints,
   ProviderPreset,
   ProviderInstance,
   ModelProviderRef,
@@ -12,6 +14,9 @@ export type {
   TierConfig,
   ModelsRegistry,
 } from './types.js';
+
+// Protocol family routing (single source of truth: model family → protocol)
+export { modelProtocolFamily } from './protocol.js';
 
 // Presets (Layer 1 catalog)
 export {
@@ -53,6 +58,7 @@ export {
   modelProviderRefSchema,
   modelBindingSchema,
   providerInstanceSchema,
+  providerEndpointsSchema,
   providerTypeSchema,
 } from './schema.js';
 export type { ModelsNamespaceConfig } from './schema.js';

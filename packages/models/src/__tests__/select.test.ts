@@ -50,7 +50,7 @@ describe('selectProvider', () => {
     // agent on tier:strong failed at send with "model: Required" because
     // the resolved config.model was undefined.)
     const reg: ModelsRegistry = {
-      providers: { zen: { id: 'zen', presetId: 'zenmux-openai', apiKey: 'sk-x' } },
+      providers: { zen: { id: 'zen', presetId: 'zenmux', apiKey: 'sk-x' } },
       models: {
         'anthropic/claude-opus-4.8': { providers: [{ providerId: 'zen' }] }, // no `id`
       },

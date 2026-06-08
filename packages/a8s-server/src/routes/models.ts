@@ -20,7 +20,7 @@ import {
   modelsTemplatePutRequestSchema,
   operatorOkResponseSchema,
 } from '@berry-agent/cluster-protocol';
-import { listBuiltinPresets, listModels, getPreset, RAW_PRESET_ID } from '@berry-agent/models';
+import { listBuiltinPresets, listModels, getPreset, modelProtocolFamily, RAW_PRESET_ID } from '@berry-agent/models';
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import type { RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
@@ -37,7 +37,7 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
       handler: async ({ res }) => {
         const record = await deps.modelsTemplate.get();
         writeJson(res, 200, modelsTemplateGetResponseSchema.parse({
-          template: record?.template ?? null,
+          template: record?.template ? withModelFamilies(record.template) : null,
           updatedAt: record?.updatedAt ?? null,
         }));
       },
@@ -66,8 +66,8 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
         const presets = listBuiltinPresets().map((p) => ({
           id: p.id,
           label: p.name,
-          type: p.type,
-          baseUrl: p.baseUrl,
+          endpoints: p.endpoints,
+          protocols: (['anthropic', 'openai'] as const).filter((k) => p.endpoints[k]),
           canList: !!p.listModelsPath,
           apiKeyDocsUrl: p.apiKeyDocsUrl,
         }));
@@ -82,21 +82,24 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
       // don't want in the audit log.
       middleware: [requireAdminToken(deps)],
       handler: async ({ req, res }) => {
-        const { presetId, baseUrl, apiKey, type } = modelsProbeRequestSchema.parse(await readJsonBody(req));
+        const { presetId, protocol, baseUrl, apiKey } = modelsProbeRequestSchema.parse(await readJsonBody(req));
         // Build a ProviderInstance for listModels. With a known preset we
-        // inherit its listModelsPath/baseUrl/auth; without one we go raw
-        // and rely on the given baseUrl (+ openai-style auth by default).
+        // inherit its listModelsPath/endpoints/auth; without one we go raw and
+        // rely on the given baseUrl for the chosen protocol (openai default).
         const preset = presetId ? getPreset(presetId) : undefined;
+        const probeProtocol = protocol ?? (preset?.endpoints.anthropic ? 'anthropic' : 'openai');
+        const endpoints = baseUrl
+          ? { [probeProtocol]: baseUrl }
+          : preset?.endpoints;
         const result = await listModels(
           {
             id: 'probe',
             presetId: preset ? preset.id : RAW_PRESET_ID,
             apiKey,
-            baseUrl: baseUrl ?? preset?.baseUrl ?? '',
+            endpoints,
             knownModels: [],
-            type: type ?? preset?.type ?? 'openai',
           } as Parameters<typeof listModels>[0],
-          { timeoutMs: 12_000 },
+          { protocol: probeProtocol, timeoutMs: 12_000 },
         );
         writeJson(res, 200, modelsProbeResponseSchema.parse({
           models: result.models,
@@ -106,4 +109,24 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
       },
     },
   ];
+}
+
+/**
+ * Enrich each model in the template with its inferred protocol `family`
+ * (anthropic/openai), computed server-side from @berry-agent/models so the UI
+ * never re-implements the family regex (single source of truth). Passthrough
+ * keeps the wire schema happy; the UI reads `models[id].family`.
+ */
+function withModelFamilies(template: {
+  providers: Record<string, unknown>;
+  models: Record<string, { providers?: Array<{ remoteModelId?: string }> }>;
+  tiers: Record<string, string>;
+}): typeof template {
+  const models = Object.fromEntries(
+    Object.entries(template.models).map(([id, m]) => {
+      const remoteId = m.providers?.[0]?.remoteModelId;
+      return [id, { ...m, family: modelProtocolFamily(id, remoteId) }];
+    }),
+  );
+  return { ...template, models };
 }

@@ -11,21 +11,22 @@ function mkRegistry(): ModelsRegistry {
         presetId: 'anthropic',
         apiKey: 'sk-anthropic',
       },
+      // One dual-endpoint channel: serves Claude over anthropic, others over openai.
       zenmux_01: {
         id: 'zenmux_01',
         presetId: 'zenmux',
         apiKey: 'sk-zen',
       },
-      zenmux_openai: {
-        id: 'zenmux_openai',
-        presetId: 'zenmux-openai',
-        apiKey: 'sk-zen-openai',
+      // OpenAI-only preset: cannot serve a Claude model (no anthropic endpoint).
+      openai_main: {
+        id: 'openai_main',
+        presetId: 'openai',
+        apiKey: 'sk-openai',
       },
       corp_proxy: {
         id: 'corp_proxy',
         presetId: RAW_PRESET_ID,
-        baseUrl: 'https://corp.internal/v1',
-        type: 'openai',
+        endpoints: { openai: 'https://corp.internal/v1' },
         apiKey: 'sk-corp',
       },
     },
@@ -50,7 +51,7 @@ function mkRegistry(): ModelsRegistry {
 }
 
 describe('buildProviderConfig', () => {
-  it('uses preset baseUrl for preset-backed instances', () => {
+  it('uses the anthropic endpoint for a Claude model on a preset provider', () => {
     const reg = mkRegistry();
     const cfg = buildProviderConfig(
       { providerId: 'anthropic_main' },
@@ -63,22 +64,25 @@ describe('buildProviderConfig', () => {
     expect(cfg.model).toBe('claude-opus-4.7');
   });
 
-  it('applies remoteModelId override', () => {
+  it('routes a Claude model on a dual-endpoint channel to the anthropic endpoint (cache regression guard)', () => {
+    // The cache-regression root cause: a Claude model must NOT route through the
+    // openai endpoint of a dual-protocol channel, or cache_control is bypassed.
     const reg = mkRegistry();
     const cfg = buildProviderConfig(
       { providerId: 'zenmux_01', remoteModelId: 'anthropic/claude-opus-4.7' },
       reg.providers.zenmux_01!,
       'claude-opus-4.7',
     );
+    expect(cfg.type).toBe('anthropic');
     expect(cfg.model).toBe('anthropic/claude-opus-4.7');
     expect(cfg.baseUrl).toBe('https://zenmux.ai/api/anthropic');
   });
 
-  it('uses the ZenMux OpenAI-compatible preset baseUrl and protocol', () => {
+  it('routes a non-Claude model on a dual-endpoint channel to the openai endpoint', () => {
     const reg = mkRegistry();
     const cfg = buildProviderConfig(
-      { providerId: 'zenmux_openai', remoteModelId: 'google/gemini-3.1-pro-preview' },
-      reg.providers.zenmux_openai!,
+      { providerId: 'zenmux_01', remoteModelId: 'google/gemini-3.1-pro-preview' },
+      reg.providers.zenmux_01!,
       'gemini-pro',
     );
     expect(cfg.type).toBe('openai');
@@ -86,7 +90,18 @@ describe('buildProviderConfig', () => {
     expect(cfg.baseUrl).toBe('https://zenmux.ai/api/v1');
   });
 
-  it('requires baseUrl+type for raw providers', () => {
+  it('throws when a Claude model lands on an openai-only provider', () => {
+    const reg = mkRegistry();
+    expect(() =>
+      buildProviderConfig(
+        { providerId: 'openai_main' },
+        reg.providers.openai_main!,
+        'claude-opus-4.7',
+      ),
+    ).toThrow(/no anthropic endpoint/);
+  });
+
+  it('uses endpoints for raw providers', () => {
     const reg = mkRegistry();
     const cfg = buildProviderConfig(
       { providerId: 'corp_proxy', remoteModelId: 'gpt-5' },
@@ -97,14 +112,14 @@ describe('buildProviderConfig', () => {
     expect(cfg.type).toBe('openai');
   });
 
-  it('throws when raw provider missing baseUrl', () => {
+  it('throws when raw provider missing endpoint for the model family', () => {
     expect(() =>
       buildProviderConfig(
         { providerId: 'bad' },
-        { id: 'bad', presetId: RAW_PRESET_ID, apiKey: 'x', type: 'openai' },
-        'm',
+        { id: 'bad', presetId: RAW_PRESET_ID, apiKey: 'x', endpoints: { anthropic: 'https://x' } },
+        'gpt-5',
       ),
-    ).toThrow(/missing baseUrl/);
+    ).toThrow(/no openai endpoint/);
   });
 });
 

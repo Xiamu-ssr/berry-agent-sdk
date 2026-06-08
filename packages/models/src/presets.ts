@@ -1,10 +1,13 @@
 // ============================================================
 // @berry-agent/models — Built-in Provider Presets
 // ============================================================
-// Intentional minimalism: this file only describes where a provider lives
-// (baseUrl + type) and a starting model list. Keys are user-supplied; model
-// catalogs should be refreshed live via `listModels()` when the provider
-// supports it.
+// Intentional minimalism: a preset only describes where a provider lives
+// (per-protocol `endpoints`) and a starting model list. Keys are user-supplied;
+// model catalogs should be refreshed live via `listModels()` when supported.
+//
+// Protocol is NOT a preset field — it's inferred per-model (see protocol.ts).
+// A channel that speaks both protocols (zenmux) sets both endpoints; the
+// resolver picks the one matching the requested model's family.
 //
 // Adding a preset should be data-only.
 
@@ -18,8 +21,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     id: 'anthropic',
     name: 'Anthropic',
-    type: 'anthropic',
-    baseUrl: 'https://api.anthropic.com',
+    endpoints: { anthropic: 'https://api.anthropic.com' },
     listModelsPath: '/v1/models',
     apiKeyDocsUrl: 'https://console.anthropic.com/settings/keys',
     knownModels: [
@@ -32,8 +34,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   openai: {
     id: 'openai',
     name: 'OpenAI',
-    type: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
+    endpoints: { openai: 'https://api.openai.com/v1' },
     listModelsPath: '/models',
     apiKeyDocsUrl: 'https://platform.openai.com/api-keys',
     knownModels: [
@@ -47,8 +48,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   moonshot: {
     id: 'moonshot',
     name: 'Moonshot (Kimi)',
-    type: 'openai',
-    baseUrl: 'https://api.moonshot.cn/v1',
+    endpoints: { openai: 'https://api.moonshot.cn/v1' },
     listModelsPath: '/models',
     apiKeyDocsUrl: 'https://platform.moonshot.cn/console/api-keys',
     knownModels: [
@@ -62,8 +62,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   'moonshot-coding': {
     id: 'moonshot-coding',
     name: 'Moonshot Coding Plan (subscription)',
-    type: 'anthropic',
-    baseUrl: 'https://api.kimi.com/coding/',
+    endpoints: { anthropic: 'https://api.kimi.com/coding/' },
     apiKeyDocsUrl: 'https://platform.moonshot.cn/console/api-keys',
     knownModels: [
       'kimi-k2.6',
@@ -74,8 +73,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   glm: {
     id: 'glm',
     name: 'ZhipuAI GLM',
-    type: 'openai',
-    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    endpoints: { openai: 'https://open.bigmodel.cn/api/coding/paas/v4' },
     apiKeyDocsUrl: 'https://bigmodel.cn/usercenter/apikeys',
     knownModels: [
       'glm-5.1',
@@ -87,8 +85,7 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   deepseek: {
     id: 'deepseek',
     name: 'DeepSeek',
-    type: 'openai',
-    baseUrl: 'https://api.deepseek.com/v1',
+    endpoints: { openai: 'https://api.deepseek.com/v1' },
     listModelsPath: '/models',
     apiKeyDocsUrl: 'https://platform.deepseek.com/api_keys',
     knownModels: [
@@ -99,30 +96,22 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
 
   zenmux: {
     id: 'zenmux',
-    name: 'ZenMux (Anthropic-compatible)',
-    type: 'anthropic',
-    baseUrl: 'https://zenmux.ai/api/anthropic',
+    name: 'ZenMux',
+    // One vendor channel, both protocols at different URLs. The resolver
+    // routes Claude models to the anthropic endpoint (restoring prompt cache)
+    // and everything else to the openai endpoint.
+    endpoints: {
+      anthropic: 'https://zenmux.ai/api/anthropic',
+      openai: 'https://zenmux.ai/api/v1',
+    },
     listModelsPath: '/v1/models',
     apiKeyDocsUrl: 'https://zenmux.ai/dashboard',
     knownModels: [
       'anthropic/claude-opus-4.7',
-      'anthropic/claude-opus-4.6',
       'anthropic/claude-sonnet-4.6',
       'anthropic/claude-haiku-4.5',
-    ],
-  },
-
-  'zenmux-openai': {
-    id: 'zenmux-openai',
-    name: 'ZenMux (OpenAI-compatible)',
-    type: 'openai',
-    baseUrl: 'https://zenmux.ai/api/v1',
-    listModelsPath: '/models',
-    apiKeyDocsUrl: 'https://zenmux.ai/dashboard',
-    knownModels: [
-      'google/gemini-3.1-pro-preview',
       'openai/gpt-5.1',
-      'anthropic/claude-opus-4.7',
+      'google/gemini-3.1-pro-preview',
       'moonshot/kimi-k2.6',
     ],
   },
@@ -130,8 +119,10 @@ export const BUILTIN_PRESETS: Record<string, ProviderPreset> = {
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',
-    type: 'anthropic',
-    baseUrl: 'https://openrouter.ai/api',
+    endpoints: {
+      anthropic: 'https://openrouter.ai/api',
+      openai: 'https://openrouter.ai/api/v1',
+    },
     listModelsPath: '/v1/models',
     apiKeyDocsUrl: 'https://openrouter.ai/keys',
     knownModels: [

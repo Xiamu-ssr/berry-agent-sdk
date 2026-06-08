@@ -11,6 +11,14 @@ import type { ModelBinding, ModelsRegistry, ProviderInstance } from './types.js'
 /** Zod schema for core provider protocol kinds. */
 export const providerTypeSchema = z.enum(['anthropic', 'openai']) satisfies z.ZodType<ProviderType>;
 
+/** Per-protocol base URLs. At least one must be set. */
+export const providerEndpointsSchema = z.object({
+  anthropic: z.string().min(1).optional(),
+  openai: z.string().min(1).optional(),
+}).refine((e) => Boolean(e.anthropic || e.openai), {
+  message: 'at least one of anthropic/openai endpoint is required',
+});
+
 /** Zod schema for a single provider reference inside a model binding. */
 export const modelProviderRefSchema = z.object({
   providerId: z.string().min(1, 'must be a non-empty string'),
@@ -39,8 +47,7 @@ export const providerInstanceSchema = z.object({
     required_error: 'must be a string',
     invalid_type_error: 'must be a string',
   }),
-  baseUrl: z.string().optional(),
-  type: providerTypeSchema.optional(),
+  endpoints: providerEndpointsSchema.optional(),
   knownModels: z.array(z.string()).optional(),
   label: z.string().optional(),
 });

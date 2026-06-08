@@ -11,6 +11,25 @@
 
 import type { ProviderType } from '@berry-agent/core';
 
+/**
+ * The wire protocol a call speaks. Identical to core's ProviderType, named
+ * here to read as "protocol" at the model layer. A model's protocol is NOT
+ * configured — it is inferred from the model family (see modelProtocolFamily):
+ * claude/opus/sonnet/haiku → 'anthropic', everything else → 'openai'.
+ */
+export type WireProtocol = ProviderType;
+
+/**
+ * Per-protocol base URLs for a provider channel. A vendor may speak one or
+ * both protocols at different URLs (e.g. zenmux serves anthropic at
+ * /api/anthropic and openai at /api/v1). The resolver picks the endpoint that
+ * matches the model's family. At least one must be set.
+ */
+export interface ProviderEndpoints {
+  anthropic?: string;
+  openai?: string;
+}
+
 // ──────────────────────────────────────────────
 // Tier
 // ──────────────────────────────────────────────
@@ -35,16 +54,20 @@ export type TierId = string;
  * Preset descriptor for a known provider (anthropic / openai / moonshot …).
  * Pure metadata — no secrets. Consumers combine this with a user-supplied
  * apiKey to make a working ProviderInstance.
+ *
+ * Protocol is NOT a preset field: a channel declares its per-protocol
+ * `endpoints`, and the resolver chooses the one matching the model's family.
  */
 export interface ProviderPreset {
-  /** Stable registry id (e.g. 'anthropic', 'moonshot', 'glm'). */
+  /** Stable registry id (e.g. 'anthropic', 'moonshot', 'zenmux'). */
   id: string;
   /** Human name for UI. */
   name: string;
-  /** Berry-core provider type this preset wires up. */
-  type: ProviderType;
-  /** Default base URL. Can be overridden on the ProviderInstance. */
-  baseUrl: string;
+  /**
+   * Per-protocol base URLs. A channel that speaks both protocols (e.g. zenmux)
+   * sets both; a single-protocol vendor sets one. At least one is required.
+   */
+  endpoints: ProviderEndpoints;
   /**
    * Fallback list of model ids when `listModels` can't or doesn't work.
    * Best-effort: the UI should still offer a refresh button that hits
@@ -54,8 +77,8 @@ export interface ProviderPreset {
   /** Optional URL for the dashboard / docs the user needs to grab their key from. */
   apiKeyDocsUrl?: string;
   /**
-   * Endpoint to dynamically list models. Relative to baseUrl.
-   * When absent, the preset relies on `knownModels` only.
+   * Endpoint to dynamically list models. Relative to the base URL chosen for
+   * the probed protocol. When absent, the preset relies on `knownModels` only.
    */
   listModelsPath?: string;
 }
@@ -74,10 +97,12 @@ export interface ProviderInstance {
   presetId: string;
   /** API key (resolved — consumers may substitute a CredentialStore key at load time). */
   apiKey: string;
-  /** Override the preset's baseUrl, or required when presetId === '__raw__'. */
-  baseUrl?: string;
-  /** Provider type (required when presetId === '__raw__', ignored otherwise). */
-  type?: ProviderType;
+  /**
+   * Override the preset's per-protocol endpoints, or required (≥1) when
+   * presetId === '__raw__'. The resolver reads the endpoint matching the
+   * model's family.
+   */
+  endpoints?: ProviderEndpoints;
   /**
    * User-supplied model list for raw presets. For known presets, leave empty
    * and let `listModels(preset, apiKey)` populate dynamically.

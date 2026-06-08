@@ -1080,12 +1080,18 @@ export type OperatorOkResponse = z.infer<typeof operatorOkResponseSchema>;
 // Schema is purposefully wide (passthrough) so the UI doesn't need to
 // be redeployed every time @berry-agent/models gains a new field.
 
+/** Per-protocol base URLs for a provider channel (mirrors models ProviderEndpoints). */
+export const modelsProviderEndpointsSchema = z.object({
+  anthropic: z.string().optional(),
+  openai: z.string().optional(),
+}).passthrough();
+
 export const modelsProviderSchema = z.object({
   id: z.string().min(1).optional(),
   presetId: z.string().min(1),
   apiKey: z.string(),
-  baseUrl: z.string().optional(),
-  type: z.enum(['anthropic', 'openai']).optional(),
+  /** Per-protocol endpoints; the resolver picks one by the model's family. */
+  endpoints: modelsProviderEndpointsSchema.optional(),
   label: z.string().optional(),
   knownModels: z.array(z.string()).optional(),
 }).passthrough();
@@ -1130,12 +1136,12 @@ export type ModelsTemplatePutRequest = z.infer<typeof modelsTemplatePutRequestSc
 export const modelsProbeRequestSchema = z.object({
   /** Built-in preset id (anthropic / openai / moonshot / ...) or omitted for a raw/custom provider. */
   presetId: z.string().min(1).optional(),
-  /** Override the preset's base URL, or the full base URL for a raw provider. */
+  /** Which protocol endpoint to probe. Defaults server-side. */
+  protocol: z.enum(['anthropic', 'openai']).optional(),
+  /** Override/raw base URL for the chosen protocol. */
   baseUrl: z.string().url().optional(),
   /** Provider API key. Used only for this call; never stored by the probe. */
   apiKey: z.string().min(1),
-  /** Auth flavor when there's no preset. Defaults to 'openai' (Bearer). */
-  type: z.enum(['anthropic', 'openai']).optional(),
 }).strict();
 export type ModelsProbeRequest = z.infer<typeof modelsProbeRequestSchema>;
 
@@ -1153,8 +1159,10 @@ export type ModelsProbeResponse = z.infer<typeof modelsProbeResponseSchema>;
 export const modelsPresetSchema = z.object({
   id: z.string().min(1),
   label: z.string(),
-  type: z.enum(['anthropic', 'openai']),
-  baseUrl: z.string(),
+  /** Per-protocol base URLs the channel speaks. */
+  endpoints: modelsProviderEndpointsSchema,
+  /** Which protocols this preset supports (derived from endpoints). */
+  protocols: z.array(z.enum(['anthropic', 'openai'])),
   /** True when the provider exposes a live model-list endpoint. */
   canList: z.boolean(),
   /** Where the operator gets their API key, if the preset declares it. */
