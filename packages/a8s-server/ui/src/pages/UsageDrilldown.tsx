@@ -217,38 +217,43 @@ function InferenceLevel({ agentId, inferenceId }: { agentId: string; inferenceId
 }
 
 function InferenceDetailView({ inf }: { inf: UsageInferenceDetail }) {
+  // The protocol the wire body was actually serialized in. `provider` is the
+  // resolved core provider kind ('anthropic' | 'openai'), set by the family
+  // router — the very thing that decides whether cache_control is in play.
+  const protocol: WireProtocol = inf.provider === 'anthropic' ? 'anthropic' : 'openai';
   return (
     <div className="flex flex-col gap-4">
       {/* Headline numbers */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Metric label="模型" value={shortModel(inf.model)} mono />
+        <Metric label="协议" value={protocol} badge={protocol} />
         <Metric label="成本" value={money(inf.totalCost)} accent />
         <Metric label="In / Out" value={`${compact(inf.inputTokens)} / ${compact(inf.outputTokens)}`} mono />
         <Metric label="Cache 命中" value={inf.cacheReadTokens > 0 ? compact(inf.cacheReadTokens) : '无'} />
         <Metric label="Cache 写入" value={inf.cacheWriteTokens > 0 ? compact(inf.cacheWriteTokens) : '无'} />
         <Metric label="总耗时" value={`${(inf.latencyMs / 1000).toFixed(2)}s`} />
         <Metric label="首字 TTFT" value={inf.ttftMs != null ? `${(inf.ttftMs / 1000).toFixed(2)}s` : '—'} />
-        <Metric label="停止原因" value={inf.stopReason} />
       </div>
 
-      <Tabs defaultActiveTab="system" type="rounded" size="small">
+      <Tabs defaultActiveTab="messages" type="rounded" size="small">
+        <Tabs.TabPane key="messages" title={`对话${inf.messageCount ? ` (${inf.messageCount})` : ''}`}>
+          <Conversation requestMessages={inf.requestMessages} responseContent={inf.responseContent} />
+        </Tabs.TabPane>
         <Tabs.TabPane key="system" title="System Prompt">
-          <JsonBlock raw={inf.requestSystem} empty="无 system prompt" />
+          <SystemPrompt raw={inf.requestSystem} />
         </Tabs.TabPane>
         <Tabs.TabPane key="tools" title={`工具列表${inf.toolDefCount ? ` (${inf.toolDefCount})` : ''}`}>
           <ToolDefs raw={inf.requestTools} />
-        </Tabs.TabPane>
-        <Tabs.TabPane key="messages" title={`消息${inf.messageCount ? ` (${inf.messageCount})` : ''}`}>
-          <JsonBlock raw={inf.requestMessages} empty="无消息" />
-        </Tabs.TabPane>
-        <Tabs.TabPane key="response" title="Output">
-          <JsonBlock raw={inf.responseContent} empty="无响应内容" />
         </Tabs.TabPane>
         <Tabs.TabPane key="toolcalls" title={`Tool Use${inf.toolCalls.length ? ` (${inf.toolCalls.length})` : ''}`}>
           <ToolCalls calls={inf.toolCalls} />
         </Tabs.TabPane>
         <Tabs.TabPane key="wire" title="Provider 原文">
           <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-3)' }}>
+              <span>这是发往供应商的{protocol === 'anthropic' ? ' Anthropic Messages ' : ' OpenAI Chat Completions '}协议原文。</span>
+              <ProtocolBadge protocol={protocol} />
+            </div>
             <div>
               <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Request</div>
               <JsonBlock raw={inf.providerRequest} empty="—" />
@@ -264,14 +269,186 @@ function InferenceDetailView({ inf }: { inf: UsageInferenceDetail }) {
   );
 }
 
-function Metric({ label, value, accent, mono }: { label: string; value: string; accent?: boolean; mono?: boolean }) {
+// The wire protocol a given inference was serialized in. Mirrors the core
+// ProviderType; kept local so the UI has no import dependency on @berry-agent/core.
+type WireProtocol = 'anthropic' | 'openai';
+
+function ProtocolBadge({ protocol }: { protocol: WireProtocol }) {
+  return (
+    <Tag size="small" color={protocol === 'anthropic' ? 'arcoblue' : 'gray'}>
+      {protocol}
+    </Tag>
+  );
+}
+
+// ---- Canonical content-block rendering ----
+// observe stores requestMessages/responseContent as canonical ContentBlock[]
+// (protocol-agnostic — adapters translate to/from wire). We render them as a
+// readable transcript instead of dumping JSON. Unknown shapes fall back to JSON
+// so the view never hides data.
+
+interface AnyBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  signature?: string;
+  name?: string;
+  id?: string;
+  input?: unknown;
+  toolUseId?: string;
+  content?: unknown;
+  isError?: boolean;
+  mediaType?: string;
+}
+interface AnyMessage { role?: string; content?: string | AnyBlock[] }
+
+function parseJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as T; } catch { return null; }
+}
+
+function Conversation({ requestMessages, responseContent }:
+  { requestMessages: string | null; responseContent: string | null }) {
+  const messages = parseJson<AnyMessage[]>(requestMessages);
+  const response = parseJson<AnyBlock[]>(responseContent);
+  // If the request body isn't the canonical array shape, fall back to raw JSON
+  // (both panes) rather than silently rendering nothing.
+  if (!Array.isArray(messages)) {
+    return (
+      <div className="flex flex-col gap-3">
+        <JsonBlock raw={requestMessages} empty="无消息" />
+        <div>
+          <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>Output</div>
+          <JsonBlock raw={responseContent} empty="无响应内容" />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2" style={{ maxHeight: '52vh', overflow: 'auto' }}>
+      {messages.map((m, i) => <MessageBubble key={i} role={m.role ?? 'user'} content={m.content} />)}
+      {Array.isArray(response) && response.length > 0 && (
+        <MessageBubble role="assistant" content={response} label="本次输出" highlight />
+      )}
+    </div>
+  );
+}
+
+function MessageBubble({ role, content, label, highlight }:
+  { role: string; content: string | AnyBlock[] | undefined; label?: string; highlight?: boolean }) {
+  const isUser = role === 'user';
+  const blocks: AnyBlock[] = typeof content === 'string'
+    ? [{ type: 'text', text: content }]
+    : Array.isArray(content) ? content : [];
+  return (
+    <div className="rounded-md p-2.5"
+      style={{
+        background: highlight ? 'var(--color-primary-light-1)' : 'var(--color-fill-1)',
+        border: highlight ? '1px solid rgb(var(--arcoblue-3))' : '1px solid transparent',
+      }}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <Tag size="small" color={isUser ? 'gray' : 'arcoblue'}>{role}</Tag>
+        {label && <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>{label}</span>}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {blocks.length === 0
+          ? <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>(空)</span>
+          : blocks.map((b, i) => <Block key={i} b={b} />)}
+      </div>
+    </div>
+  );
+}
+
+function Block({ b }: { b: AnyBlock }) {
+  switch (b.type) {
+    case 'text':
+      return <div className="text-sm whitespace-pre-wrap" style={{ color: 'var(--color-text-1)' }}>{b.text}</div>;
+    case 'thinking':
+      return (
+        <div className="rounded p-2" style={{ background: 'var(--color-fill-2)', borderLeft: '2px solid rgb(var(--arcoblue-4))' }}>
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="text-xs font-medium" style={{ color: 'var(--color-text-3)' }}>thinking</span>
+            {b.signature && <Tag size="small" color="green">signed</Tag>}
+          </div>
+          <div className="text-xs whitespace-pre-wrap" style={{ color: 'var(--color-text-2)' }}>{b.thinking}</div>
+        </div>
+      );
+    case 'tool_use':
+      return (
+        <div className="rounded p-2" style={{ background: 'var(--color-fill-2)' }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Tag size="small" color="orange">tool_use</Tag>
+            <code className="font-mono text-xs font-semibold" style={{ color: 'var(--color-text-1)' }}>{b.name}</code>
+          </div>
+          <CodeBlock value={pretty(b.input)} />
+        </div>
+      );
+    case 'tool_result':
+      return (
+        <div className="rounded p-2" style={{ background: 'var(--color-fill-2)' }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Tag size="small" color={b.isError ? 'red' : 'green'}>tool_result{b.isError ? ' · error' : ''}</Tag>
+          </div>
+          <CodeBlock value={typeof b.content === 'string' ? b.content : pretty(b.content)} />
+        </div>
+      );
+    case 'image':
+      return <Tag size="small" color="purple">image · {b.mediaType ?? 'unknown'}</Tag>;
+    default:
+      return <CodeBlock value={pretty(b)} />;
+  }
+}
+
+function CodeBlock({ value }: { value: string }) {
+  const truncated = value.length > 4000 ? value.slice(0, 4000) + '\n…(截断)' : value;
+  return (
+    <pre className="overflow-auto p-2 rounded text-xs font-mono whitespace-pre-wrap"
+      style={{ maxHeight: '24vh', background: 'var(--color-fill-3)', color: 'var(--color-text-2)' }}>
+      {truncated}
+    </pre>
+  );
+}
+
+function pretty(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+// System prompt is stored as canonical blocks too (text blocks with optional
+// cache_control breakpoints). Render the text plainly; fall back to JSON.
+function SystemPrompt({ raw }: { raw: string | null }) {
+  if (!raw) return <span className="text-xs" style={{ color: 'var(--color-text-4)' }}>无 system prompt</span>;
+  const parsed = parseJson<unknown>(raw);
+  if (Array.isArray(parsed)) {
+    const texts = parsed
+      .map((blk) => (blk && typeof blk === 'object' && 'text' in blk ? String((blk as { text: unknown }).text) : null))
+      .filter((t): t is string => t != null);
+    if (texts.length > 0) {
+      return (
+        <pre className="overflow-auto p-3 rounded-md text-xs font-mono whitespace-pre-wrap"
+          style={{ maxHeight: '46vh', background: 'var(--color-fill-2)', color: 'var(--color-text-1)' }}>
+          {texts.join('\n\n———\n\n')}
+        </pre>
+      );
+    }
+  }
+  return <JsonBlock raw={raw} empty="无 system prompt" />;
+}
+
+function Metric({ label, value, accent, mono, badge }:
+  { label: string; value: string; accent?: boolean; mono?: boolean; badge?: WireProtocol }) {
   return (
     <div className="rounded-md p-2.5" style={{ background: 'var(--color-fill-1)' }}>
       <div className="text-xs mb-0.5" style={{ color: 'var(--color-text-4)' }}>{label}</div>
-      <div className={`text-sm ${mono ? 'font-mono' : 'font-medium'}`}
-        style={{ color: accent ? 'rgb(var(--arcoblue-6))' : 'var(--color-text-1)' }}>
-        {value}
-      </div>
+      {badge ? (
+        <ProtocolBadge protocol={badge} />
+      ) : (
+        <div className={`text-sm ${mono ? 'font-mono' : 'font-medium'}`}
+          style={{ color: accent ? 'rgb(var(--arcoblue-6))' : 'var(--color-text-1)' }}>
+          {value}
+        </div>
+      )}
     </div>
   );
 }
