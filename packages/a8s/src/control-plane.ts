@@ -45,6 +45,8 @@ export interface AgentLocation {
   workerId: string | null;
   /** Owning product (from labels.owner). null = unowned (legacy/operator-created). */
   owner?: string | null;
+  /** Full labels (team/role/leader/project/…) for team membership queries. */
+  labels?: Record<string, string>;
 }
 
 export interface HydrateAssignmentsResult {
@@ -59,6 +61,7 @@ export class ControlPlane<TEntry = unknown> {
   private readonly workers = new Map<string, WorkerNode<TEntry>>();
   private readonly assignments = new Map<string, string>(); // agentId → workerId
   private readonly agentOwners = new Map<string, string>(); // agentId → owning product (from labels.owner)
+  private readonly agentLabels = new Map<string, Record<string, string>>(); // agentId → full labels (team membership)
   private readonly scheduler: Scheduler<TEntry>;
   /**
    * Durable orchestration store. Exposed (read-only via TS) so a8s-server
@@ -140,6 +143,7 @@ export class ControlPlane<TEntry = unknown> {
     this.assignments.set(spec.agentId, node.workerId);
     const owner = spec.labels?.owner;
     if (owner) this.agentOwners.set(spec.agentId, owner);
+    if (spec.labels) this.agentLabels.set(spec.agentId, { ...spec.labels });
     return { agentId: spec.agentId, workerId: node.workerId };
   }
 
@@ -157,6 +161,7 @@ export class ControlPlane<TEntry = unknown> {
     }
     this.assignments.delete(agentId);
     this.agentOwners.delete(agentId);
+    this.agentLabels.delete(agentId);
   }
 
   /**
@@ -213,6 +218,7 @@ export class ControlPlane<TEntry = unknown> {
       agentId,
       workerId: this.assignments.get(agentId) ?? null,
       owner: this.agentOwners.get(agentId) ?? null,
+      labels: this.agentLabels.get(agentId),
     };
   }
 
@@ -221,6 +227,7 @@ export class ControlPlane<TEntry = unknown> {
       agentId,
       workerId,
       owner: this.agentOwners.get(agentId) ?? null,
+      labels: this.agentLabels.get(agentId),
     }));
   }
 
@@ -260,6 +267,10 @@ export class ControlPlane<TEntry = unknown> {
         this.assignments.set(lease.agentId, lease.workerId);
         const owner = (lease.metadata as { owner?: unknown } | undefined)?.owner;
         if (typeof owner === 'string' && owner) this.agentOwners.set(lease.agentId, owner);
+        const labels = (lease.metadata as { labels?: unknown } | undefined)?.labels;
+        if (labels && typeof labels === 'object') {
+          this.agentLabels.set(lease.agentId, labels as Record<string, string>);
+        }
         restored.push({ agentId: lease.agentId, workerId: lease.workerId });
       } else {
         unowned.push({ agentId: lease.agentId, workerId: lease.workerId });

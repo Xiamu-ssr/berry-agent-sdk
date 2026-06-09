@@ -37,7 +37,7 @@ export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       handler: ({ res, scope }) => {
         const agents = deps.plane.listAgents()
           .filter((loc) => scopeCanAccess(scope, loc.owner ?? undefined))
-          .map((loc) => agentLocationSchema.parse({ agentId: loc.agentId, workerId: loc.workerId, owner: loc.owner ?? null }));
+          .map((loc) => agentLocationSchema.parse({ agentId: loc.agentId, workerId: loc.workerId, owner: loc.owner ?? null, labels: loc.labels }));
         writeJson(res, 200, listAgentsResponseSchema.parse({ agents }));
       },
     },
@@ -286,7 +286,10 @@ async function handleCreateAgent<TEntry>(
     holderId: result.workerId,
     workerId: result.workerId,
     ttlMs: 5 * 60_000,
-    ...(owner ? { metadata: { owner } } : {}),
+    // Persist owner + full labels in the lease so team membership
+    // (labels.project / team / role / leader) survives an a8s restart and is
+    // restored by hydrateAssignments().
+    ...((owner || labels) ? { metadata: { ...(owner ? { owner } : {}), ...(labels ? { labels } : {}) } } : {}),
   });
   if (!acquired.acquired) {
     deps.logger.warn?.(

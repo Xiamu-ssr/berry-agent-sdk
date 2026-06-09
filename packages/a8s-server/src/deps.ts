@@ -14,6 +14,7 @@ import type { ModelsTemplateStore } from './models-template-store.js';
 import type { MachineRegistry } from './machine-registry.js';
 import type { HandRecipeStore } from './hand-recipe-store.js';
 import type { SkillStore } from './skill-store.js';
+import type { TeamStore } from './team-store.js';
 import type { ProductCredentialStore } from './product-credentials.js';
 
 export interface WorkerTokenEntry {
@@ -37,6 +38,8 @@ export interface ServerDeps<TEntry = unknown> {
   readonly handRecipes: HandRecipeStore;
   /** Skill catalog (built-ins + operator-registered) + install onto agents. */
   readonly skills: SkillStore;
+  /** Emergent-team shared state (project-scoped worklist + message log). */
+  readonly teams: TeamStore;
   /** product → scoped token credentials for product-level resource isolation. */
   readonly productCredentials: ProductCredentialStore;
   readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;

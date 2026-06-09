@@ -27,3 +27,17 @@ export type {
   UsageInferenceDetail,
   UsageInferenceDetailResponse,
 } from '@berry-agent/cluster-protocol';
+
+// Team (emergent) — project-scoped worklist + message types.
+export type {
+  WorklistTask,
+  WorklistTaskStatus,
+  WorklistResponse,
+  WorklistCreateRequest,
+  WorklistPatchRequest,
+  TeamMessage,
+  TeamMessagesResponse,
+  TeamMessageAppendRequest,
+  AgentLocation,
+  ListAgentsResponse,
+} from '@berry-agent/cluster-protocol';

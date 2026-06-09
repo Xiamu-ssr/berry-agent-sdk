@@ -33,6 +33,7 @@ import { ModelsTemplateStore } from './models-template-store.js';
 import { MachineRegistry } from './machine-registry.js';
 import { HandRecipeStore } from './hand-recipe-store.js';
 import { SkillStore } from './skill-store.js';
+import { TeamStore } from './team-store.js';
 import { ProductCredentialStore } from './product-credentials.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
@@ -42,6 +43,7 @@ import { healthRoutes, uiRoutes } from './routes/health.js';
 import { machineRoutes } from './routes/machines.js';
 import { handRecipeRoutes } from './routes/hand-recipes.js';
 import { skillRegistryRoutes } from './routes/skills.js';
+import { teamRoutes } from './routes/team.js';
 import { productCredentialRoutes } from './routes/product-credentials.js';
 import { auditRoutes } from './routes/audit.js';
 import { modelsRoutes } from './routes/models.js';
@@ -116,6 +118,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly machines = new MachineRegistry();
   private readonly handRecipes: HandRecipeStore;
   private readonly skills: SkillStore;
+  private readonly teams: TeamStore;
   private readonly productCredentials = new ProductCredentialStore();
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
@@ -150,6 +153,13 @@ export class A8sServer<TEntry = unknown> {
       : '/var/berry/a8s/skill-registry.json';
     this.skills = new SkillStore({
       filePath: skillsFile,
+      logger: this.logger,
+    });
+    const teamsFile = options.auditRoot
+      ? `${options.auditRoot.replace(/\/audit\/?$/, '')}/teams.json`
+      : '/var/berry/a8s/teams.json';
+    this.teams = new TeamStore({
+      filePath: teamsFile,
       logger: this.logger,
     });
     if (!this.adminToken) {
@@ -191,6 +201,7 @@ export class A8sServer<TEntry = unknown> {
       machines: this.machines,
       handRecipes: this.handRecipes,
       skills: this.skills,
+      teams: this.teams,
       productCredentials: this.productCredentials,
       logger: this.logger,
       adminToken: this.adminToken,
@@ -216,6 +227,7 @@ export class A8sServer<TEntry = unknown> {
       ...machineRoutes(this.deps),
       ...handRecipeRoutes(this.deps),
       ...skillRegistryRoutes(this.deps),
+      ...teamRoutes(this.deps),
       ...productCredentialRoutes(this.deps),
       ...auditRoutes(this.deps),
     ];

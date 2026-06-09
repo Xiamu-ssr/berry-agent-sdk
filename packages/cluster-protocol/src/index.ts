@@ -456,6 +456,13 @@ export const agentLocationSchema = z.object({
   workerId: z.string().nullable(),
   /** Owning product (from labels.owner). Null/absent = unowned (legacy/operator). */
   owner: z.string().nullable().optional(),
+  /**
+   * Free-form labels the agent was created with (team / role / leader /
+   * project / machine …). Surfaced so products can compute team membership
+   * (filter by labels.project) without a separate registry — the emergent
+   * Team model: a team is just the agents sharing a project label.
+   */
+  labels: z.record(z.string()).optional(),
 }).strict();
 export type AgentLocation = z.infer<typeof agentLocationSchema>;
 
@@ -1573,6 +1580,84 @@ export const usageInferenceDetailResponseSchema = z.object({
 }).strict();
 export type UsageInferenceDetailResponse = z.infer<typeof usageInferenceDetailResponseSchema>;
 
+// ============================================================
+// Team — project-scoped worklist + message log (emergent team)
+// ============================================================
+//
+// A team is not a top-level entity: it is the set of agents that share a
+// `project` label. The only shared *state* a team needs — a worklist and a
+// message log — lives here in a8s, project-scoped, replacing the leader-local
+// `project/.berry/` files that don't exist under brain-hand separation.
+// Membership is computed by listAgents + labels.project, so no member table.
+
+export const worklistTaskStatusSchema = z.enum([
+  'unclaimed', 'claimed', 'in_progress', 'done', 'failed',
+]);
+export type WorklistTaskStatus = z.infer<typeof worklistTaskStatusSchema>;
+
+export const worklistTaskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  status: worklistTaskStatusSchema,
+  /** Agent id, or '@leader'. */
+  assignee: z.string().optional(),
+  createdBy: z.string().min(1),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  completedAt: z.number().optional(),
+  failureReason: z.string().optional(),
+}).strict();
+export type WorklistTask = z.infer<typeof worklistTaskSchema>;
+
+export const worklistResponseSchema = z.object({
+  tasks: z.array(worklistTaskSchema),
+}).strict();
+export type WorklistResponse = z.infer<typeof worklistResponseSchema>;
+
+/** Create a worklist task (server stamps id/createdAt/updatedAt/status). */
+export const worklistCreateRequestSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  assignee: z.string().optional(),
+  createdBy: z.string().min(1),
+}).strict();
+export type WorklistCreateRequest = z.infer<typeof worklistCreateRequestSchema>;
+
+/** Patch a worklist task (claim / status / assignee). All optional. */
+export const worklistPatchRequestSchema = z.object({
+  status: worklistTaskStatusSchema.optional(),
+  assignee: z.string().optional(),
+  failureReason: z.string().optional(),
+}).strict();
+export type WorklistPatchRequest = z.infer<typeof worklistPatchRequestSchema>;
+
+export const teamMessageSchema = z.object({
+  id: z.string().min(1),
+  ts: z.number(),
+  /** Agent id, or '@leader'. */
+  from: z.string().min(1),
+  /** Agent id, '@leader', or '@broadcast'. */
+  to: z.string().min(1),
+  content: z.string(),
+  replyTo: z.string().optional(),
+}).strict();
+export type TeamMessage = z.infer<typeof teamMessageSchema>;
+
+export const teamMessagesResponseSchema = z.object({
+  messages: z.array(teamMessageSchema),
+}).strict();
+export type TeamMessagesResponse = z.infer<typeof teamMessagesResponseSchema>;
+
+/** Append a message (server stamps id/ts). */
+export const teamMessageAppendRequestSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+  content: z.string().min(1),
+  replyTo: z.string().optional(),
+}).strict();
+export type TeamMessageAppendRequest = z.infer<typeof teamMessageAppendRequestSchema>;
+
 export const A8S_PATHS = {
   health: `/${CLUSTER_PROTOCOL_VERSION}/health`,
   workersRegister: `/${CLUSTER_PROTOCOL_VERSION}/workers/register`,
@@ -1676,6 +1761,20 @@ export const A8S_PATHS = {
   operatorAudit: `/${CLUSTER_PROTOCOL_VERSION}/operator/audit`,
   /** Cluster-wide consumption rollup (fan-in over workers' observe.db). */
   operatorUsage: `/${CLUSTER_PROTOCOL_VERSION}/operator/usage`,
+
+  // ----- Team (project-scoped worklist + message log) -----
+  // The emergent Team: a team is the set of agents sharing a `project` label;
+  // its shared state (worklist + messages) lives here, in a8s, not in any
+  // leader's local files (which don't exist under brain-hand separation).
+  /** GET list / POST append a project's worklist tasks. */
+  projectWorklist: (project: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/projects/${encodeURIComponent(project)}/worklist`,
+  /** PATCH one worklist task (claim / status / assignee). */
+  projectWorklistTask: (project: string, taskId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/projects/${encodeURIComponent(project)}/worklist/${encodeURIComponent(taskId)}`,
+  /** GET read / POST append a project's team message log. */
+  projectMessages: (project: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/projects/${encodeURIComponent(project)}/messages`,
 } as const;
 
 export const WORKER_PATHS = {

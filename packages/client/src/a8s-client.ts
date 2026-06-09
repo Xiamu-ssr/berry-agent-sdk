@@ -68,6 +68,10 @@ import {
   usageTurnListResponseSchema,
   usageInferenceListResponseSchema,
   usageInferenceDetailResponseSchema,
+  worklistResponseSchema,
+  worklistTaskSchema,
+  teamMessagesResponseSchema,
+  teamMessageSchema,
   type AgentHomeDoc,
   type AgentHomeReadResponse,
   type AgentHomeWriteResponse,
@@ -120,6 +124,13 @@ import {
   type UsageTurnListResponse,
   type UsageInferenceListResponse,
   type UsageInferenceDetailResponse,
+  type WorklistResponse,
+  type WorklistTask,
+  type WorklistCreateRequest,
+  type WorklistPatchRequest,
+  type TeamMessagesResponse,
+  type TeamMessage,
+  type TeamMessageAppendRequest,
 } from '@berry-agent/cluster-protocol';
 
 export interface A8sClientOptions {
@@ -425,6 +436,33 @@ export class A8sClient {
   /** Drilldown L4: one inference's full detail (request/response wire, tool calls, guards). */
   agentUsageInferenceDetail(agentId: string, inferenceId: string): Promise<UsageInferenceDetailResponse> {
     return this.request('GET', A8S_PATHS.agentUsageInferenceDetail(agentId, inferenceId), usageInferenceDetailResponseSchema);
+  }
+
+  // ----- Team (project-scoped worklist + message log; emergent team) -----
+
+  /** Read a project's worklist. */
+  listWorklist(project: string): Promise<WorklistResponse> {
+    return this.request('GET', A8S_PATHS.projectWorklist(project), worklistResponseSchema);
+  }
+
+  /** Add a worklist task (server stamps id/status/timestamps). */
+  addWorklistTask(project: string, req: WorklistCreateRequest): Promise<WorklistTask> {
+    return this.request('POST', A8S_PATHS.projectWorklist(project), worklistTaskSchema, req);
+  }
+
+  /** Patch a worklist task (claim / status / assignee). */
+  patchWorklistTask(project: string, taskId: string, patch: WorklistPatchRequest): Promise<WorklistTask> {
+    return this.request('PATCH', A8S_PATHS.projectWorklistTask(project, taskId), worklistTaskSchema, patch);
+  }
+
+  /** Read a project's team message log. */
+  listTeamMessages(project: string): Promise<TeamMessagesResponse> {
+    return this.request('GET', A8S_PATHS.projectMessages(project), teamMessagesResponseSchema);
+  }
+
+  /** Append a message to a project's team log (server stamps id/ts). */
+  appendTeamMessage(project: string, req: TeamMessageAppendRequest): Promise<TeamMessage> {
+    return this.request('POST', A8S_PATHS.projectMessages(project), teamMessageSchema, req);
   }
 
   // ----- Models template -----
