@@ -62,6 +62,12 @@ import {
   agentContextSizeResponseSchema,
   agentPauseResponseSchema,
   agentInterjectResponseSchema,
+  agentUsageResponseSchema,
+  operatorUsageResponseSchema,
+  usageSessionListResponseSchema,
+  usageTurnListResponseSchema,
+  usageInferenceListResponseSchema,
+  usageInferenceDetailResponseSchema,
   type AgentHomeDoc,
   type AgentHomeReadResponse,
   type AgentHomeWriteResponse,
@@ -108,6 +114,12 @@ import {
   type SessionDeleteResponse,
   type SessionClearResponse,
   type SessionTodosResponse,
+  type AgentUsageResponse,
+  type OperatorUsageResponse,
+  type UsageSessionListResponse,
+  type UsageTurnListResponse,
+  type UsageInferenceListResponse,
+  type UsageInferenceDetailResponse,
 } from '@berry-agent/cluster-protocol';
 
 export interface A8sClientOptions {
@@ -381,6 +393,38 @@ export class A8sClient {
 
   interjectAgent(agentId: string, text: string): Promise<AgentInterjectResponse> {
     return this.request('POST', A8S_PATHS.agentInterject(agentId), agentInterjectResponseSchema, { text });
+  }
+
+  // ----- Usage / observability (read-only; workers' observe.db via a8s) -----
+
+  /** Cluster-wide usage rollup (totals + byProduct + byModel + trend + agent rows). Admin-scope. */
+  operatorUsage(): Promise<OperatorUsageResponse> {
+    return this.request('GET', A8S_PATHS.operatorUsage, operatorUsageResponseSchema);
+  }
+
+  /** One agent's usage summary (cost/tokens/tools/model breakdown/daily trend). */
+  agentUsage(agentId: string): Promise<AgentUsageResponse> {
+    return this.request('GET', A8S_PATHS.agentUsage(agentId), agentUsageResponseSchema);
+  }
+
+  /** Drilldown L1: the agent's sessions with per-session cost + counts. */
+  agentUsageSessions(agentId: string): Promise<UsageSessionListResponse> {
+    return this.request('GET', A8S_PATHS.agentUsageSessions(agentId), usageSessionListResponseSchema);
+  }
+
+  /** Drilldown L2: the engine-loop turns inside a session. */
+  agentUsageTurns(agentId: string, sessionId: string): Promise<UsageTurnListResponse> {
+    return this.request('GET', A8S_PATHS.agentUsageTurns(agentId, sessionId), usageTurnListResponseSchema);
+  }
+
+  /** Drilldown L3: the inferences (LLM calls) inside a turn. */
+  agentUsageInferences(agentId: string, turnId: string): Promise<UsageInferenceListResponse> {
+    return this.request('GET', A8S_PATHS.agentUsageInferences(agentId, turnId), usageInferenceListResponseSchema);
+  }
+
+  /** Drilldown L4: one inference's full detail (request/response wire, tool calls, guards). */
+  agentUsageInferenceDetail(agentId: string, inferenceId: string): Promise<UsageInferenceDetailResponse> {
+    return this.request('GET', A8S_PATHS.agentUsageInferenceDetail(agentId, inferenceId), usageInferenceDetailResponseSchema);
   }
 
   // ----- Models template -----

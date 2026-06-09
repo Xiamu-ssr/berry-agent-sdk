@@ -10,3 +10,20 @@ export { A8sClient, A8sRequestError } from './a8s-client.js';
 export type { A8sClientOptions } from './a8s-client.js';
 export { AgentHandle } from './agent-handle.js';
 export type { AgentStreamEvent, SubscribeOptions } from './agent-handle.js';
+
+// Usage / observability response types — products binding an Audit/Usage view
+// import these straight from the client (the canonical cluster-protocol shapes).
+export type {
+  OperatorUsageResponse,
+  OperatorUsageAgentRow,
+  AgentUsageResponse,
+  AgentUsage,
+  UsageSession,
+  UsageSessionListResponse,
+  UsageTurn,
+  UsageTurnListResponse,
+  UsageInference,
+  UsageInferenceListResponse,
+  UsageInferenceDetail,
+  UsageInferenceDetailResponse,
+} from '@berry-agent/cluster-protocol';
