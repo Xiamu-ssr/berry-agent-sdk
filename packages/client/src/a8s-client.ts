@@ -154,7 +154,11 @@ export class A8sClient {
       throw new Error('A8sClient requires a token (or adminToken).');
     }
     this.tokenSource = token;
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    // Native `fetch` must keep its receiver: browsers throw "Illegal
+    // invocation" if `window.fetch` is called as a method on another object
+    // (which is what `this.fetchImpl(...)` does). Bind the global to its realm;
+    // an injected fetch is used as-is (callers own its binding).
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   /** Base URL (read-only) — products building SSE URLs need it. */

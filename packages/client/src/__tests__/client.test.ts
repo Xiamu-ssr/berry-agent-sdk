@@ -86,6 +86,27 @@ describe('A8sClient', () => {
     const client = new A8sClient({ a8sUrl: 'http://a8s', token: 'x' });
     expect(client.agent('coder').agentId).toBe('coder');
   });
+
+  it('binds the default global fetch to its realm (no "Illegal invocation")', async () => {
+    // A browser's native fetch throws "Illegal invocation" if called as a
+    // method on another object. The client stores fetch and calls it as
+    // `this.fetchImpl(...)`; without binding the default, `this` would be the
+    // A8sClient. Simulate native fetch: an UNbound function that demands its
+    // receiver be the global. The fix (`globalThis.fetch.bind(globalThis)`)
+    // keeps the receiver; the old `?? globalThis.fetch` would throw here.
+    const original = globalThis.fetch;
+    function nativeLike(this: unknown, _url: string, _init?: RequestInit) {
+      if (this !== globalThis) throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      return Promise.resolve(json(200, { agents: [] }));
+    }
+    (globalThis as { fetch: unknown }).fetch = nativeLike;
+    try {
+      const client = new A8sClient({ a8sUrl: 'http://a8s', token: 'x' });
+      await expect(client.listAgents()).resolves.toEqual({ agents: [] });
+    } finally {
+      (globalThis as { fetch: unknown }).fetch = original;
+    }
+  });
 });
 
 describe('A8sClient.sendToAgent (streaming turn)', () => {

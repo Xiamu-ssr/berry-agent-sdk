@@ -310,6 +310,30 @@ export class A8sServer<TEntry = unknown> {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
+      // CORS: products (berry-claw etc.) talk to a8s directly from the browser,
+      // which is a cross-origin call (SPA origin ≠ a8s origin). Reflect the
+      // request Origin and allow the Authorization header so the bearer token
+      // can ride along; answer preflight here before routing. Credentials are
+      // bearer-token (not cookies), so reflecting Origin is safe.
+      const origin = req.headers.origin;
+      if (typeof origin === 'string' && origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+        res.setHeader(
+          'Access-Control-Allow-Headers',
+          req.headers['access-control-request-headers'] ?? 'authorization,content-type',
+        );
+        res.setHeader('Access-Control-Max-Age', '600');
+        // SSE streams (events/stream, send) expose no special headers, but
+        // letting the client read them is harmless and future-proof.
+        res.setHeader('Access-Control-Expose-Headers', 'content-type');
+      }
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       const matched = await this.router!.dispatch(req, res);
       if (!matched && !res.writableEnded) {
         writeJson(res, 404, errorPayloadSchema.parse({
