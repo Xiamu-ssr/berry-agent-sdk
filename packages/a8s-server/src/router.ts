@@ -26,11 +26,13 @@ export interface RouteContext {
   query: URLSearchParams;
   /**
    * Auth scope resolved by requireProductScope (when applied). `'*'` = the
-   * cluster operator (admin token — sees everything); `{product}` = a single
-   * product scope (sees only its own resources). Undefined when no scope
-   * middleware ran (operator-only routes guarded by requireAdminToken).
+   * cluster operator (admin token — sees everything); `{product}` = a product
+   * root token (sees all of its own resources, across subjects); `{product,
+   * subject}` = a subject-scoped token (sees only `product:subject` resources).
+   * Undefined when no scope middleware ran (operator-only routes guarded by
+   * requireAdminToken).
    */
-  scope?: '*' | { product: string };
+  scope?: '*' | { product: string; subject?: string };
 }
 
 export type RouteHandler = (ctx: RouteContext) => Promise<void> | void;

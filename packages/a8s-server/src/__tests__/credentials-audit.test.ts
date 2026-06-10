@@ -13,6 +13,7 @@ import {
   A8S_PATHS,
   productCredentialListResponseSchema,
   productCredentialIssueResponseSchema,
+  scopedTokenIssueResponseSchema,
   auditQueryResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { MemoryRuntimeOrchestrationStore, RuntimeOrchestrator } from '@berry-agent/runtime';
@@ -85,6 +86,54 @@ describe('product-credentials + audit routes', () => {
       method: 'POST', headers: auth, body: JSON.stringify({ product: 'Not Kebab' }),
     });
     expect(r.status).toBe(400);
+  });
+
+  it('scoped-token: product root token mints a subject token; subject token cannot re-mint', async () => {
+    // Issue a fresh product root token (admin).
+    const issued = await fetch(`${url}${A8S_PATHS.operatorCredentials}`, {
+      method: 'POST', headers: auth, body: JSON.stringify({ product: 'shop' }),
+    });
+    const root = productCredentialIssueResponseSchema.parse(await issued.json());
+
+    // Root token mints a subject-scoped token.
+    const mintWithRoot = await fetch(`${url}${A8S_PATHS.productScopedToken('shop')}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${root.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ subject: 'alice' }),
+    });
+    expect(mintWithRoot.status).toBe(200);
+    const scopedResp = scopedTokenIssueResponseSchema.parse(await mintWithRoot.json());
+    expect(scopedResp.product).toBe('shop');
+    expect(scopedResp.subject).toBe('alice');
+    expect(scopedResp.token.startsWith('bs_')).toBe(true);
+
+    // The subject token must NOT be able to mint (no privilege escalation).
+    const escalate = await fetch(`${url}${A8S_PATHS.productScopedToken('shop')}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${scopedResp.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ subject: 'bob' }),
+    });
+    expect(escalate.status).toBe(401);
+
+    // A root token cannot mint under a DIFFERENT product.
+    const crossProduct = await fetch(`${url}${A8S_PATHS.productScopedToken('other')}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${root.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ subject: 'alice' }),
+    });
+    expect(crossProduct.status).toBe(401);
+
+    // Admin may mint for any product.
+    const mintWithAdmin = await fetch(`${url}${A8S_PATHS.productScopedToken('shop')}`, {
+      method: 'POST', headers: auth, body: JSON.stringify({ subject: 'carol' }),
+    });
+    expect(mintWithAdmin.status).toBe(200);
+
+    // No token at all → 401.
+    const anon = await fetch(`${url}${A8S_PATHS.productScopedToken('shop')}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ subject: 'x' }),
+    });
+    expect(anon.status).toBe(401);
   });
 
   it('audit: the credential mutations above were recorded and are queryable', async () => {

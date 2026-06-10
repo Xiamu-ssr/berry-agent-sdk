@@ -12,14 +12,18 @@
 
 import {
   A8S_PATHS,
+  ADMIN_AUTH_HEADER,
+  parseAdminAuthHeader,
   productCredentialListResponseSchema,
   productCredentialIssueRequestSchema,
   productCredentialIssueResponseSchema,
+  scopedTokenIssueRequestSchema,
+  scopedTokenIssueResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { constantTimeEqual, requireAdminToken } from '../auth.js';
 import { withAudit } from '../middleware.js';
 
 export function productCredentialRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -76,6 +80,44 @@ export function productCredentialRoutes<TEntry>(deps: ServerDeps<TEntry>): Route
           throw httpError(404, 'unknown_product', `no credential for product "${params.product}"`);
         }
         writeJson(res, 200, { ok: true });
+      },
+    },
+
+    // ---- Mint a subject-scoped token under a product ----
+    // Auth: the caller must present THIS product's root token (so a product
+    // backend mints sub-tokens for its own users) or the cluster admin token.
+    // A subject-scoped token may NOT mint (no privilege escalation), and a
+    // product's root token may not mint under a different product.
+    {
+      method: 'POST',
+      pattern: '/v1/products/:product/scoped-token',
+      name: 'POST /v1/products/:product/scoped-token',
+      middleware: [
+        withAudit(deps.audit, { action: 'credential.scoped.issue', target: (ctx) => ctx.params.product }),
+      ],
+      handler: async ({ params, req, res }) => {
+        const presented = parseAdminAuthHeader(
+          req.headers[ADMIN_AUTH_HEADER.toLowerCase()] as string | undefined,
+        );
+        const isAdmin = !!deps.adminToken && !!presented && constantTimeEqual(presented, deps.adminToken);
+        if (!isAdmin) {
+          const resolved = deps.productCredentials.verify(presented);
+          // Only this product's ROOT token (no subject) may mint for it.
+          if (!resolved || resolved.subject !== undefined || resolved.product !== params.product) {
+            throw httpError(401, 'unauthorized', 'requires this product\'s root token or the admin token');
+          }
+        }
+        const parsed = scopedTokenIssueRequestSchema.parse(await readJsonBody(req));
+        const cred = deps.productCredentials.issueScoped(params.product, parsed.subject, { label: parsed.label });
+        // The ONE time the token is returned — the product backend must hand it
+        // to the user's browser now (and keep its own root token server-side).
+        writeJson(res, 200, scopedTokenIssueResponseSchema.parse({
+          product: cred.product,
+          subject: cred.subject,
+          token: cred.token,
+          createdAt: cred.createdAt,
+          label: cred.label,
+        }));
       },
     },
   ];

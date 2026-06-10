@@ -60,10 +60,12 @@ export function requireProductScope(deps: ServerDeps): Middleware {
       ctx.scope = '*';
       return next();
     }
-    // Product token → product scope.
-    const product = deps.productCredentials.verify(presented);
-    if (product) {
-      ctx.scope = { product };
+    // Product token → product scope (root) or product:subject scope (scoped).
+    const resolved = deps.productCredentials.verify(presented);
+    if (resolved) {
+      ctx.scope = resolved.subject !== undefined
+        ? { product: resolved.product, subject: resolved.subject }
+        : { product: resolved.product };
       return next();
     }
     // Dev bypass: no admin token AND no products issued → open operator scope.
@@ -75,11 +77,22 @@ export function requireProductScope(deps: ServerDeps): Middleware {
   };
 }
 
-/** True when the scope may access a resource owned by `owner` (undefined owner = legacy/unowned, operator-only). */
+/**
+ * True when the scope may access a resource owned by `owner`.
+ *   - operator (`'*'`)             → everything
+ *   - root token (`{product}`)     → owner is exactly the product, OR any
+ *                                    `product:subject` under it (a product
+ *                                    backend sees all its users' resources)
+ *   - scoped token (`{p, subject}`) → owner is exactly `product:subject`
+ * An undefined owner (legacy/unowned) is operator-only.
+ */
 export function scopeCanAccess(scope: RouteContext['scope'], owner: string | undefined): boolean {
   if (scope === '*') return true;
-  if (!scope) return false;
-  return owner !== undefined && owner === scope.product;
+  if (!scope || owner === undefined) return false;
+  if (scope.subject !== undefined) {
+    return owner === `${scope.product}:${scope.subject}`;
+  }
+  return owner === scope.product || owner.startsWith(`${scope.product}:`);
 }
 
 /**

@@ -238,10 +238,13 @@ async function handleCreateAgent<TEntry>(
   const body = await readJsonBody(req);
   const parsed = createAgentRequestSchema.parse(body);
 
-  // Stamp the owning product onto the agent's labels so the cluster can
-  // scope-filter it. A product-scoped caller owns what it creates; the
+  // Stamp the owning product (or product:subject) onto the agent's labels so
+  // the cluster can scope-filter it. A subject-scoped caller owns
+  // `product:subject`; a product root token owns the bare `product`; the
   // operator ('*') may pass an explicit labels.owner or leave it unowned.
-  const owner = scope && scope !== '*' ? scope.product : parsed.spec.labels?.owner;
+  const owner = scope && scope !== '*'
+    ? (scope.subject !== undefined ? `${scope.product}:${scope.subject}` : scope.product)
+    : parsed.spec.labels?.owner;
   const labels = owner ? { ...parsed.spec.labels, owner } : parsed.spec.labels;
 
   // Forward the wire spec straight to the plane — no fake AgentHome

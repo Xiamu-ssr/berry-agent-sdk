@@ -815,6 +815,35 @@ export const productCredentialIssueResponseSchema = z.object({
 }).strict();
 export type ProductCredentialIssueResponse = z.infer<typeof productCredentialIssueResponseSchema>;
 
+// ----- Subject-scoped tokens (a product's per-user sub-credentials) -----
+// a8s does NOT model "users": the product (e.g. berry-claw) decides who its
+// end-users are and how they log in. But the TOKEN a product hands to one of
+// its users is signed and verified by a8s. A product's root `bp_…` token can
+// mint a narrower token bound to a `subject` string; that token only ever
+// resolves to owner `product:subject`, never the whole product. The product
+// backend mints one per logged-in user and never exposes its root token to a
+// browser. `subject` is opaque to a8s — its meaning is the product's business.
+
+/** Mint a subject-scoped token under a product. Caller authenticates with the
+ *  product's root token (or the cluster admin token). */
+export const scopedTokenIssueRequestSchema = z.object({
+  /** Product-defined user/subject id (opaque to a8s). */
+  subject: z.string().min(1).max(128),
+  label: z.string().min(1).optional(),
+}).strict();
+export type ScopedTokenIssueRequest = z.infer<typeof scopedTokenIssueRequestSchema>;
+
+/** The scoped-token response — token returned ONCE, scoped to product:subject. */
+export const scopedTokenIssueResponseSchema = z.object({
+  product: z.string().min(1),
+  subject: z.string().min(1),
+  /** The narrow bearer token (owner === `${product}:${subject}`). */
+  token: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+  label: z.string().optional(),
+}).strict();
+export type ScopedTokenIssueResponse = z.infer<typeof scopedTokenIssueResponseSchema>;
+
 // ============================================================
 // Audit log query — operator reads the append-only action log
 // ============================================================
@@ -1757,6 +1786,9 @@ export const A8S_PATHS = {
   operatorCredentials: `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials`,
   operatorCredential: (product: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials/${encodeURIComponent(product)}`,
+  /** Mint a subject-scoped token under a product (product root token mints it). */
+  productScopedToken: (product: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/products/${encodeURIComponent(product)}/scoped-token`,
   /** Operator audit log query. */
   operatorAudit: `/${CLUSTER_PROTOCOL_VERSION}/operator/audit`,
   /** Cluster-wide consumption rollup (fan-in over workers' observe.db). */
