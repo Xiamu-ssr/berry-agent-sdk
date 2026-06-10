@@ -19,12 +19,14 @@ import {
   RuntimeOrchestrator,
   type RuntimeOrchestrationStore,
 } from '@berry-agent/runtime';
+import { A8S_PATHS } from '@berry-agent/cluster-protocol';
 import { A8sServer } from './server.js';
 
 const USAGE = `berry-a8s — Berry Agent control-plane service
 
 Usage:
   berry-a8s start [options]
+  berry-a8s mint [options]
   berry-a8s --help
 
 a8s is a pure control plane: it schedules agents onto workers, brokers
@@ -64,6 +66,25 @@ Options:
 
   --version             Print version
   --help                Show this help
+
+mint — issue a product token and print a ready-to-paste connection.
+
+  berry-a8s mint --product <code> [--subject <id>] [options]
+
+  Calls a RUNNING a8s over HTTP (it does not start one). Hand the printed
+  token to a user; they paste it into the berry-claw front-end, which then
+  talks to a8s directly. A bare --product mints a \`bp_…\` ROOT token (sees
+  every agent under that product); add --subject to mint a \`bs_…\` token
+  scoped to one user (\`product:subject\`). The token value is shown ONCE.
+
+  --product <code>     Product code to scope the token to (required)
+  --subject <id>       Mint a subject-scoped child token instead of a root one
+  --label <text>       Human label stored alongside the credential
+  --url <u>            a8s base URL to call and to print for the user
+                         (default env BERRY_A8S_ADVERTISE_URL or http://localhost:8080)
+  --admin-token <s>    Operator/admin token, required to mint a root token.
+                         For --subject you may instead pass that product's
+                         own root token here. env BERRY_A8S_ADMIN_TOKEN
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -79,6 +100,9 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const subcommand = argv[0];
+  if (subcommand === 'mint') {
+    return mint(argv.slice(1));
+  }
   if (subcommand !== 'start') {
     process.stderr.write(`unknown subcommand: ${subcommand}\n\n${USAGE}`);
     return 2;
@@ -148,6 +172,66 @@ async function main(argv: string[]): Promise<number> {
 
   // Keep the process alive until a signal arrives.
   await new Promise<void>(() => { /* never resolves */ });
+  return 0;
+}
+
+async function mint(args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      product: { type: 'string' },
+      subject: { type: 'string' },
+      label: { type: 'string' },
+      url: { type: 'string' },
+      'admin-token': { type: 'string' },
+    },
+    allowPositionals: false,
+  });
+
+  const product = values.product;
+  if (!product) {
+    process.stderr.write('mint: --product is required\n');
+    return 2;
+  }
+  const token = values['admin-token'] ?? process.env.BERRY_A8S_ADMIN_TOKEN;
+  if (!token) {
+    process.stderr.write('mint: --admin-token (or env BERRY_A8S_ADMIN_TOKEN) is required\n');
+    return 2;
+  }
+  const base = (values.url ?? process.env.BERRY_A8S_ADVERTISE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
+  const subject = values.subject;
+
+  // Root token → operator credentials endpoint; subject token → the product's
+  // scoped-token endpoint. Both are plain authenticated POSTs.
+  const path = subject ? A8S_PATHS.productScopedToken(product) : A8S_PATHS.operatorCredentials;
+  const body = subject
+    ? { subject, ...(values.label ? { label: values.label } : {}) }
+    : { product, ...(values.label ? { label: values.label } : {}) };
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    process.stderr.write(`mint: cannot reach a8s at ${base} — ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    process.stderr.write(`mint: a8s returned ${res.status} ${res.statusText}\n${text}\n`);
+    return 1;
+  }
+  const minted = (await res.json()) as { product: string; subject?: string; token: string };
+  const owner = minted.subject ? `${minted.product}:${minted.subject}` : minted.product;
+
+  // Print a clean, paste-ready block: the front-end needs exactly URL + token.
+  process.stdout.write('\n✓ minted token — hand these two lines to the user (token shown ONCE):\n\n');
+  process.stdout.write(`  a8s URL : ${base}\n`);
+  process.stdout.write(`  token   : ${minted.token}\n`);
+  process.stdout.write(`  scope   : ${owner}${minted.subject ? ' (subject-scoped)' : ' (product root)'}\n\n`);
   return 0;
 }
 
