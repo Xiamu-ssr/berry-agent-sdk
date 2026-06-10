@@ -28,7 +28,7 @@ import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
 import { requireAdminToken } from '../auth.js';
 import { withAudit } from '../middleware.js';
-import { resolveAgentWorker } from './agents.js';
+import { resolveAgentWorker } from './worker-proxy.js';
 
 export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
   return [

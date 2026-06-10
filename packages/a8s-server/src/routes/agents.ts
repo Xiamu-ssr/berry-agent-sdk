@@ -26,6 +26,7 @@ import { httpError, type RouteDefinition, type RouteContext } from '../router.js
 import type { ServerDeps } from '../deps.js';
 import { requireAdminToken, requireProductScope, requireAgentScope, scopeCanAccess } from '../auth.js';
 import { withAudit } from '../middleware.js';
+import { resolveAgentWorker } from './worker-proxy.js';
 
 export function agentRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
   return [
@@ -226,23 +227,6 @@ async function pipeStreamingResponse<TEntry>(
   } finally {
     if (!res.writableEnded) res.end();
   }
-}
-
-/**
- * Look up the worker that owns `agentId` and return its token entry.
- * Throws an HttpError when the agent isn't assigned or the worker has
- * no in-memory token (the second case indicates a8s lost state).
- */
-export function resolveAgentWorker<TEntry>(deps: ServerDeps<TEntry>, agentId: string) {
-  const loc = deps.plane.getAgentLocation(agentId);
-  if (!loc.workerId) {
-    throw httpError(404, 'agent_not_assigned', `agent "${agentId}" has no assigned worker`);
-  }
-  const entry = deps.tokens.get(loc.workerId);
-  if (!entry) {
-    throw httpError(500, 'worker_token_missing', `no token for worker ${loc.workerId}`);
-  }
-  return entry;
 }
 
 async function handleCreateAgent<TEntry>(

@@ -15,7 +15,6 @@
 
 import {
   A8S_PATHS,
-  WORKER_AUTH_HEADER,
   WORKER_PATHS,
   agentUsageResponseSchema,
   operatorUsageResponseSchema,
@@ -23,15 +22,14 @@ import {
   usageTurnListResponseSchema,
   usageInferenceListResponseSchema,
   usageInferenceDetailResponseSchema,
-  workerAuthHeader,
   type AgentUsage,
   type OperatorUsageAgentRow,
 } from '@berry-agent/cluster-protocol';
 import { writeJson } from '../http-helpers.js';
-import { httpError, type RouteDefinition } from '../router.js';
+import { type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
 import { requireAdminToken, requireAgentScope } from '../auth.js';
-import { resolveAgentWorker } from './agents.js';
+import { workerFetch, workerGetJson } from './worker-proxy.js';
 
 export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
   return [
@@ -58,7 +56,7 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       name: 'GET /v1/agents/:id/usage/sessions',
       middleware: [requireAgentScope(deps)],
       handler: async ({ params, res }) => {
-        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageSessions(params.agentId));
+        const body = await workerGetJson(deps, params.agentId, WORKER_PATHS.agentUsageSessions(params.agentId), 'worker_usage_failed');
         writeJson(res, 200, usageSessionListResponseSchema.parse(body));
       },
     },
@@ -68,7 +66,7 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       name: 'GET /v1/agents/:id/usage/sessions/:sid/turns',
       middleware: [requireAgentScope(deps)],
       handler: async ({ params, res }) => {
-        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageTurns(params.agentId, params.sessionId));
+        const body = await workerGetJson(deps, params.agentId, WORKER_PATHS.agentUsageTurns(params.agentId, params.sessionId), 'worker_usage_failed');
         writeJson(res, 200, usageTurnListResponseSchema.parse(body));
       },
     },
@@ -78,7 +76,7 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       name: 'GET /v1/agents/:id/usage/turns/:tid/inferences',
       middleware: [requireAgentScope(deps)],
       handler: async ({ params, res }) => {
-        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageInferences(params.agentId, params.turnId));
+        const body = await workerGetJson(deps, params.agentId, WORKER_PATHS.agentUsageInferences(params.agentId, params.turnId), 'worker_usage_failed');
         writeJson(res, 200, usageInferenceListResponseSchema.parse(body));
       },
     },
@@ -88,7 +86,7 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       name: 'GET /v1/agents/:id/usage/inferences/:iid',
       middleware: [requireAgentScope(deps)],
       handler: async ({ params, res }) => {
-        const body = await proxyUsageGet(deps, params.agentId, WORKER_PATHS.agentUsageInferenceDetail(params.agentId, params.inferenceId));
+        const body = await workerGetJson(deps, params.agentId, WORKER_PATHS.agentUsageInferenceDetail(params.agentId, params.inferenceId), 'worker_usage_failed');
         writeJson(res, 200, usageInferenceDetailResponseSchema.parse(body));
       },
     },
@@ -183,36 +181,10 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
  * has no assigned worker — callers that aggregate swallow that.
  */
 async function fetchAgentUsage<TEntry>(deps: ServerDeps<TEntry>, agentId: string): Promise<AgentUsage | null> {
-  const entry = resolveAgentWorker(deps, agentId);
-  const response = await fetch(`${entry.callbackUrl}${WORKER_PATHS.agentUsage(agentId)}`, {
-    method: 'GET',
-    headers: { [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token) },
-  });
-  if (!response.ok) {
-    throw httpError(response.status, 'worker_usage_failed', `worker returned ${response.status} for usage`);
-  }
-  const parsed = agentUsageResponseSchema.parse(await response.json());
-  return parsed.usage;
+  const body = await workerGetJson(deps, agentId, WORKER_PATHS.agentUsage(agentId), 'worker_usage_failed');
+  return agentUsageResponseSchema.parse(body).usage;
 }
 
 function sum<T>(rows: T[], pick: (r: T) => number): number {
   return rows.reduce((acc, r) => acc + pick(r), 0);
-}
-
-/**
- * Proxy a GET to the agent's owning worker at the given subpath and return the
- * parsed JSON body. Used by the drill-down routes — a8s resolves the worker,
- * forwards with the worker token, and lets the route's own zod schema validate
- * the shape. Throws an HttpError on a non-2xx worker reply.
- */
-async function proxyUsageGet<TEntry>(deps: ServerDeps<TEntry>, agentId: string, subpath: string): Promise<unknown> {
-  const entry = resolveAgentWorker(deps, agentId);
-  const response = await fetch(`${entry.callbackUrl}${subpath}`, {
-    method: 'GET',
-    headers: { [WORKER_AUTH_HEADER]: workerAuthHeader(entry.token) },
-  });
-  if (!response.ok) {
-    throw httpError(response.status, 'worker_usage_failed', `worker returned ${response.status}`);
-  }
-  return response.json();
 }
