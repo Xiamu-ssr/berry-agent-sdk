@@ -4,7 +4,7 @@
 // The operator client now lives in @berry-agent/client as the single
 // canonical A8sClient — one source of truth for talking to a8s. This
 // module keeps the historical name working for existing callers
-// (cluster-admin Hand, worker-daemon, bootstrap, remote-teammate).
+// (cluster-admin Hand, worker-daemon, bootstrap).
 //
 // `A8sClientOptions` accepts both `token` and the older `adminToken`, so
 // every existing `new A8sOperatorClient({ a8sUrl, adminToken })` call
