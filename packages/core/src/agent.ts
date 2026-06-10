@@ -254,9 +254,10 @@ export class Agent {
       delegate: (message, delegateConfig) => this.delegate(message, delegateConfig),
     });
 
-    // Persistent sub-agent spawning lives in @berry-agent/team (leader-only
-    // `spawn_teammate` tool). The core Agent has no spawn API — `delegate()`
-    // is the only in-core way to fork a sub-turn.
+    // Persistent sub-agent spawning lives in the emergent-team layer (the
+    // leader-only `spawn_teammate` tool injected by worker-daemon team-mode,
+    // backed by a8s). The core Agent has no spawn API — `delegate()` is the
+    // only in-core way to fork a sub-turn.
 
     registerMemoryProviderCapabilities(this.capabilityRegistry(), this._memoryProvider, this.handAdapterOptions);
 

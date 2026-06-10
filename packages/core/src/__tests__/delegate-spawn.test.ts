@@ -213,4 +213,5 @@ describe('delegate', () => {
   });
 });
 
-// spawn() was removed from core; persistent sub-agents moved to @berry-agent/team.
+// spawn() was removed from core; persistent sub-agents are an emergent-team
+// concern (worker-daemon team-mode + a8s), not a core Agent capability.
