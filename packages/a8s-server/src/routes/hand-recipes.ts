@@ -19,7 +19,7 @@ import {
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireAdminToken, requireProductScope } from '../auth.js';
 import { withAudit } from '../middleware.js';
 
 export function handRecipeRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -29,7 +29,7 @@ export function handRecipeRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinit
       method: 'GET',
       pattern: A8S_PATHS.operatorHandRecipes,
       name: 'GET /v1/operator/hand-recipes',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const recipes = await deps.handRecipes.list();
         writeJson(res, 200, handRecipeListResponseSchema.parse({ recipes }));

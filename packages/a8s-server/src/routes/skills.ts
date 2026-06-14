@@ -26,7 +26,7 @@ import {
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireAdminToken, requireProductScope } from '../auth.js';
 import { withAudit } from '../middleware.js';
 import { resolveAgentWorker } from './worker-proxy.js';
 
@@ -37,7 +37,7 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
       method: 'GET',
       pattern: A8S_PATHS.operatorSkills,
       name: 'GET /v1/operator/skills',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const skills = (await deps.skills.list()).map((s) => operatorSkillSchema.parse({
           name: s.name,
@@ -79,7 +79,7 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
       method: 'GET',
       pattern: '/v1/operator/skills/:name',
       name: 'GET /v1/operator/skills/:name',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ params, res }) => {
         const skill = await deps.skills.get(params.name);
         if (!skill) {
@@ -128,7 +128,7 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
       pattern: '/v1/operator/agents/:agentId/skills/:name',
       name: 'POST /v1/operator/agents/:id/skills/:name',
       middleware: [
-        requireAdminToken(deps),
+        requireProductScope(deps),
         withAudit(deps.audit, {
           action: 'skill.install',
           target: (ctx) => `${ctx.params.agentId}/${ctx.params.name}`,
