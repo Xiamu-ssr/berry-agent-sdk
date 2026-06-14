@@ -24,7 +24,7 @@ import { listBuiltinPresets, listModels, getPreset, modelProtocolFamily, RAW_PRE
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import type { RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireAdminToken, requireProductScope } from '../auth.js';
 import { withAudit } from '../middleware.js';
 
 export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -33,7 +33,7 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
       method: 'GET',
       pattern: A8S_PATHS.operatorModelsTemplate,
       name: 'GET /v1/operator/models-template',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const record = await deps.modelsTemplate.get();
         writeJson(res, 200, modelsTemplateGetResponseSchema.parse({

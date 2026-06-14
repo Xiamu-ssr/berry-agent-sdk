@@ -28,7 +28,7 @@ import {
 import { writeJson } from '../http-helpers.js';
 import { type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken, requireAgentScope } from '../auth.js';
+import { requireAdminToken, requireAgentScope, requireProductScope } from '../auth.js';
 import { workerFetch, workerGetJson } from './worker-proxy.js';
 
 export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -94,9 +94,13 @@ export function usageRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[]
       method: 'GET',
       pattern: A8S_PATHS.operatorUsage,
       name: 'GET /v1/operator/usage',
-      middleware: [requireAdminToken(deps)],
-      handler: async ({ res }) => {
-        const locations = deps.plane.listAgents();
+      middleware: [requireProductScope(deps)],
+      handler: async ({ res, scope }) => {
+        const allLocations = deps.plane.listAgents();
+        const { scopeCanAccess } = await import('../auth.js');
+        const locations = scope === '*'
+          ? allLocations
+          : allLocations.filter((loc) => scopeCanAccess(scope, loc.owner ?? undefined));
 
         // Fan out to each owning worker concurrently; a worker that's gone
         // or has no record contributes nothing rather than failing the whole

@@ -1950,11 +1950,11 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(Array.isArray(opBody.agents)).toBe(true);
     expect(Array.isArray(opBody.byProduct)).toBe(true);
 
-    // A product token cannot reach the operator rollup.
+    // A product token sees only its own agents in the usage rollup (scope-filtered).
     const opAsProduct = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorUsage}`, {
       headers: { authorization: `Bearer ${tokenA}` },
     });
-    expect(opAsProduct.status).toBe(401);
+    expect(opAsProduct.status).toBe(200);
 
     // Drill-down read path: session → turn → inference → detail all proxy to
     // the owning worker's observe.db. Nothing's recorded, so the lists are

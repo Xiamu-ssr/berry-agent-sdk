@@ -22,7 +22,7 @@ import {
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
-import { requireAdminToken } from '../auth.js';
+import { requireProductScope } from '../auth.js';
 import { withAudit } from '../middleware.js';
 
 export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] {
@@ -32,7 +32,7 @@ export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] 
       method: 'GET',
       pattern: '/v1/projects/:project/worklist',
       name: 'GET /v1/projects/:project/worklist',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ params, res }) => {
         const tasks = await deps.teams.listWorklist(decodeURIComponent(params.project));
         writeJson(res, 200, worklistResponseSchema.parse({ tasks }));
@@ -45,7 +45,7 @@ export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] 
       pattern: '/v1/projects/:project/worklist',
       name: 'POST /v1/projects/:project/worklist',
       middleware: [
-        requireAdminToken(deps),
+        requireProductScope(deps),
         withAudit(deps.audit, { action: 'team.worklist.add', target: (ctx) => ctx.params.project }),
       ],
       handler: async ({ params, req, res }) => {
@@ -61,7 +61,7 @@ export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] 
       pattern: '/v1/projects/:project/worklist/:taskId',
       name: 'PATCH /v1/projects/:project/worklist/:taskId',
       middleware: [
-        requireAdminToken(deps),
+        requireProductScope(deps),
         withAudit(deps.audit, { action: 'team.worklist.patch', target: (ctx) => `${ctx.params.project}/${ctx.params.taskId}` }),
       ],
       handler: async ({ params, req, res }) => {
@@ -77,7 +77,7 @@ export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] 
       method: 'GET',
       pattern: '/v1/projects/:project/messages',
       name: 'GET /v1/projects/:project/messages',
-      middleware: [requireAdminToken(deps)],
+      middleware: [requireProductScope(deps)],
       handler: async ({ params, res }) => {
         const messages = await deps.teams.listMessages(decodeURIComponent(params.project));
         writeJson(res, 200, teamMessagesResponseSchema.parse({ messages }));
@@ -90,7 +90,7 @@ export function teamRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[] 
       pattern: '/v1/projects/:project/messages',
       name: 'POST /v1/projects/:project/messages',
       middleware: [
-        requireAdminToken(deps),
+        requireProductScope(deps),
         withAudit(deps.audit, { action: 'team.message.append', target: (ctx) => ctx.params.project }),
       ],
       handler: async ({ params, req, res }) => {

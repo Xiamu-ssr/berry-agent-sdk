@@ -24,6 +24,8 @@
 // product credentials survive a8s restarts.
 
 import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { constantTimeEqual } from './auth.js';
 
 export interface ProductCredential {
@@ -51,6 +53,27 @@ class MemoryBacking implements ProductCredentialBacking {
   private creds: ProductCredential[] = [];
   load(): ProductCredential[] { return this.creds; }
   save(creds: ProductCredential[]): void { this.creds = creds; }
+}
+
+export class FileCredentialBacking implements ProductCredentialBacking {
+  constructor(private readonly filePath: string) {}
+
+  load(): ProductCredential[] {
+    try {
+      const raw = readFileSync(this.filePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  save(creds: ProductCredential[]): void {
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    const tmp = `${this.filePath}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tmp, JSON.stringify(creds, null, 2));
+    renameSync(tmp, this.filePath);
+  }
 }
 
 export class ProductCredentialStore {

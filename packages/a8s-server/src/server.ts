@@ -34,7 +34,7 @@ import { MachineRegistry } from './machine-registry.js';
 import { HandRecipeStore } from './hand-recipe-store.js';
 import { SkillStore } from './skill-store.js';
 import { TeamStore } from './team-store.js';
-import { ProductCredentialStore } from './product-credentials.js';
+import { ProductCredentialStore, FileCredentialBacking } from './product-credentials.js';
 import { Router, type RouteDefinition } from './router.js';
 import { writeJson } from './http-helpers.js';
 
@@ -119,7 +119,7 @@ export class A8sServer<TEntry = unknown> {
   private readonly handRecipes: HandRecipeStore;
   private readonly skills: SkillStore;
   private readonly teams: TeamStore;
-  private readonly productCredentials = new ProductCredentialStore();
+  private readonly productCredentials: ProductCredentialStore;
   private readonly inflight = new Set<Promise<void>>();
   private wakeScheduler: ManagedRuntimeWakeScheduler | null = null;
   private router: Router | null = null;
@@ -162,6 +162,12 @@ export class A8sServer<TEntry = unknown> {
       filePath: teamsFile,
       logger: this.logger,
     });
+    const credentialsFile = options.auditRoot
+      ? `${options.auditRoot.replace(/\/audit\/?$/, '')}/credentials.json`
+      : undefined;
+    this.productCredentials = new ProductCredentialStore(
+      credentialsFile ? new FileCredentialBacking(credentialsFile) : undefined,
+    );
     if (!this.adminToken) {
       this.logger.warn?.(
         '[a8s-server] WARNING: starting without --admin-token; all product-scope endpoints are open. Use only for dev/tests.',
