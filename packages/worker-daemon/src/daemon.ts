@@ -40,6 +40,7 @@ import {
   workerRunAgentRequestSchema,
   workerRunAgentResponseSchema,
   workerStopAgentResponseSchema,
+  API_VERSION,
   healthResponseSchema,
   agentHomeDocSchema,
   agentHomeReadResponseSchema,
@@ -348,6 +349,7 @@ export class WorkerDaemon<TEntry = unknown> {
     return healthResponseSchema.parse({
       ok: true,
       version: this.options.version ?? '0.0.0',
+      apiVersion: API_VERSION,
       uptime: Math.floor((Date.now() - this.startedAt) / 1000),
     });
   }

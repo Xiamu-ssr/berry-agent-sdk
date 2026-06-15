@@ -20,6 +20,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { hostname } from 'node:os';
 import {
+  API_VERSION,
   MACHINE_PATHS,
   WORKER_AUTH_HEADER,
   errorPayloadSchema,
@@ -156,6 +157,7 @@ export class MachineConnectorDaemon {
     return healthResponseSchema.parse({
       ok: true,
       version: this.options.version ?? '0.0.0',
+      apiVersion: API_VERSION,
       uptime: Math.floor((Date.now() - this.startedAt) / 1000),
     });
   }

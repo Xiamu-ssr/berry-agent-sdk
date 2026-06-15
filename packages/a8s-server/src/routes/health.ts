@@ -9,7 +9,7 @@
 // (Prometheus scrape targets historically don't auth) — put it behind
 // nginx for restricted deployments.
 
-import { A8S_PATHS, healthResponseSchema } from '@berry-agent/cluster-protocol';
+import { A8S_PATHS, API_VERSION, healthResponseSchema } from '@berry-agent/cluster-protocol';
 import { writeJson, writeText } from '../http-helpers.js';
 import type { RouteContext, RouteDefinition } from '../router.js';
 import type { ServerDeps } from '../deps.js';
@@ -25,6 +25,7 @@ export function healthRoutes(deps: ServerDeps): RouteDefinition[] {
         writeJson(res, 200, healthResponseSchema.parse({
           ok: true,
           version: deps.version,
+          apiVersion: API_VERSION,
           uptime: Math.floor((Date.now() - deps.startedAt) / 1000),
         }));
       },

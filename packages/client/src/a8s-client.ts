@@ -489,8 +489,8 @@ export class A8sClient {
 
   // ----- Health -----
 
-  async health(): Promise<{ ok: true; version?: string; uptime?: number }> {
-    return this.requestRaw('GET', A8S_PATHS.health) as Promise<{ ok: true; version?: string; uptime?: number }>;
+  async health(): Promise<{ ok: true; version: string; apiVersion: number; uptime: number }> {
+    return this.requestRaw('GET', A8S_PATHS.health) as Promise<{ ok: true; version: string; apiVersion: number; uptime: number }>;
   }
 
   // ----- Operator: Hand recipes -----

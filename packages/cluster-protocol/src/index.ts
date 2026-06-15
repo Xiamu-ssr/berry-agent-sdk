@@ -1027,6 +1027,7 @@ export type ScheduleWakeResponse = z.infer<typeof scheduleWakeResponseSchema>;
 export const healthResponseSchema = z.object({
   ok: z.literal(true),
   version: z.string(),
+  apiVersion: z.number().int().positive(),
   uptime: z.number().int().nonnegative(),
 }).strict();
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
@@ -1361,6 +1362,7 @@ export const SSE_SESSION_QUERY_PARAM = 'session' as const;
 // ============================================================
 
 export const CLUSTER_PROTOCOL_VERSION = 'v1' as const;
+export const API_VERSION = 1 as const;
 
 // ============================================================
 // Usage / consumption (read-only rollup from each worker's observe.db)
