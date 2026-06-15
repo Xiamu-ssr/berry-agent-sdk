@@ -35,8 +35,8 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
     // ---- Catalog: list (metadata only) ----
     {
       method: 'GET',
-      pattern: A8S_PATHS.operatorSkills,
-      name: 'GET /v1/operator/skills',
+      pattern: A8S_PATHS.catalogSkills,
+      name: 'GET /v1/catalog/skills',
       middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const skills = (await deps.skills.list()).map((s) => operatorSkillSchema.parse({
@@ -52,8 +52,8 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
     // ---- Catalog: register/update ----
     {
       method: 'POST',
-      pattern: A8S_PATHS.operatorSkills,
-      name: 'POST /v1/operator/skills',
+      pattern: A8S_PATHS.catalogSkills,
+      name: 'POST /v1/catalog/skills',
       middleware: [
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'skill.register', target: (ctx) => ctx.params.name ?? '' }),
@@ -77,8 +77,8 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
     // ---- Catalog: detail (full content, verbatim) ----
     {
       method: 'GET',
-      pattern: '/v1/operator/skills/:name',
-      name: 'GET /v1/operator/skills/:name',
+      pattern: '/v1/catalog/skills/:name',
+      name: 'GET /v1/catalog/skills/:name',
       middleware: [requireProductScope(deps)],
       handler: async ({ params, res }) => {
         const skill = await deps.skills.get(params.name);
@@ -98,8 +98,8 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
     // ---- Catalog: delete ----
     {
       method: 'DELETE',
-      pattern: '/v1/operator/skills/:name',
-      name: 'DELETE /v1/operator/skills/:name',
+      pattern: '/v1/catalog/skills/:name',
+      name: 'DELETE /v1/catalog/skills/:name',
       middleware: [
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'skill.delete', target: (ctx) => ctx.params.name }),
@@ -125,8 +125,8 @@ export function skillRegistryRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefi
     // home is the single source of truth for what's installed.
     {
       method: 'POST',
-      pattern: '/v1/operator/agents/:agentId/skills/:name',
-      name: 'POST /v1/operator/agents/:id/skills/:name',
+      pattern: '/v1/catalog/agents/:agentId/skills/:name',
+      name: 'POST /v1/catalog/agents/:id/skills/:name',
       middleware: [
         requireProductScope(deps),
         withAudit(deps.audit, {

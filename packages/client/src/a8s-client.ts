@@ -429,23 +429,23 @@ export class A8sClient {
   // ----- Models -----
 
   getModelsTemplate(): Promise<ModelsTemplateGetResponse> {
-    return this.request('GET', A8S_PATHS.operatorModelsTemplate, modelsTemplateGetResponseSchema);
+    return this.request('GET', A8S_PATHS.catalogModelsTemplate, modelsTemplateGetResponseSchema);
   }
 
   putModelsTemplate(template: ModelsTemplate): Promise<void> {
     return this.request(
-      'PUT', A8S_PATHS.operatorModelsTemplate, operatorOkResponseSchema,
+      'PUT', A8S_PATHS.catalogModelsTemplate, operatorOkResponseSchema,
       modelsTemplatePutRequestSchema.parse({ template }),
     ).then(() => undefined);
   }
 
   modelsPresets(): Promise<ModelsPresetListResponse> {
-    return this.request('GET', A8S_PATHS.operatorModelsPresets, modelsPresetListResponseSchema);
+    return this.request('GET', A8S_PATHS.catalogModelsPresets, modelsPresetListResponseSchema);
   }
 
   probeModels(input: ModelsProbeRequest): Promise<ModelsProbeResponse> {
     return this.request(
-      'POST', A8S_PATHS.operatorModelsProbe, modelsProbeResponseSchema,
+      'POST', A8S_PATHS.catalogModelsProbe, modelsProbeResponseSchema,
       modelsProbeRequestSchema.parse(input),
     );
   }
@@ -496,11 +496,11 @@ export class A8sClient {
   // ----- Operator: Hand recipes -----
 
   async listHandRecipes(): Promise<HandRecipeListResponse> {
-    return this.request('GET', A8S_PATHS.operatorHandRecipes, handRecipeListResponseSchema);
+    return this.request('GET', A8S_PATHS.catalogHandRecipes, handRecipeListResponseSchema);
   }
 
   async registerHandRecipe(input: HandRecipeRegisterRequest): Promise<HandRecipe> {
-    return this.request('POST', A8S_PATHS.operatorHandRecipes, handRecipeSchema, handRecipeRegisterRequestSchema.parse(input));
+    return this.request('POST', A8S_PATHS.catalogHandRecipes, handRecipeSchema, handRecipeRegisterRequestSchema.parse(input));
   }
 
   async deleteHandRecipe(recipeId: string): Promise<void> {
@@ -510,23 +510,23 @@ export class A8sClient {
   // ----- Operator: Skill registry -----
 
   async listRegistrySkills(): Promise<OperatorSkillListResponse> {
-    return this.request('GET', A8S_PATHS.operatorSkills, operatorSkillListResponseSchema);
+    return this.request('GET', A8S_PATHS.catalogSkills, operatorSkillListResponseSchema);
   }
 
   async getRegistrySkill(name: string): Promise<OperatorSkillDetail> {
-    return this.request('GET', A8S_PATHS.operatorSkill(name), operatorSkillDetailSchema);
+    return this.request('GET', A8S_PATHS.catalogSkill(name), operatorSkillDetailSchema);
   }
 
   async registerRegistrySkill(input: OperatorSkillRegisterRequest): Promise<unknown> {
-    return this.requestRaw('POST', A8S_PATHS.operatorSkills, operatorSkillRegisterRequestSchema.parse(input));
+    return this.requestRaw('POST', A8S_PATHS.catalogSkills, operatorSkillRegisterRequestSchema.parse(input));
   }
 
   async deleteRegistrySkill(name: string): Promise<void> {
-    await this.requestRaw('DELETE', A8S_PATHS.operatorSkill(name));
+    await this.requestRaw('DELETE', A8S_PATHS.catalogSkill(name));
   }
 
   async installRegistrySkillOnAgent(agentId: string, skillName: string): Promise<OperatorSkillInstallResponse> {
-    return this.request('POST', A8S_PATHS.operatorAgentInstallSkill(agentId, skillName), operatorSkillInstallResponseSchema);
+    return this.request('POST', A8S_PATHS.catalogInstallSkill(agentId, skillName), operatorSkillInstallResponseSchema);
   }
 
   // ----- Operator: Credentials -----

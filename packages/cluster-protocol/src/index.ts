@@ -1763,9 +1763,9 @@ export const A8S_PATHS = {
   operatorWakeCancel: (wakeId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/wakes/${encodeURIComponent(wakeId)}`,
   operatorWorkerJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/workers/join-script`,
-  operatorModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/operator/models-template`,
-  operatorModelsProbe: `/${CLUSTER_PROTOCOL_VERSION}/operator/models/probe`,
-  operatorModelsPresets: `/${CLUSTER_PROTOCOL_VERSION}/operator/models/presets`,
+  catalogModelsTemplate: `/${CLUSTER_PROTOCOL_VERSION}/catalog/models-template`,
+  catalogModelsProbe: `/${CLUSTER_PROTOCOL_VERSION}/catalog/models/probe`,
+  catalogModelsPresets: `/${CLUSTER_PROTOCOL_VERSION}/catalog/models/presets`,
   operatorAdminAgent: `/${CLUSTER_PROTOCOL_VERSION}/operator/admin-agent`,
   operatorMachines: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines`,
   operatorMachineJoinScript: `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/join-script`,
@@ -1781,16 +1781,14 @@ export const A8S_PATHS = {
   /** Read a machine's MCP tool manifest (brain-side projection). */
   machineMcpManifest: (machineId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/mcp/manifest`,
-  operatorHandRecipes: `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes`,
+  catalogHandRecipes: `/${CLUSTER_PROTOCOL_VERSION}/catalog/hand-recipes`,
   operatorHandRecipe: (recipeId: string) =>
-    `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes/${encodeURIComponent(recipeId)}`,
-  /** Skill registry (a8s's catalog of installable skills). */
-  operatorSkills: `/${CLUSTER_PROTOCOL_VERSION}/operator/skills`,
-  operatorSkill: (name: string) =>
-    `/${CLUSTER_PROTOCOL_VERSION}/operator/skills/${encodeURIComponent(name)}`,
-  /** Install a registry skill onto an agent: POST .../agents/:id/skills/:name */
-  operatorAgentInstallSkill: (agentId: string, name: string) =>
-    `/${CLUSTER_PROTOCOL_VERSION}/operator/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
+    `/${CLUSTER_PROTOCOL_VERSION}/catalog/hand-recipes/${encodeURIComponent(recipeId)}`,
+  catalogSkills: `/${CLUSTER_PROTOCOL_VERSION}/catalog/skills`,
+  catalogSkill: (name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/catalog/skills/${encodeURIComponent(name)}`,
+  catalogInstallSkill: (agentId: string, name: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/catalog/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(name)}`,
   /** Product-scoped credentials (issue/revoke/list bp_… tokens). */
   operatorCredentials: `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials`,
   operatorCredential: (product: string) =>

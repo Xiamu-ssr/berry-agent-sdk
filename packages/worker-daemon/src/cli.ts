@@ -170,7 +170,7 @@ const configSchema = z.object({
  * with no model).
  */
 async function fetchModelsTemplate(a8sUrl: string, adminToken: string): Promise<ModelsRegistry> {
-  const url = a8sUrl.replace(/\/$/, '') + A8S_PATHS.operatorModelsTemplate;
+  const url = a8sUrl.replace(/\/$/, '') + A8S_PATHS.catalogModelsTemplate;
   const response = await fetch(url, {
     method: 'GET',
     headers: { [ADMIN_AUTH_HEADER]: adminAuthHeader(adminToken) },

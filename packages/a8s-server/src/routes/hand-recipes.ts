@@ -27,8 +27,8 @@ export function handRecipeRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinit
     // ---- Registry: list ----
     {
       method: 'GET',
-      pattern: A8S_PATHS.operatorHandRecipes,
-      name: 'GET /v1/operator/hand-recipes',
+      pattern: A8S_PATHS.catalogHandRecipes,
+      name: 'GET /v1/catalog/hand-recipes',
       middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const recipes = await deps.handRecipes.list();
@@ -39,8 +39,8 @@ export function handRecipeRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinit
     // ---- Registry: register/update ----
     {
       method: 'POST',
-      pattern: A8S_PATHS.operatorHandRecipes,
-      name: 'POST /v1/operator/hand-recipes',
+      pattern: A8S_PATHS.catalogHandRecipes,
+      name: 'POST /v1/catalog/hand-recipes',
       middleware: [
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'hand_recipe.register', target: (ctx) => ctx.params.recipeId ?? '' }),
@@ -55,8 +55,8 @@ export function handRecipeRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinit
     // ---- Registry: delete ----
     {
       method: 'DELETE',
-      pattern: '/v1/operator/hand-recipes/:recipeId',
-      name: 'DELETE /v1/operator/hand-recipes/:id',
+      pattern: '/v1/catalog/hand-recipes/:recipeId',
+      name: 'DELETE /v1/catalog/hand-recipes/:id',
       middleware: [
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'hand_recipe.delete', target: (ctx) => ctx.params.recipeId }),

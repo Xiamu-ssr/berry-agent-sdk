@@ -1106,7 +1106,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     const w = await startTestWorker({ a8sUrl: a8sInfo.url, adminToken: 'skill-secret', workerId: 'w-skill', root });
 
     // ---- Catalog lists the built-ins ----
-    const catResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, { headers });
+    const catResp = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkills}`, { headers });
     expect(catResp.status).toBe(200);
     const cat = await catResp.json() as { skills: Array<{ name: string; builtin: boolean; description: string }> };
     const team = cat.skills.find((s) => s.name === 'team');
@@ -1115,7 +1115,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(team!.description.length).toBeGreaterThan(0);
 
     // ---- Detail carries content verbatim ----
-    const detailResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkill('team')}`, { headers });
+    const detailResp = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkill('team')}`, { headers });
     expect(detailResp.status).toBe(200);
     const detail = await detailResp.json() as { content: string };
     expect(detail.content).toContain('berry-team');
@@ -1127,7 +1127,7 @@ describe('a8s-server + worker-daemon E2E', () => {
     }).then((r) => { expect(r.status).toBe(200); });
 
     const installResp = await fetch(
-      `${a8sInfo.url}${A8S_PATHS.operatorAgentInstallSkill('skilled', 'team')}`,
+      `${a8sInfo.url}${A8S_PATHS.catalogInstallSkill('skilled', 'team')}`,
       { method: 'POST', headers, body: '{}' },
     );
     expect(installResp.status, await installResp.clone().text()).toBe(200);
@@ -1142,13 +1142,13 @@ describe('a8s-server + worker-daemon E2E', () => {
 
     // ---- Installing an unknown skill → 404 ----
     const unknown = await fetch(
-      `${a8sInfo.url}${A8S_PATHS.operatorAgentInstallSkill('skilled', 'nope')}`,
+      `${a8sInfo.url}${A8S_PATHS.catalogInstallSkill('skilled', 'nope')}`,
       { method: 'POST', headers, body: '{}' },
     );
     expect(unknown.status).toBe(404);
 
     // ---- Operator can register + remove a custom skill ----
-    const reg = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, {
+    const reg = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkills}`, {
       method: 'POST', headers,
       body: JSON.stringify({
         name: 'house-style',
@@ -1157,15 +1157,15 @@ describe('a8s-server + worker-daemon E2E', () => {
       }),
     });
     expect(reg.status).toBe(200);
-    const afterReg = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, { headers })
+    const afterReg = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkills}`, { headers })
       .then((r) => r.json()) as { skills: Array<{ name: string }> };
     expect(afterReg.skills.some((s) => s.name === 'house-style')).toBe(true);
 
-    const del = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkill('house-style')}`, { method: 'DELETE', headers });
+    const del = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkill('house-style')}`, { method: 'DELETE', headers });
     expect(del.status).toBe(200);
 
     // ---- Built-ins are protected from overwrite ----
-    const clobber = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorSkills}`, {
+    const clobber = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogSkills}`, {
       method: 'POST', headers,
       body: JSON.stringify({ name: 'team', description: 'evil', content: 'x' }),
     });
@@ -1779,13 +1779,13 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(got.mcpServers.playwright).toBeDefined();
 
     // ---- A Hand recipe references the machine + its server (no MCP config) ----
-    const regResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorHandRecipes}`, {
+    const regResp = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogHandRecipes}`, {
       method: 'POST',
       headers: adminHeaders,
       body: JSON.stringify({ id: 'pw', name: 'Playwright', machineId: 'land-1', mcpServerRefs: ['playwright'] }),
     });
     expect(regResp.status).toBe(200);
-    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.operatorHandRecipes}`, { headers: adminHeaders });
+    const listResp = await fetch(`${a8sInfo.url}${A8S_PATHS.catalogHandRecipes}`, { headers: adminHeaders });
     const { recipes } = await listResp.json() as { recipes: Array<{ id: string; mcpServerRefs: string[] }> };
     const pw = recipes.find((r) => r.id === 'pw');
     expect(pw?.mcpServerRefs).toEqual(['playwright']);

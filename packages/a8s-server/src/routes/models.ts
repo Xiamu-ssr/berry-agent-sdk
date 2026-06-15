@@ -31,8 +31,8 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
   return [
     {
       method: 'GET',
-      pattern: A8S_PATHS.operatorModelsTemplate,
-      name: 'GET /v1/operator/models-template',
+      pattern: A8S_PATHS.catalogModelsTemplate,
+      name: 'GET /v1/catalog/models-template',
       middleware: [requireProductScope(deps)],
       handler: async ({ res }) => {
         const record = await deps.modelsTemplate.get();
@@ -44,8 +44,8 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
     },
     {
       method: 'PUT',
-      pattern: A8S_PATHS.operatorModelsTemplate,
-      name: 'PUT /v1/operator/models-template',
+      pattern: A8S_PATHS.catalogModelsTemplate,
+      name: 'PUT /v1/catalog/models-template',
       middleware: [
         requireAdminToken(deps),
         withAudit(deps.audit, { action: 'models.template_put' }),
@@ -59,8 +59,8 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
     },
     {
       method: 'GET',
-      pattern: A8S_PATHS.operatorModelsPresets,
-      name: 'GET /v1/operator/models/presets',
+      pattern: A8S_PATHS.catalogModelsPresets,
+      name: 'GET /v1/catalog/models/presets',
       middleware: [requireAdminToken(deps)],
       handler: ({ res }) => {
         const presets = listBuiltinPresets().map((p) => ({
@@ -76,8 +76,8 @@ export function modelsRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinition[
     },
     {
       method: 'POST',
-      pattern: A8S_PATHS.operatorModelsProbe,
-      name: 'POST /v1/operator/models/probe',
+      pattern: A8S_PATHS.catalogModelsProbe,
+      name: 'POST /v1/catalog/models/probe',
       // No audit: probing is read-only and the body carries a secret we
       // don't want in the audit log.
       middleware: [requireAdminToken(deps)],
