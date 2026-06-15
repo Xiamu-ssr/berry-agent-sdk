@@ -41,3 +41,30 @@ export type {
   AgentLocation,
   ListAgentsResponse,
 } from '@berry-agent/cluster-protocol';
+
+// Hand recipes
+export type {
+  HandRecipe,
+  HandRecipeListResponse,
+  HandRecipeRegisterRequest,
+} from '@berry-agent/cluster-protocol';
+
+// Skill registry (operator catalog)
+export type {
+  OperatorSkillListResponse,
+  OperatorSkillDetail,
+  OperatorSkillRegisterRequest,
+  OperatorSkillInstallResponse,
+} from '@berry-agent/cluster-protocol';
+
+// Credentials (product token management)
+export type {
+  ProductCredentialListResponse,
+  ProductCredentialIssueRequest,
+  ProductCredentialIssueResponse,
+  ScopedTokenIssueRequest,
+  ScopedTokenIssueResponse,
+} from '@berry-agent/cluster-protocol';
+
+// Audit
+export type { AuditQueryResponse } from '@berry-agent/cluster-protocol';

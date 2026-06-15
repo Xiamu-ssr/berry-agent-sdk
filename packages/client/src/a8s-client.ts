@@ -131,6 +131,32 @@ import {
   type TeamMessagesResponse,
   type TeamMessage,
   type TeamMessageAppendRequest,
+  handRecipeListResponseSchema,
+  type HandRecipeListResponse,
+  handRecipeRegisterRequestSchema,
+  type HandRecipeRegisterRequest,
+  type HandRecipe,
+  handRecipeSchema,
+  operatorSkillListResponseSchema,
+  operatorSkillDetailSchema,
+  operatorSkillRegisterRequestSchema,
+  operatorSkillInstallResponseSchema,
+  type OperatorSkillListResponse,
+  type OperatorSkillDetail,
+  type OperatorSkillRegisterRequest,
+  type OperatorSkillInstallResponse,
+  productCredentialListResponseSchema,
+  productCredentialIssueRequestSchema,
+  productCredentialIssueResponseSchema,
+  type ProductCredentialListResponse,
+  type ProductCredentialIssueRequest,
+  type ProductCredentialIssueResponse,
+  scopedTokenIssueRequestSchema,
+  scopedTokenIssueResponseSchema,
+  type ScopedTokenIssueRequest,
+  type ScopedTokenIssueResponse,
+  auditQueryResponseSchema,
+  type AuditQueryResponse,
 } from '@berry-agent/cluster-protocol';
 
 export interface A8sClientOptions {
@@ -540,6 +566,128 @@ export class A8sClient {
   /** Open an ergonomic per-agent handle (send / sessions / events / SSE). */
   agent(agentId: string): AgentHandle {
     return new AgentHandle(this, agentId);
+  }
+
+  // ----- Health -----
+
+  async health(): Promise<{ ok: true; version?: string; uptime?: number }> {
+    return this.requestRaw('GET', A8S_PATHS.health) as Promise<{ ok: true; version?: string; uptime?: number }>;
+  }
+
+  // ----- Operator: Hand recipes -----
+
+  /** @operator List all Hand recipes (environment + tool bundles). */
+  async listHandRecipes(): Promise<HandRecipeListResponse> {
+    return this.request('GET', A8S_PATHS.operatorHandRecipes, handRecipeListResponseSchema);
+  }
+
+  /** @operator Register or update a Hand recipe. */
+  async registerHandRecipe(input: HandRecipeRegisterRequest): Promise<HandRecipe> {
+    return this.request('POST', A8S_PATHS.operatorHandRecipes, handRecipeSchema, handRecipeRegisterRequestSchema.parse(input));
+  }
+
+  /** @operator Delete a Hand recipe by ID. */
+  async deleteHandRecipe(recipeId: string): Promise<void> {
+    await this.requestRaw('DELETE', A8S_PATHS.operatorHandRecipe(recipeId));
+  }
+
+  // ----- Operator: Skill registry -----
+
+  /** List skill catalog (name + description, no content). Product tokens can call this. */
+  async listRegistrySkills(): Promise<OperatorSkillListResponse> {
+    return this.request('GET', A8S_PATHS.operatorSkills, operatorSkillListResponseSchema);
+  }
+
+  /** Get full skill content (SKILL.md + files). Product tokens can call this. */
+  async getRegistrySkill(name: string): Promise<OperatorSkillDetail> {
+    return this.request('GET', A8S_PATHS.operatorSkill(name), operatorSkillDetailSchema);
+  }
+
+  /** @operator Register or update a skill in the catalog. */
+  async registerRegistrySkill(input: OperatorSkillRegisterRequest): Promise<unknown> {
+    return this.requestRaw('POST', A8S_PATHS.operatorSkills, operatorSkillRegisterRequestSchema.parse(input));
+  }
+
+  /** @operator Remove a skill from the catalog. */
+  async deleteRegistrySkill(name: string): Promise<void> {
+    await this.requestRaw('DELETE', A8S_PATHS.operatorSkill(name));
+  }
+
+  /** Install a catalog skill onto an agent (proxies to worker). Product tokens can call this. */
+  async installRegistrySkillOnAgent(agentId: string, skillName: string): Promise<OperatorSkillInstallResponse> {
+    return this.request('POST', A8S_PATHS.operatorAgentInstallSkill(agentId, skillName), operatorSkillInstallResponseSchema);
+  }
+
+  // ----- Operator: Credentials -----
+
+  /** @operator List product credentials (metadata only, no token values). */
+  async listCredentials(): Promise<ProductCredentialListResponse> {
+    return this.request('GET', A8S_PATHS.operatorCredentials, productCredentialListResponseSchema);
+  }
+
+  /** @operator Issue or rotate a product credential (returns token value ONCE). */
+  async issueCredential(input: ProductCredentialIssueRequest): Promise<ProductCredentialIssueResponse> {
+    return this.request('POST', A8S_PATHS.operatorCredentials, productCredentialIssueResponseSchema, productCredentialIssueRequestSchema.parse(input));
+  }
+
+  /** @operator Revoke a product credential (cascade-revokes its subject tokens). */
+  async revokeCredential(product: string): Promise<void> {
+    await this.requestRaw('DELETE', A8S_PATHS.operatorCredential(product));
+  }
+
+  /** Mint a subject-scoped token under a product. Requires the product's root token or admin. */
+  async issueScopedToken(product: string, input: ScopedTokenIssueRequest): Promise<ScopedTokenIssueResponse> {
+    return this.request('POST', A8S_PATHS.productScopedToken(product), scopedTokenIssueResponseSchema, scopedTokenIssueRequestSchema.parse(input));
+  }
+
+  // ----- Operator: Audit -----
+
+  /** @operator Query the audit log (filters: from/to/action/outcome/limit). */
+  async queryAudit(opts?: { from?: number; to?: number; action?: string; outcome?: string; limit?: number }): Promise<AuditQueryResponse> {
+    const params = new URLSearchParams();
+    if (opts?.from) params.set('from', String(opts.from));
+    if (opts?.to) params.set('to', String(opts.to));
+    if (opts?.action) params.set('action', opts.action);
+    if (opts?.outcome) params.set('outcome', opts.outcome);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return this.request('GET', `${A8S_PATHS.operatorAudit}${qs ? `?${qs}` : ''}`, auditQueryResponseSchema);
+  }
+
+  // ----- Operator: Admin agent -----
+
+  /** @operator Get the berry-admin agent's status. */
+  async getAdminAgent(): Promise<unknown> {
+    return this.requestRaw('GET', A8S_PATHS.operatorAdminAgent);
+  }
+
+  /** @operator Ensure berry-admin is scheduled on the cluster. */
+  async ensureAdminAgent(opts?: Record<string, unknown>): Promise<unknown> {
+    return this.requestRaw('POST', A8S_PATHS.operatorAdminAgent, opts);
+  }
+
+  // ----- Operator: Wakes -----
+
+  /** @operator List the wake queue (pending/completed/failed). */
+  async listWakes(): Promise<unknown> {
+    return this.requestRaw('GET', A8S_PATHS.operatorWakes);
+  }
+
+  /** @operator Cancel a scheduled wake. */
+  async cancelWake(wakeId: string): Promise<void> {
+    await this.requestRaw('DELETE', A8S_PATHS.operatorWakeCancel(wakeId));
+  }
+
+  // ----- Machine MCP config -----
+
+  /** @operator Read a machine's .mcp.json (source of truth for its MCP servers). */
+  async getMachineMcpConfig(machineId: string): Promise<unknown> {
+    return this.requestRaw('GET', A8S_PATHS.operatorMachineMcpConfig(machineId));
+  }
+
+  /** @operator Write a machine's .mcp.json (triggers install + reload). */
+  async setMachineMcpConfig(machineId: string, config: unknown): Promise<unknown> {
+    return this.requestRaw('POST', A8S_PATHS.operatorMachineMcpConfig(machineId), config);
   }
 
   // ----- Internal -----
