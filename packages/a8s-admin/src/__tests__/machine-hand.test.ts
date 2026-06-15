@@ -19,7 +19,7 @@ function jsonResponse(status: number, body: unknown): Response {
 
 describe('machine Hand', () => {
   it('exposes one exec tool whose name embeds the (sanitized) machineId', () => {
-    const client = new A8sOperatorClient({ a8sUrl: 'http://test', adminToken: 'x' });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://test', token: 'x' });
     const hand = createMachineHand({ client, machineId: 'mac.office-1', platform: 'macos' });
     const names = hand.capabilities().map((c) => c.definition.name);
     expect(names).toEqual(['machine_mac_office-1_exec']);
@@ -33,7 +33,7 @@ describe('machine Hand', () => {
       seenBody = init?.body;
       return jsonResponse(200, { output: 'hello from machine', isError: false });
     });
-    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok', fetch: fetchImpl });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', token: 'tok', fetch: fetchImpl });
     const [tool] = buildMachineTools({ client, machineId: 'mac-1' });
     const result = await tool.execute({ command: 'echo hi' }, { cwd: '/tmp' });
     expect(seenUrl).toBe('http://a8s/v1/machines/mac-1/exec');
@@ -44,7 +44,7 @@ describe('machine Hand', () => {
 
   it('surfaces broker errors as isError', async () => {
     const fetchImpl = stubFetch(() => jsonResponse(404, { error: { code: 'unknown_machine', message: 'gone' } }));
-    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok', fetch: fetchImpl });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', token: 'tok', fetch: fetchImpl });
     const [tool] = buildMachineTools({ client, machineId: 'ghost' });
     const result = await tool.execute({ command: 'echo hi' }, { cwd: '/tmp' });
     expect(result.isError).toBe(true);
@@ -52,7 +52,7 @@ describe('machine Hand', () => {
   });
 
   it('requires a non-empty command', async () => {
-    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok' });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', token: 'tok' });
     const [tool] = buildMachineTools({ client, machineId: 'mac-1' });
     const result = await tool.execute({ command: '   ' }, { cwd: '/tmp' });
     expect(result.isError).toBe(true);
@@ -60,7 +60,7 @@ describe('machine Hand', () => {
   });
 
   it('projects ONLY the exec tool — MCP is second-class (reached via berry-mcp CLI)', () => {
-    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', adminToken: 'tok' });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://a8s', token: 'tok' });
     const tools = buildMachineTools({ client, machineId: 'mac.office-1' });
     // No per-MCP-tool projection anymore: a machine = one first-class exec
     // tool; its MCP tools are discovered/called through the berry-mcp CLI.

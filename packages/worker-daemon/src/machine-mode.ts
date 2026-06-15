@@ -55,7 +55,7 @@ export function withMachineHostTools(
   // One shared client; tools close over it + a machineId.
   const client = new A8sOperatorClient({
     a8sUrl: options.a8sUrl,
-    adminToken: options.adminToken,
+    token: options.adminToken,
     fetch: options.fetch,
   });
 

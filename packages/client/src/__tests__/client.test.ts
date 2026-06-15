@@ -32,13 +32,8 @@ describe('A8sClient', () => {
     expect(res.agents[0].agentId).toBe('a1');
   });
 
-  it('accepts the back-compat adminToken option', async () => {
-    const client = new A8sClient({
-      a8sUrl: 'http://a8s',
-      adminToken: 'legacy',
-      fetch: stubFetch(() => json(200, { agents: [] })),
-    });
-    await expect(client.listAgents()).resolves.toEqual({ agents: [] });
+  it('throws when no token is provided', () => {
+    expect(() => new A8sClient({ a8sUrl: 'http://a8s' } as never)).toThrow(/token/i);
   });
 
   it('resolves a function token per request', async () => {

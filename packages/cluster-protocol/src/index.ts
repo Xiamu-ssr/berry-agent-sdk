@@ -1772,6 +1772,15 @@ export const A8S_PATHS = {
   /** Read/write a machine's .mcp.json (the single source of truth for MCP). */
   operatorMachineMcpConfig: (machineId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/machines/${encodeURIComponent(machineId)}/mcp-config`,
+  /** Broker an exec command to a registered machine. */
+  machineExec: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/exec`,
+  /** Broker an MCP tool invocation to a registered machine. */
+  machineMcpInvoke: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/mcp/invoke`,
+  /** Read a machine's MCP tool manifest (brain-side projection). */
+  machineMcpManifest: (machineId: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/machines/${encodeURIComponent(machineId)}/mcp/manifest`,
   operatorHandRecipes: `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes`,
   operatorHandRecipe: (recipeId: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/operator/hand-recipes/${encodeURIComponent(recipeId)}`,

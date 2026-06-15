@@ -36,7 +36,7 @@ describe('A8sOperatorClient', () => {
     });
     const client = new A8sOperatorClient({
       a8sUrl: 'http://test',
-      adminToken: 'top-secret',
+      token: 'top-secret',
       fetch: fetchImpl,
     });
     const report = await client.clusterReport();
@@ -49,7 +49,7 @@ describe('A8sOperatorClient', () => {
     const fetchImpl = stubFetch(() => jsonResponse(401, { error: { code: 'unauthorized', message: 'no token' } }));
     const client = new A8sOperatorClient({
       a8sUrl: 'http://test',
-      adminToken: 'bad',
+      token: 'bad',
       fetch: fetchImpl,
     });
     await expect(client.clusterReport()).rejects.toThrow(/HTTP 401/);
@@ -63,7 +63,7 @@ describe('A8sOperatorClient', () => {
       seenBody = init?.body;
       return jsonResponse(200, { ok: true });
     });
-    const client = new A8sOperatorClient({ a8sUrl: 'http://test', adminToken: 'x', fetch: fetchImpl });
+    const client = new A8sOperatorClient({ a8sUrl: 'http://test', token: 'x', fetch: fetchImpl });
     await client.drainWorker('worker-1');
     expect(seenMethod).toBe('POST');
     expect(seenBody).toBe('{}');
