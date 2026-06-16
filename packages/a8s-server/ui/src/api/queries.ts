@@ -131,7 +131,7 @@ export interface HandRecipe {
 export function useHandRecipes() {
   return useQuery({
     queryKey: ['hand-recipes'],
-    queryFn: () => api<{ recipes: HandRecipe[] }>('/v1/operator/hand-recipes').then((r) => r.recipes),
+    queryFn: () => api<{ recipes: HandRecipe[] }>('/v1/catalog/hand-recipes').then((r) => r.recipes),
     refetchInterval: 15_000,
   });
 }
@@ -139,7 +139,7 @@ export function useRegisterHandRecipe() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (recipe: HandRecipe) =>
-      api<HandRecipe>('/v1/operator/hand-recipes', { method: 'POST', body: JSON.stringify(recipe) }),
+      api<HandRecipe>('/v1/catalog/hand-recipes', { method: 'POST', body: JSON.stringify(recipe) }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['hand-recipes'] }); },
   });
 }
@@ -355,7 +355,7 @@ export interface RegistrySkill {
 export function useSkills() {
   return useQuery({
     queryKey: ['skills'],
-    queryFn: () => api<{ skills: RegistrySkill[] }>('/v1/operator/skills').then((r) => r.skills),
+    queryFn: () => api<{ skills: RegistrySkill[] }>('/v1/catalog/skills').then((r) => r.skills),
     refetchInterval: 15_000,
   });
 }
@@ -369,7 +369,7 @@ export interface SkillDetail {
 export function useSkillDetail(name: string | null) {
   return useQuery({
     queryKey: ['skill-detail', name],
-    queryFn: () => api<SkillDetail>(`/v1/operator/skills/${encodeURIComponent(name!)}`),
+    queryFn: () => api<SkillDetail>(`/v1/catalog/skills/${encodeURIComponent(name!)}`),
     enabled: !!name,
   });
 }
@@ -377,7 +377,7 @@ export function useRegisterSkill() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { name: string; description: string; content: string }) =>
-      api<RegistrySkill>('/v1/operator/skills', { method: 'POST', body: JSON.stringify(input) }),
+      api<RegistrySkill>('/v1/catalog/skills', { method: 'POST', body: JSON.stringify(input) }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['skills'] }); },
   });
 }
@@ -385,7 +385,7 @@ export function useDeleteSkill() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) =>
-      api(`/v1/operator/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+      api(`/v1/catalog/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['skills'] }); },
   });
 }
@@ -394,7 +394,7 @@ export function useInstallSkillOnAgent() {
   return useMutation({
     mutationFn: (input: { agentId: string; name: string }) =>
       api<{ ok: true; agentId: string; name: string }>(
-        `/v1/operator/agents/${encodeURIComponent(input.agentId)}/skills/${encodeURIComponent(input.name)}`,
+        `/v1/catalog/agents/${encodeURIComponent(input.agentId)}/skills/${encodeURIComponent(input.name)}`,
         { method: 'POST', body: '{}' },
       ),
     onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: ['agent-skills', v.agentId] }); },
@@ -670,14 +670,14 @@ export interface ModelsTemplateResponse {
 export function useModelsTemplate() {
   return useQuery({
     queryKey: ['models-template'],
-    queryFn: () => api<ModelsTemplateResponse>('/v1/operator/models-template'),
+    queryFn: () => api<ModelsTemplateResponse>('/v1/catalog/models-template'),
   });
 }
 export function usePutModelsTemplate() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (template: ModelsTemplate) =>
-      api('/v1/operator/models-template', {
+      api('/v1/catalog/models-template', {
         method: 'PUT',
         body: JSON.stringify({ template }),
       }),
@@ -741,7 +741,7 @@ export interface ModelsPreset {
 export function useModelsPresets() {
   return useQuery({
     queryKey: ['models-presets'],
-    queryFn: () => api<{ presets: ModelsPreset[] }>('/v1/operator/models/presets').then((r) => r.presets),
+    queryFn: () => api<{ presets: ModelsPreset[] }>('/v1/catalog/models/presets').then((r) => r.presets),
     staleTime: Infinity, // built-in, never changes within a session
   });
 }
@@ -760,7 +760,7 @@ export interface ModelsProbeResult {
 export function useProbeModels() {
   return useMutation({
     mutationFn: (input: ModelsProbeInput) =>
-      api<ModelsProbeResult>('/v1/operator/models/probe', {
+      api<ModelsProbeResult>('/v1/catalog/models/probe', {
         method: 'POST',
         body: JSON.stringify(input),
       }),
