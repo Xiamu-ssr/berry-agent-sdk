@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Table, Card, Button, Modal, Message, Typography, Input, Tooltip } from '@arco-design/web-react';
+import { Table, Card, Button, Modal, Message, Typography, Input, Tooltip, Tag } from '@arco-design/web-react';
 import {
   useMachines, useMachineJoinScript, useMachineMcpConfig, useSetMachineMcp,
   type Machine,
@@ -17,7 +17,16 @@ export function MachinesPage() {
   if (!machines.data) return <Spinner />;
 
   const columns = [
-    { title: 'Machine', dataIndex: 'machineId', render: (v: string) => <code className="font-mono text-xs">{v}</code> },
+    {
+      title: 'Machine',
+      dataIndex: 'machineId',
+      render: (_: string, m: Machine) => (
+        <span className="inline-flex items-center gap-1.5">
+          <code className="font-mono text-xs">{m.machineId}</code>
+          {isLocalMachine(m) && <Tag size="small" color="arcoblue">本机</Tag>}
+        </span>
+      ),
+    },
     { title: 'State', dataIndex: 'state', render: (v: Machine['state']) => <StatusPill state={machineState(v)} /> },
     {
       title: 'Platform',
@@ -85,7 +94,13 @@ export function MachinesPage() {
   );
 }
 
-// Map machine state → the WorkerState palette StatusPill understands.
+function isLocalMachine(m: Machine): boolean {
+  try {
+    const url = new URL(m.callbackUrl);
+    return url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1';
+  } catch { return false; }
+}
+
 function machineState(state: Machine['state']): string {
   if (state === 'active') return 'active';
   if (state === 'expired') return 'draining';
