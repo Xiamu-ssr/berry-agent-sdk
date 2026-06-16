@@ -844,6 +844,19 @@ export const scopedTokenIssueResponseSchema = z.object({
 }).strict();
 export type ScopedTokenIssueResponse = z.infer<typeof scopedTokenIssueResponseSchema>;
 
+export const scopedTokenInfoSchema = z.object({
+  product: z.string().min(1),
+  subject: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+  label: z.string().optional(),
+}).strict();
+export type ScopedTokenInfo = z.infer<typeof scopedTokenInfoSchema>;
+
+export const scopedTokenListResponseSchema = z.object({
+  tokens: z.array(scopedTokenInfoSchema),
+}).strict();
+export type ScopedTokenListResponse = z.infer<typeof scopedTokenListResponseSchema>;
+
 // ============================================================
 // Audit log query — operator reads the append-only action log
 // ============================================================
@@ -1798,6 +1811,10 @@ export const A8S_PATHS = {
   /** Mint a subject-scoped token under a product (product root token mints it). */
   productScopedToken: (product: string) =>
     `/${CLUSTER_PROTOCOL_VERSION}/products/${encodeURIComponent(product)}/scoped-token`,
+  operatorScopedTokens: (product: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials/${encodeURIComponent(product)}/scoped-tokens`,
+  operatorScopedToken: (product: string, subject: string) =>
+    `/${CLUSTER_PROTOCOL_VERSION}/operator/credentials/${encodeURIComponent(product)}/scoped-tokens/${encodeURIComponent(subject)}`,
   /** Operator audit log query. */
   operatorAudit: `/${CLUSTER_PROTOCOL_VERSION}/operator/audit`,
   /** Cluster-wide consumption rollup (fan-in over workers' observe.db). */

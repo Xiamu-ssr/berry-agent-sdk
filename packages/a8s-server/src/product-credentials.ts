@@ -170,6 +170,18 @@ export class ProductCredentialStore {
     return [...this.byProduct.values()].map(({ token: _t, subject: _s, ...rest }) => rest);
   }
 
+  /** List subject tokens for a product (metadata only, no token values). */
+  listScoped(product: string): Array<Omit<ProductCredential, 'token'>> {
+    const out: Array<Omit<ProductCredential, 'token'>> = [];
+    for (const c of this.scoped.values()) {
+      if (c.product === product) {
+        const { token: _t, ...rest } = c;
+        out.push(rest);
+      }
+    }
+    return out;
+  }
+
   private persist(): void {
     this.backing.save([...this.byProduct.values(), ...this.scoped.values()]);
   }

@@ -34,7 +34,10 @@ type Icon = (props: { className?: string }) => JSX.Element;
 const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; icon: Icon }> }> = [
   {
     label: '总览',
-    items: [{ key: 'dashboard', label: 'Dashboard', icon: GridIcon }],
+    items: [
+      { key: 'dashboard', label: 'Dashboard', icon: GridIcon },
+      { key: 'admin', label: 'Admin chat', icon: ChatIcon },
+    ],
   },
   {
     label: 'Agent',
@@ -42,7 +45,6 @@ const GROUPS: Array<{ label: string; items: Array<{ key: View; label: string; ic
       { key: 'agents', label: 'Agents', icon: AgentIcon },
       { key: 'hands', label: 'Hand 市场', icon: HandIcon },
       { key: 'skills', label: 'Skill 市场', icon: SkillIcon },
-      { key: 'admin', label: 'Admin chat', icon: ChatIcon },
     ],
   },
   {

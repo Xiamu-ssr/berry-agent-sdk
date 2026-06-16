@@ -601,6 +601,41 @@ export function useRevokeCredential() {
   });
 }
 
+// ---- Subject-scoped tokens (per-product user tokens) ----
+
+export interface ScopedTokenInfo {
+  product: string;
+  subject: string;
+  createdAt: number;
+  label?: string;
+}
+export function useScopedTokens(product: string | null) {
+  return useQuery({
+    queryKey: ['scoped-tokens', product],
+    queryFn: () => api<{ tokens: ScopedTokenInfo[] }>(`/v1/operator/credentials/${encodeURIComponent(product!)}/scoped-tokens`).then((r) => r.tokens),
+    enabled: !!product,
+  });
+}
+export function useIssueScopedToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { product: string; subject: string; label?: string }) =>
+      api<{ product: string; subject: string; token: string; createdAt: number; label?: string }>(
+        `/v1/products/${encodeURIComponent(input.product)}/scoped-token`,
+        { method: 'POST', body: JSON.stringify({ subject: input.subject, label: input.label }) },
+      ),
+    onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: ['scoped-tokens', v.product] }); },
+  });
+}
+export function useRevokeScopedToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { product: string; subject: string }) =>
+      api(`/v1/operator/credentials/${encodeURIComponent(input.product)}/scoped-tokens/${encodeURIComponent(input.subject)}`, { method: 'DELETE' }),
+    onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: ['scoped-tokens', v.product] }); },
+  });
+}
+
 // ---- Audit log ----
 
 export interface AuditEntry {

@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Table, Card, Button, Modal, Input, Popconfirm, Message, Tag, Alert } from '@arco-design/web-react';
 import {
   useCredentials, useIssueCredential, useRevokeCredential,
-  type ProductCredentialInfo, type IssuedCredential,
+  useScopedTokens, useIssueScopedToken, useRevokeScopedToken,
+  type ProductCredentialInfo, type IssuedCredential, type ScopedTokenInfo,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner, EmptyState } from '../components/Page.js';
 import { relativeTime } from '../components/StatusPill.js';
@@ -21,6 +22,7 @@ export function CredentialsPage() {
   const revoke = useRevokeCredential();
   const [showIssue, setShowIssue] = useState(false);
   const [issued, setIssued] = useState<IssuedCredential | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
 
   if (creds.error) return <ErrorBanner error={creds.error} />;
   if (!creds.data) return <Spinner />;
@@ -89,8 +91,22 @@ export function CredentialsPage() {
         <EmptyState icon="🔑" title="还没有发放凭证" hint="点「发放凭证」给一个产品签发 scoped token。" />
       ) : (
         <Card bordered bodyStyle={{ padding: 0 }}>
-          <Table rowKey="product" columns={columns} data={creds.data} pagination={false} size="small" />
+          <Table
+            rowKey="product"
+            columns={columns}
+            data={creds.data}
+            pagination={false}
+            size="small"
+            onRow={(record) => ({
+              onClick: () => setSelectedProduct(record.product),
+              style: { cursor: 'pointer', background: record.product === selectedProduct ? 'var(--color-fill-2)' : undefined },
+            })}
+          />
         </Card>
+      )}
+
+      {selectedProduct && (
+        <SubjectTokensSection product={selectedProduct} />
       )}
 
       {showIssue && (
@@ -108,6 +124,156 @@ export function CredentialsPage() {
 
       {issued && <TokenRevealModal cred={issued} onClose={() => setIssued(null)} />}
     </div>
+  );
+}
+
+// ============================================================
+// Subject tokens section — per-product user-level tokens
+// ============================================================
+
+function SubjectTokensSection({ product }: { product: string }) {
+  const tokens = useScopedTokens(product);
+  const revoke = useRevokeScopedToken();
+  const [showIssue, setShowIssue] = useState(false);
+  const [issuedToken, setIssuedToken] = useState<string | null>(null);
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-base font-medium" style={{ color: 'var(--color-text-1)' }}>
+          Subject Tokens for <code className="font-mono text-sm mx-1">{product}</code>
+        </h3>
+        <Button size="small" type="primary" onClick={() => setShowIssue(true)}>
+          Issue Subject Token
+        </Button>
+      </div>
+
+      {tokens.error && <ErrorBanner error={tokens.error} />}
+      {!tokens.data && !tokens.error && <Spinner />}
+      {tokens.data && tokens.data.length === 0 && (
+        <EmptyState icon="🎫" title="暂无 subject token" hint={`产品「${product}」还没有发放过用户级 token。`} />
+      )}
+      {tokens.data && tokens.data.length > 0 && (
+        <Card bordered bodyStyle={{ padding: 0 }}>
+          <Table
+            rowKey="subject"
+            columns={[
+              { title: 'Subject', dataIndex: 'subject', render: (v: string) => <code className="font-mono text-xs">{v}</code> },
+              {
+                title: '标签',
+                dataIndex: 'label',
+                render: (v: string | undefined) => v
+                  ? <span style={{ color: 'var(--color-text-2)' }}>{v}</span>
+                  : <span style={{ color: 'var(--color-text-4)' }}>—</span>,
+              },
+              {
+                title: '创建',
+                dataIndex: 'createdAt',
+                render: (v: number) => <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>{relativeTime(v)}</span>,
+              },
+              {
+                title: '',
+                dataIndex: '__actions',
+                align: 'right' as const,
+                width: 100,
+                render: (_: unknown, row: ScopedTokenInfo) => (
+                  <Popconfirm
+                    title={`吊销 subject「${row.subject}」的 token?`}
+                    content="该用户的 token 将立即失效。"
+                    okText="吊销"
+                    cancelText="取消"
+                    onOk={() => { revoke.mutate({ product, subject: row.subject }); Message.success(`已吊销 ${row.subject}`); }}
+                  >
+                    <Button size="mini" type="text" status="danger">吊销</Button>
+                  </Popconfirm>
+                ),
+              },
+            ]}
+            data={tokens.data}
+            pagination={false}
+            size="small"
+          />
+        </Card>
+      )}
+
+      {showIssue && (
+        <IssueScopedTokenModal
+          product={product}
+          onClose={() => setShowIssue(false)}
+          onIssued={(token) => { setShowIssue(false); setIssuedToken(token); }}
+        />
+      )}
+
+      {issuedToken && (
+        <Modal
+          visible
+          title="Subject Token 已发放"
+          onCancel={() => setIssuedToken(null)}
+          maskClosable={false}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button type="primary" onClick={async () => { await navigator.clipboard.writeText(issuedToken); Message.success('已复制 token'); }}>
+                复制 token
+              </Button>
+              <Button onClick={() => setIssuedToken(null)}>我已保存</Button>
+            </div>
+          }
+        >
+          <Alert type="warning" className="mb-3" content="这是你唯一一次看到完整 token。关闭后无法再找回——请现在复制保存。" />
+          <pre
+            className="overflow-auto p-3 rounded-md text-xs font-mono whitespace-pre-wrap break-all"
+            style={{ background: 'var(--color-fill-2)', color: 'var(--color-text-1)' }}
+          >
+            {issuedToken}
+          </pre>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function IssueScopedTokenModal({ product, onClose, onIssued }: {
+  product: string;
+  onClose: () => void;
+  onIssued: (token: string) => void;
+}) {
+  const issue = useIssueScopedToken();
+  const [subject, setSubject] = useState('');
+  const [label, setLabel] = useState('');
+  const valid = subject.length > 0;
+
+  return (
+    <Modal
+      visible
+      title={<span>Issue Subject Token — <code className="font-mono text-sm">{product}</code></span>}
+      onCancel={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            loading={issue.isPending}
+            disabled={!valid}
+            onClick={async () => {
+              const res = await issue.mutateAsync({ product, subject, label: label || undefined });
+              onIssued(res.token);
+            }}
+          >
+            发放
+          </Button>
+        </div>
+      }
+    >
+      <label className="block mb-3">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>Subject(必填,如用户 ID)</span>
+        <Input className="mt-1 font-mono" value={subject} onChange={setSubject} placeholder="e.g. user-123" autoFocus />
+      </label>
+      <label className="block">
+        <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>标签(可选)</span>
+        <Input className="mt-1" value={label} onChange={setLabel} placeholder="备注" />
+      </label>
+      {issue.error ? <div className="text-sm mt-2" style={{ color: 'rgb(var(--red-6))' }}>{issue.error instanceof Error ? issue.error.message : String(issue.error)}</div> : null}
+    </Modal>
   );
 }
 

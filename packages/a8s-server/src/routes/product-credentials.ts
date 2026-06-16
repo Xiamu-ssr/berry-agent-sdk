@@ -19,6 +19,7 @@ import {
   productCredentialIssueResponseSchema,
   scopedTokenIssueRequestSchema,
   scopedTokenIssueResponseSchema,
+  scopedTokenListResponseSchema,
 } from '@berry-agent/cluster-protocol';
 import { readJsonBody, writeJson } from '../http-helpers.js';
 import { httpError, type RouteDefinition } from '../router.js';
@@ -78,6 +79,36 @@ export function productCredentialRoutes<TEntry>(deps: ServerDeps<TEntry>): Route
         const had = deps.productCredentials.revoke(params.product);
         if (!had) {
           throw httpError(404, 'unknown_product', `no credential for product "${params.product}"`);
+        }
+        writeJson(res, 200, { ok: true });
+      },
+    },
+
+    // ---- List subject tokens for a product (metadata, no token values) ----
+    {
+      method: 'GET',
+      pattern: '/v1/operator/credentials/:product/scoped-tokens',
+      name: 'GET /v1/operator/credentials/:product/scoped-tokens',
+      middleware: [requireAdminToken(deps)],
+      handler: async ({ params, res }) => {
+        const tokens = deps.productCredentials.listScoped(params.product);
+        writeJson(res, 200, scopedTokenListResponseSchema.parse({ tokens }));
+      },
+    },
+
+    // ---- Revoke a single subject token ----
+    {
+      method: 'DELETE',
+      pattern: '/v1/operator/credentials/:product/scoped-tokens/:subject',
+      name: 'DELETE /v1/operator/credentials/:product/scoped-tokens/:subject',
+      middleware: [
+        requireAdminToken(deps),
+        withAudit(deps.audit, { action: 'credential.scoped.revoke', target: (ctx) => `${ctx.params.product}/${ctx.params.subject}` }),
+      ],
+      handler: async ({ params, res }) => {
+        const removed = deps.productCredentials.revokeSubject(params.product, params.subject);
+        if (!removed) {
+          throw httpError(404, 'unknown_subject', `no scoped token for "${params.product}/${params.subject}"`);
         }
         writeJson(res, 200, { ok: true });
       },
