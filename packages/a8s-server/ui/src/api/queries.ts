@@ -840,6 +840,31 @@ export function useEnsureAdminAgent() {
   });
 }
 
+// ---- Agent Snapshot ----
+
+export interface AgentSnapshotHand {
+  id: string;
+  kind: string;
+  displayName?: string;
+  capabilities: string[];
+}
+export interface AgentSnapshot {
+  model: string;
+  provider: string;
+  status: string;
+  hands: AgentSnapshotHand[];
+  skills: Array<{ name: string; description: string }>;
+  tools: string[];
+}
+export function useAgentSnapshot(agentId: string | null) {
+  return useQuery({
+    queryKey: ['agent-snapshot', agentId],
+    queryFn: () => api<AgentSnapshot>(`/v1/agents/${agentId}/snapshot`),
+    enabled: !!agentId,
+    refetchInterval: 10_000,
+  });
+}
+
 // ---- Health ----
 
 export interface Health {

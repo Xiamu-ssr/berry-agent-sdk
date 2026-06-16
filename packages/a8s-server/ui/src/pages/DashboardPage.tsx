@@ -1,21 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Checkbox, Tag } from '@arco-design/web-react';
+import { useEffect, useRef, useState } from 'react';
+import { Button, Card, Tag } from '@arco-design/web-react';
 import { IconCheck } from '@arco-design/web-react/icon';
 import {
   useCluster, useWorkers, useAgents, useMachines,
-  useAdminAgentStatus, useModelsTemplate, useEnsureAdminAgent,
+  useAdminAgentStatus,
 } from '../api/queries.js';
-import { EntityPickerField } from '../components/EntityPicker.js';
-import { modelPickerConfig } from '../components/entityConfigs.js';
 import { StatCard } from '../components/StatCard.js';
 import { Sparkline } from '../components/Sparkline.js';
 import { PageHeader, ErrorBanner, Spinner } from '../components/Page.js';
-
-// ============================================================
-// Dashboard — dual mode
-// ============================================================
-// Empty cluster → Step Guide (worker → machine → admin agent)
-// Ready cluster → Stats overview (original dashboard)
+import { OctopusWizard } from '../components/OctopusWizard.js';
 
 export function DashboardPage() {
   const workers = useWorkers();
@@ -36,8 +29,6 @@ function StepGuide() {
   const workers = useWorkers();
   const machines = useMachines();
   const adminStatus = useAdminAgentStatus();
-  const template = useModelsTemplate();
-  const ensure = useEnsureAdminAgent();
 
   const activeWorkers = workers.data?.filter((w) => w.state === 'active') ?? [];
   const activeMachines = machines.data?.filter((m) => m.state === 'active') ?? [];
@@ -46,29 +37,7 @@ function StepGuide() {
   const step2Done = activeMachines.length > 0;
   const step3Done = adminStatus.data?.present === true;
 
-  const templateReady = useMemo(
-    () => !!template.data?.template && Object.keys(template.data.template.models ?? {}).length > 0,
-    [template.data],
-  );
-
-  const [selectedMachines, setSelectedMachines] = useState<Set<string>>(new Set());
-  const [model, setModel] = useState<string | null>(null);
-
-  const toggleMachine = (id: string) => {
-    setSelectedMachines((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const handleCreate = () => {
-    ensure.mutate({
-      ...(model ? { model } : {}),
-      ...(selectedMachines.size > 0 ? { machines: [...selectedMachines].join(',') } : {}),
-    });
-  };
+  const [showWizard, setShowWizard] = useState(false);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -113,7 +82,7 @@ berry-worker start --config /etc/berry/worker.json`}
         )}
       </StepCard>
 
-      {/* Step 2: Hand (Machine) */}
+      {/* Step 2: Hand */}
       <StepCard
         number={2}
         title="连接 Hand"
@@ -161,65 +130,28 @@ berry-machine start \\
             前往 <strong>Admin Chat</strong> 页面与它对话。
           </div>
         ) : (
-          <div className="space-y-3">
-            {!templateReady && (
-              <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>
-                先在 <strong>Models</strong> 页配置至少一个模型。
-              </div>
-            )}
-
-            {/* Hand selection */}
-            {activeMachines.length > 0 && (
-              <div>
-                <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>授权 Hand(agent 可操作的执行环境）:</div>
-                <div className="flex flex-wrap gap-3">
-                  {activeMachines.map((m) => (
-                    <Checkbox
-                      key={m.machineId}
-                      checked={selectedMachines.has(m.machineId)}
-                      onChange={() => toggleMachine(m.machineId)}
-                    >
-                      <code className="font-mono text-xs">{m.machineId}</code>
-                      <span className="text-xs ml-1" style={{ color: 'var(--color-text-3)' }}>
-                        {isLocalHost(m.callbackUrl) ? '本机' : m.platform ?? '?'}
-                      </span>
-                    </Checkbox>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Model selection */}
-            <div className="max-w-xs">
-              <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>主模型(留空 = tier:strong)</div>
-              <EntityPickerField
-                config={modelPickerConfig}
-                value={model}
-                onChange={setModel}
-                title="选择 admin 主模型"
-                placeholder="默认 tier:strong…"
-                clearable
-              />
-            </div>
-
-            {ensure.error && <ErrorBanner error={ensure.error} />}
-            <Button
-              type="primary"
-              loading={ensure.isPending}
-              disabled={!step1Done || !templateReady}
-              onClick={handleCreate}
-            >
-              一键创建 Admin Agent
-            </Button>
-          </div>
+          <Button
+            type="primary"
+            disabled={!step1Done}
+            onClick={() => setShowWizard(true)}
+          >
+            初始化 Admin Agent
+          </Button>
         )}
       </StepCard>
+
+      {showWizard && (
+        <OctopusWizard
+          adminMode
+          onClose={() => setShowWizard(false)}
+        />
+      )}
     </div>
   );
 }
 
 // ============================================================
-// StepCard — a numbered step with done/pending state
+// StepCard
 // ============================================================
 
 function StepCard({
@@ -233,10 +165,7 @@ function StepCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card
-      bordered
-      style={disabled ? { opacity: 0.5 } : undefined}
-    >
+    <Card bordered style={disabled ? { opacity: 0.5 } : undefined}>
       <div className="flex items-start gap-4">
         <div
           className="flex-none w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold"
@@ -261,15 +190,8 @@ function StepCard({
 }
 
 // ============================================================
-// DashboardStats — the original dashboard (cluster is ready)
+// DashboardStats — cluster is ready
 // ============================================================
-
-function isLocalHost(callbackUrl: string): boolean {
-  try {
-    const h = new URL(callbackUrl).hostname;
-    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
-  } catch { return false; }
-}
 
 const HISTORY_MAX = 30;
 
@@ -314,36 +236,21 @@ function DashboardStats() {
               {c.capacity.used} of {c.capacity.total} slots · {c.capacity.available} available
             </div>
           </div>
-          <Sparkline
-            data={capHistory}
-            width={280}
-            height={64}
-            tone={capacityPct > 80 ? 'berry' : 'snow'}
-            className="mt-1"
-          />
+          <Sparkline data={capHistory} width={280} height={64} tone={capacityPct > 80 ? 'berry' : 'snow'} className="mt-1" />
         </div>
       </Card>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Active workers"
-          value={c.workerCount.active}
-          hint={`${c.workerCount.total} total · ${c.workerCount.draining} draining`}
-          tone={c.workerCount.active === 0 ? 'warn' : 'success'}
-        />
+        <StatCard label="Active workers" value={c.workerCount.active} hint={`${c.workerCount.total} total · ${c.workerCount.draining} draining`} tone={c.workerCount.active === 0 ? 'warn' : 'success'} />
         <StatCard label="Agents" value={c.agentCount} hint="assigned to workers" />
-        <StatCard
-          label="Available slots"
-          value={c.capacity.available}
-          tone={c.capacity.available === 0 ? 'danger' : 'default'}
-        />
+        <StatCard label="Available slots" value={c.capacity.available} tone={c.capacity.available === 0 ? 'danger' : 'default'} />
         <StatCard label="Total capacity" value={c.capacity.total} hint={`${c.capacity.used} in use`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Worker pool</span>}>
           {activeWorkers.length === 0 ? (
-            <div className="text-sm" style={{ color: 'var(--color-text-3)' }}>没有活跃 worker —— agent 无法被调度。</div>
+            <div className="text-sm" style={{ color: 'var(--color-text-3)' }}>没有活跃 worker。</div>
           ) : (
             <ul className="space-y-2">
               {activeWorkers.map((w) => {
@@ -355,10 +262,7 @@ function DashboardStats() {
                       <span className="tabular-nums" style={{ color: 'var(--color-text-3)' }}>{w.used} / {w.capacity}</span>
                     </div>
                     <div className="mt-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-fill-2)' }}>
-                      <div
-                        className="h-full rounded-full"
-                        style={{ width: `${pct}%`, background: pct > 80 ? 'rgb(var(--red-5))' : 'rgb(var(--arcoblue-6))' }}
-                      />
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: pct > 80 ? 'rgb(var(--red-5))' : 'rgb(var(--arcoblue-6))' }} />
                     </div>
                   </li>
                 );
@@ -375,9 +279,7 @@ function DashboardStats() {
               {recentAgents.map((a) => (
                 <li key={a.agentId} className="flex items-center justify-between text-sm">
                   <span className="font-mono" style={{ color: 'var(--color-text-2)' }}>{a.agentId}</span>
-                  <span className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>
-                    {a.workerId ?? '(stranded)'}
-                  </span>
+                  <span className="font-mono text-xs" style={{ color: 'var(--color-text-3)' }}>{a.workerId ?? '(stranded)'}</span>
                 </li>
               ))}
             </ul>
