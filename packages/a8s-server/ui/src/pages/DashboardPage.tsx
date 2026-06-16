@@ -113,12 +113,12 @@ berry-worker start --config /etc/berry/worker.json`}
         )}
       </StepCard>
 
-      {/* Step 2: Machine */}
+      {/* Step 2: Hand (Machine) */}
       <StepCard
         number={2}
-        title="连接 Machine"
+        title="连接 Hand"
         done={step2Done}
-        subtitle="Machine 是 agent 的执行环境(Hand)。在目标机器上部署 connector:"
+        subtitle="Hand 是 agent 的执行环境。在目标机器上部署 connector,它会注册为一个 Hand:"
       >
         {step2Done ? (
           <div className="space-y-2">
@@ -168,10 +168,10 @@ berry-machine start \\
               </div>
             )}
 
-            {/* Machine selection */}
+            {/* Hand selection */}
             {activeMachines.length > 0 && (
               <div>
-                <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>选择要授权的 Machine(Hand）:</div>
+                <div className="text-xs mb-2" style={{ color: 'var(--color-text-3)' }}>授权 Hand(agent 可操作的执行环境）:</div>
                 <div className="flex flex-wrap gap-3">
                   {activeMachines.map((m) => (
                     <Checkbox
@@ -180,7 +180,9 @@ berry-machine start \\
                       onChange={() => toggleMachine(m.machineId)}
                     >
                       <code className="font-mono text-xs">{m.machineId}</code>
-                      <span className="text-xs ml-1" style={{ color: 'var(--color-text-3)' }}>({m.platform ?? '?'})</span>
+                      <span className="text-xs ml-1" style={{ color: 'var(--color-text-3)' }}>
+                        {isLocalHost(m.callbackUrl) ? '本机' : m.platform ?? '?'}
+                      </span>
                     </Checkbox>
                   ))}
                 </div>
@@ -261,6 +263,13 @@ function StepCard({
 // ============================================================
 // DashboardStats — the original dashboard (cluster is ready)
 // ============================================================
+
+function isLocalHost(callbackUrl: string): boolean {
+  try {
+    const h = new URL(callbackUrl).hostname;
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  } catch { return false; }
+}
 
 const HISTORY_MAX = 30;
 
