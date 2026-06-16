@@ -112,6 +112,7 @@ export function operatorRoutes<TEntry>(deps: ServerDeps<TEntry>): RouteDefinitio
         await ensureAdminAgent(deps.plane, {
           ...(body.model ? { model: body.model } : {}),
           ...(body.classifierModel ? { classifierModel: body.classifierModel } : {}),
+          ...(body.machines ? { machines: body.machines } : {}),
         });
         const loc = deps.plane.getAgentLocation(ADMIN_AGENT_ID);
         writeJson(res, 200, adminAgentStatusResponseSchema.parse({

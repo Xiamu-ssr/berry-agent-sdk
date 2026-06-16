@@ -819,6 +819,7 @@ export function useAdminAgentStatus() {
 export interface EnsureAdminAgentInput {
   model?: string;
   classifierModel?: string;
+  machines?: string;
 }
 export function useEnsureAdminAgent() {
   const qc = useQueryClient();
@@ -829,6 +830,7 @@ export function useEnsureAdminAgent() {
         body: JSON.stringify({
           ...(input.model ? { model: input.model } : {}),
           ...(input.classifierModel ? { classifierModel: input.classifierModel } : {}),
+          ...(input.machines ? { machines: input.machines } : {}),
         }),
       }),
     onSuccess: () => {

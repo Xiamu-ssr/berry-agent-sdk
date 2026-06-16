@@ -21,7 +21,7 @@ export interface AdminAgentConfig {
   agentId?: string;
   model?: string;
   classifierModel?: string;
-  /** Machine ids to grant as Hand (comma-separated). Default 'cloud-1'. */
+  /** Machine ids to grant as Hand (comma-separated). Omit = no machine Hand. */
   machines?: string;
 }
 
@@ -59,7 +59,7 @@ export async function ensureAdminAgent(
     ensureDefaultMcpConfig: false,
     labels: {
       role: 'a8s-admin',
-      ...(config.machines ? { machines: config.machines } : { machines: 'cloud-1' }),
+      ...(config.machines ? { machines: config.machines } : {}),
     },
   };
   const result = await plane.createAgent(spec, { tag: 'admin-bootstrap' });

@@ -1259,6 +1259,7 @@ export type AdminAgentStatusResponse = z.infer<typeof adminAgentStatusResponseSc
 export const adminAgentEnsureRequestSchema = z.object({
   model: z.string().min(1).optional(),
   classifierModel: z.string().min(1).optional(),
+  machines: z.string().min(1).optional(),
 }).strict();
 export type AdminAgentEnsureRequest = z.infer<typeof adminAgentEnsureRequestSchema>;
 

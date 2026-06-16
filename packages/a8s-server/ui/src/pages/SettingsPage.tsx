@@ -4,25 +4,20 @@ import {
   useModelsTemplate,
   usePutModelsTemplate,
   useModelsPresets,
-  useAdminAgentStatus,
-  useEnsureAdminAgent,
   type ModelsTemplate,
   type ModelsPreset,
   type ProviderEndpoints,
 } from '../api/queries.js';
 import { PageHeader, ErrorBanner, Spinner } from '../components/Page.js';
-import { EntityPickerField } from '../components/EntityPicker.js';
-import { modelPickerConfig } from '../components/entityConfigs.js';
 
 export function SettingsPage() {
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader
         title="设置"
-        subtitle="供应商(L1)与平台 agent — 集群级配置"
+        subtitle="供应商配置 — 集群级"
       />
       <ProvidersCard />
-      <AdminAgentCard />
     </div>
   );
 }
@@ -286,87 +281,3 @@ function AddProvider({
   );
 }
 
-// ============================================================
-// Admin agent bootstrap
-// ============================================================
-
-function AdminAgentCard() {
-  const status = useAdminAgentStatus();
-  const template = useModelsTemplate();
-  const ensure = useEnsureAdminAgent();
-
-  // berry-admin goes through the normal agent config path — the operator picks
-  // its model + classifier like any agent (no hardcoded tier:strong). Empty =
-  // bootstrap default (tier:strong main, SDK-default classifier).
-  const [model, setModel] = useState<string | null>(null);
-  const [classifierModel, setClassifierModel] = useState<string | null>(null);
-
-  const templateReady = useMemo(
-    () => !!template.data?.template && Object.keys(template.data.template.models ?? {}).length > 0,
-    [template.data],
-  );
-
-  return (
-    <Card bordered title={<span className="text-sm font-semibold uppercase tracking-wider">Admin agent</span>}>
-      <p className="text-sm mb-3" style={{ color: 'var(--color-text-3)' }}>
-        <code className="font-mono text-xs">berry-admin</code> is the chat agent that operates
-        the cluster for you (drain workers, generate join scripts, report status). It mounts on an
-        active worker and gets the cluster-admin tools automatically.
-      </p>
-
-      {status.isLoading ? (
-        <Spinner />
-      ) : status.data?.present ? (
-        <div className="text-sm flex items-center gap-2">
-          <Tag color="green" size="small">running</Tag>
-          mounted on worker <code className="font-mono text-xs">{status.data.workerId}</code>.
-          Chat with it on the <strong>Admin chat</strong> page.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {!templateReady && (
-            <div className="text-xs" style={{ color: 'rgb(var(--red-6))' }}>
-              先在 <strong>Models</strong> 页配置至少一个模型。
-            </div>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>主模型(留空 = tier:strong)</div>
-              <EntityPickerField
-                config={modelPickerConfig}
-                value={model}
-                onChange={setModel}
-                title="选择 admin 主模型"
-                placeholder="默认 tier:strong…"
-                clearable
-              />
-            </div>
-            <div>
-              <div className="text-xs mb-1" style={{ color: 'var(--color-text-3)' }}>审批模型(留空 = 默认)</div>
-              <EntityPickerField
-                config={modelPickerConfig}
-                value={classifierModel}
-                onChange={setClassifierModel}
-                title="选择 admin 审批模型"
-                placeholder="默认…"
-                clearable
-              />
-            </div>
-          </div>
-          {ensure.error && <ErrorBanner error={ensure.error} />}
-          <Button
-            type="primary"
-            loading={ensure.isPending}
-            disabled={!templateReady}
-            onClick={() => ensure.mutate({
-              ...(model ? { model } : {}),
-              ...(classifierModel ? { classifierModel } : {}),
-            })}
-          >
-            Bootstrap admin agent
-          </Button>
-        </div>
-      )}
-    </Card>
-  );
-}
