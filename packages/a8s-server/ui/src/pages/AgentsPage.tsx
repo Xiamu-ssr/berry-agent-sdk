@@ -1,7 +1,5 @@
-import { useMemo, useState } from 'react';
-import {
-  Table, Button, Modal, Form, Input, Select, Tag, Popconfirm, Message, Card, Spin,
-} from '@arco-design/web-react';
+import { useState } from 'react';
+import { Table, Button, Tag, Popconfirm, Message, Card } from '@arco-design/web-react';
 import {
   useAgents,
   useSessions,
@@ -120,8 +118,6 @@ export function AgentsPage() {
     </div>
   );
 }
-
-// ============================================================
 
 function AgentDetail({
   agentId,
