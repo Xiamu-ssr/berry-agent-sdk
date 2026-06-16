@@ -153,6 +153,17 @@ export class MachineConnectorDaemon {
     }));
   }
 
+  private passthroughEnv(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('BERRY_A8S_')) {
+        const val = process.env[key];
+        if (val) out[key] = val;
+      }
+    }
+    return out;
+  }
+
   private healthPayload(): HealthResponse {
     return healthResponseSchema.parse({
       ok: true,
@@ -164,11 +175,12 @@ export class MachineConnectorDaemon {
 
   private async handleExec(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsed = machineExecRequestSchema.parse(await readJson(req));
+    const env = { ...this.passthroughEnv(), ...parsed.env };
     const result = await this.executor.exec(parsed.command, {
       cwd: parsed.cwd || this.options.defaultCwd || process.cwd(),
       timeout: parsed.timeoutMs,
       maxBuffer: parsed.maxBuffer,
-      env: parsed.env,
+      env,
     });
     writeJson(res, 200, machineExecReplySchema.parse({
       output: result.output,

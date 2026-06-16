@@ -11,7 +11,7 @@
 //     customized them doesn't get clobbered on restart).
 //
 // The worker that mounts a `labels.role === 'a8s-admin'` agent calls
-// seedAdminAgentHome() from its admin-ops-mode resolveSpec (worker-daemon).
+// seedAdminAgentHome() from its baseResolveSpec in cli.ts (worker-daemon).
 // a8s itself runs no worker, so this only ever fires on a real worker's
 // host — exactly where the agent's files should live.
 //

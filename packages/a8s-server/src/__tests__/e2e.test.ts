@@ -50,13 +50,13 @@ import { MetricsCalculator } from '@berry-agent/observe';
 import {
   WorkerDaemon,
   WorkerRegistrationClient,
-  withAdminOpsEnv,
   withMachineHostTools,
 } from '@berry-agent/worker-daemon';
 import {
   MachineConnectorDaemon,
   MachineRegistrationClient,
 } from '@berry-agent/machine-connector';
+import { seedAdminAgentHome } from '@berry-agent/a8s-admin';
 import { A8sServer } from '../server.js';
 import { ensureAdminAgent } from '../bootstrap.js';
 
@@ -105,6 +105,9 @@ async function startTestWorker(opts: {
   const metrics = new MetricsCalculator(env.observer.analyzer, env.observer.db);
   const base = (wire: import('@berry-agent/worker-daemon').WireResolveInput) => {
     const workspace = wire.workspace.includes('/') ? wire.workspace : join(agentsRoot, wire.workspace);
+    if (wire.labels?.role === 'a8s-admin') {
+      seedAdminAgentHome(workspace);
+    }
     return {
       agentId: wire.agentId,
       workspace,
@@ -116,7 +119,6 @@ async function startTestWorker(opts: {
   };
   // Layer the production resolveSpec wrappers, exactly like the CLI.
   let resolveSpec = base;
-  resolveSpec = withAdminOpsEnv(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
   resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl: opts.a8sUrl, adminToken: opts.adminToken });
 
   const wPort = await pickPort();
@@ -982,10 +984,8 @@ describe('a8s-server + worker-daemon E2E', () => {
     expect(admin).toBeDefined();
     expect(admin!.workerId).toBe('w-admin');
 
-    // ---- The worker recognized the a8s-admin label (via withAdminOpsEnv,
-    // the same path the CLI uses) and wired the agent for cluster ops the
-    // 新-2 way: NO hardcoded cluster tools — ops are a CLI + skill now.
-    // a8s-server itself never touches admin-ops code. ----
+    // ---- The worker recognized the a8s-admin label and seeds the agent's
+    // home (AGENTS.md + skills). Exec comes from labels.machines → Hand. ----
     const mount = w.worker.get('berry-admin');
     expect(mount).toBeDefined();
     const toolNames = new Set(mount!.runtime.getTools().map((t) => t.name));

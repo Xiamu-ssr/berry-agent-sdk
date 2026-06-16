@@ -2,8 +2,7 @@
 // @berry-agent/worker-daemon — Machine-mode resolveSpec helper
 // ============================================================
 //
-// Parallel to withAdminOpsEnv / withTeamModeHostTools: a
-// resolveSpec wrapper that, when the wire spec carries
+// Parallel to withTeamModeHostTools: a resolveSpec wrapper that, when the wire spec carries
 // `labels.machines = "id1,id2,..."`, injects each listed machine's exec
 // tool as a hostTool. The agent then sees `machine_<id>_exec` and can
 // operate those hosts — "选 Hand = 选机器" made literal.

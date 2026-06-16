@@ -18,12 +18,11 @@
 import { type ControlPlane, type WireWorkerAgentSpec } from '@berry-agent/a8s';
 
 export interface AdminAgentConfig {
-  /** Stable agent id; default 'berry-admin'. */
   agentId?: string;
-  /** Main model ref. Default 'tier:strong' when the operator doesn't pick one. */
   model?: string;
-  /** Auto-approval classifier model. Omitted → SDK default. */
   classifierModel?: string;
+  /** Machine ids to grant as Hand (comma-separated). Default 'cloud-1'. */
+  machines?: string;
 }
 
 /**
@@ -58,7 +57,10 @@ export async function ensureAdminAgent(
     model: config.model ?? 'tier:strong',
     ...(config.classifierModel ? { classifierModel: config.classifierModel } : {}),
     ensureDefaultMcpConfig: false,
-    labels: { role: 'a8s-admin' },
+    labels: {
+      role: 'a8s-admin',
+      ...(config.machines ? { machines: config.machines } : { machines: 'cloud-1' }),
+    },
   };
   const result = await plane.createAgent(spec, { tag: 'admin-bootstrap' });
 

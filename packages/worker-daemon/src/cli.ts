@@ -29,8 +29,9 @@ import { AgentHome, DefaultCredentialStore } from '@berry-agent/core';
 import type { ModelsRegistry } from '@berry-agent/models';
 import { createObserver, MetricsCalculator } from '@berry-agent/observe';
 import { Worker, type WorkerAgentSpec, type WorkerEnvironment } from '@berry-agent/worker';
-import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withAdminOpsEnv, withMachineHostTools } from './index.js';
+import { WorkerDaemon, WorkerRegistrationClient, withTeamModeHostTools, withMachineHostTools } from './index.js';
 import { parseBuiltinHands, selectBuiltinHands } from './builtin-hands.js';
+import { seedAdminAgentHome } from '@berry-agent/a8s-admin';
 
 const USAGE = `berry-worker — Berry Agent worker daemon
 
@@ -324,6 +325,9 @@ async function main(argv: string[]): Promise<number> {
     // (labels) shared with machines/team/role — products pick built-in Hands
     // the same way they pick a machine, no special wire field.
     const builtinHands = parseBuiltinHands(wire.labels?.hands);
+    if (wire.labels?.role === 'a8s-admin') {
+      seedAdminAgentHome(workspace);
+    }
     return {
       agentId: wire.agentId,
       workspace,
@@ -338,16 +342,9 @@ async function main(argv: string[]): Promise<number> {
       ...(builtinHands.web === false ? { webTools: false } : {}),
     };
   };
-  // Chain the resolveSpec wrappers. When admin token is configured we
-  // layer team-mode (label-gated message_leader injection) and
-  // admin-ops-mode (label-gated a8s credential injection for the
-  // berry-admin agent's berry-a8s-ops CLI) on top of the base resolver.
-  // Each wrapper inspects labels on its own and is a no-op for agents
-  // that don't match.
   let resolveSpec = baseResolveSpec;
   if (adminToken) {
     resolveSpec = withTeamModeHostTools(resolveSpec, { a8sUrl, adminToken });
-    resolveSpec = withAdminOpsEnv(resolveSpec, { a8sUrl, adminToken });
     resolveSpec = withMachineHostTools(resolveSpec, { a8sUrl, adminToken });
   }
 
