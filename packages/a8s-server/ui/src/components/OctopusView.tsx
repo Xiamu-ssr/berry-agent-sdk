@@ -1,12 +1,10 @@
-import { useEffect, useRef, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Tag, Tooltip } from '@arco-design/web-react';
 
 // ============================================================
-// OctopusView — Canvas 2D 有机八爪鱼可视化
+// OctopusView — Canvas 2D 真八爪鱼角色插画(mascot 风格)
 // ============================================================
-// Brain = 八爪鱼头(椭圆+渐变+呼吸脉搏)
-// Hand = 触手(多段贝塞尔+波动动画+吸盘节点)
-// Capabilities = 吸盘(沿触手分布的小圆)
+// 灵感:戴眼镜的八爪鱼 mascot + 环绕能力气泡
 
 export interface OctopusHand {
   id: string;
@@ -27,45 +25,47 @@ interface OctopusViewProps {
   className?: string;
 }
 
-const KIND_COLORS: Record<string, [number, number, number]> = {
-  local: [34, 197, 94],
-  workspace: [34, 197, 94],
-  web: [59, 130, 246],
-  system: [156, 163, 175],
-  mcp: [168, 85, 247],
-  shell: [249, 115, 22],
+const KIND_COLORS: Record<string, string> = {
+  local: '#22c55e',
+  workspace: '#22c55e',
+  web: '#3b82f6',
+  system: '#6b7280',
+  mcp: '#a855f7',
+  shell: '#f97316',
 };
 
-function kindRgb(kind: string): [number, number, number] {
-  return KIND_COLORS[kind] ?? [59, 130, 246];
+function kindColor(kind: string): string {
+  return KIND_COLORS[kind] ?? '#6366f1';
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  idle: '#22c55e',
-  running: '#3b82f6',
-  busy: '#f59e0b',
-  error: '#ef4444',
+const CAPABILITY_ICONS: Record<string, string> = {
+  shell: '⌨',
+  read_file: '📄',
+  write_file: '✏️',
+  edit_file: '✂️',
+  list_files: '📁',
+  grep: '🔍',
+  find_files: '🗂',
+  web_fetch: '🌐',
+  web_search: '🔎',
+  exec: '⚡',
+  save_memory: '💾',
+  memory_search: '🧠',
+  memory_get: '📥',
+  process_list: '📋',
+  process_kill: '❌',
 };
 
-export function OctopusView({ data, size = 420, className }: OctopusViewProps) {
+function capIcon(name: string): string {
+  if (name.startsWith('mcp:')) return '🔌';
+  return CAPABILITY_ICONS[name] ?? '⚙️';
+}
+
+export function OctopusView({ data, size = 450, className }: OctopusViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
-  const timeRef = useRef(0);
 
   const { brain, hands, skills } = data;
-  const cx = size / 2;
-  const cy = size / 2;
-
-  const handLayout = useMemo(() => {
-    const n = hands.length;
-    if (n === 0) return [];
-    const startAngle = -Math.PI / 2;
-    return hands.map((h, i) => {
-      const angle = startAngle + (2 * Math.PI * i) / n;
-      const reach = size * 0.38;
-      return { hand: h, angle, reach };
-    });
-  }, [hands, size]);
 
   const draw = useCallback((t: number) => {
     const canvas = canvasRef.current;
@@ -81,162 +81,213 @@ export function OctopusView({ data, size = 420, className }: OctopusViewProps) {
     }
     ctx.clearRect(0, 0, size, size);
 
-    const breathe = 1 + Math.sin(t * 0.002) * 0.03;
-    const headRx = size * 0.09 * breathe;
-    const headRy = size * 0.11 * breathe;
+    const cx = size / 2;
+    const cy = size * 0.42;
+    const breathe = 1 + Math.sin(t * 0.0015) * 0.02;
 
-    // Draw tentacles
-    for (const { hand, angle, reach } of handLayout) {
-      const rgb = kindRgb(hand.kind);
-      const segments = 20;
-      const capCount = Math.min(hand.capabilities.length, 8);
+    // --- Octopus body (head) ---
+    const headW = size * 0.13 * breathe;
+    const headH = size * 0.16 * breathe;
 
-      // Build tentacle path with organic wave
-      const points: Array<[number, number]> = [];
-      for (let s = 0; s <= segments; s++) {
-        const frac = s / segments;
-        const wave = Math.sin(t * 0.003 + frac * 4 + angle * 2) * (8 + frac * 12);
-        const perpAngle = angle + Math.PI / 2;
-        const baseX = cx + Math.cos(angle) * reach * frac;
-        const baseY = cy + Math.sin(angle) * reach * frac;
-        const px = baseX + Math.cos(perpAngle) * wave * frac;
-        const py = baseY + Math.sin(perpAngle) * wave * frac;
-        points.push([px, py]);
-      }
+    // Shadow
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + headH * 1.1, headW * 0.8, headH * 0.15, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.fill();
 
-      // Tentacle body (tapered stroke)
-      ctx.beginPath();
-      ctx.moveTo(points[0][0], points[0][1]);
-      for (let s = 1; s < points.length - 1; s++) {
-        const xc = (points[s][0] + points[s + 1][0]) / 2;
-        const yc = (points[s][1] + points[s + 1][1]) / 2;
-        ctx.quadraticCurveTo(points[s][0], points[s][1], xc, yc);
-      }
-      const last = points[points.length - 1];
-      ctx.lineTo(last[0], last[1]);
+    // Tentacles (8, curvy organic shapes)
+    const tentacleCount = 8;
+    const tentacleLen = size * 0.22;
+    for (let i = 0; i < tentacleCount; i++) {
+      const baseAngle = (Math.PI * 0.15) + (Math.PI * 0.7 / (tentacleCount - 1)) * i;
+      const angle = baseAngle + Math.PI * 0.15;
+      const startX = cx + Math.cos(angle - Math.PI / 2) * headW * 0.6;
+      const startY = cy + headH * 0.7;
 
-      const grad = ctx.createLinearGradient(cx, cy, last[0], last[1]);
-      grad.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.8)`);
-      grad.addColorStop(1, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.3)`);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 6 * (1 - 0); // base width at root
-      ctx.lineCap = 'round';
+      const wave1 = Math.sin(t * 0.002 + i * 1.2) * 15;
+      const wave2 = Math.cos(t * 0.0015 + i * 0.8) * 8;
 
-      // Draw with taper effect
-      for (let s = 0; s < points.length - 1; s++) {
-        const frac = s / points.length;
-        const width = 7 * (1 - frac * 0.7);
+      const endAngle = angle;
+      const endX = startX + Math.cos(endAngle) * tentacleLen + wave1;
+      const endY = startY + Math.sin(endAngle) * tentacleLen + Math.abs(wave2);
+
+      const cp1x = startX + Math.cos(endAngle) * tentacleLen * 0.3 + wave2;
+      const cp1y = startY + Math.sin(endAngle) * tentacleLen * 0.4;
+      const cp2x = startX + Math.cos(endAngle) * tentacleLen * 0.65 + wave1 * 0.5;
+      const cp2y = startY + Math.sin(endAngle) * tentacleLen * 0.8 + wave2;
+
+      // Draw tapered tentacle
+      const steps = 16;
+      for (let s = 0; s < steps; s++) {
+        const t1 = s / steps;
+        const t2 = (s + 1) / steps;
+        const [x1, y1] = bezier3(t1, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
+        const [x2, y2] = bezier3(t2, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
+        const width = (7 - t1 * 5.5) * breathe;
+
         ctx.beginPath();
-        ctx.moveTo(points[s][0], points[s][1]);
-        ctx.lineTo(points[s + 1][0], points[s + 1][1]);
-        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${0.8 - frac * 0.5})`;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = `rgba(30, 30, 60, ${0.85 - t1 * 0.4})`;
         ctx.lineWidth = width;
+        ctx.lineCap = 'round';
         ctx.stroke();
       }
 
-      // Suction cups along tentacle
-      for (let c = 0; c < capCount; c++) {
-        const frac = 0.25 + (c / capCount) * 0.65;
-        const idx = Math.floor(frac * (points.length - 1));
-        const [sx, sy] = points[idx];
-        const cupSize = 3.5 - c * 0.2;
-        const pulse = 1 + Math.sin(t * 0.004 + c) * 0.2;
-
+      // Suction cups (lighter circles on tentacles)
+      for (let s = 2; s < steps - 2; s += 3) {
+        const tf = s / steps;
+        const [sx, sy] = bezier3(tf, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
+        const r = (2.5 - tf * 1.5) * breathe;
         ctx.beginPath();
-        ctx.arc(sx, sy, cupSize * pulse, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.6)`;
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(80, 80, 120, ${0.3 - tf * 0.15})`;
         ctx.fill();
-        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.9)`;
-        ctx.lineWidth = 1;
-        ctx.stroke();
       }
 
-      // Hand end node (glowing dot)
-      const endIdx = points.length - 1;
-      const [ex, ey] = points[endIdx];
-      const glowR = 12 + Math.sin(t * 0.003 + angle) * 2;
-
+      // Tentacle tip curl
+      const tipCurl = Math.sin(t * 0.003 + i) * 5;
       ctx.beginPath();
-      ctx.arc(ex, ey, glowR, 0, Math.PI * 2);
-      const glow = ctx.createRadialGradient(ex, ey, 0, ex, ey, glowR);
-      glow.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.9)`);
-      glow.addColorStop(0.6, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.4)`);
-      glow.addColorStop(1, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0)`);
-      ctx.fillStyle = glow;
+      ctx.arc(endX + tipCurl, endY, 2 * breathe, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(30, 30, 60, 0.5)';
       ctx.fill();
-
-      // Hand label
-      ctx.fillStyle = '#374151';
-      ctx.font = '11px ui-monospace, SFMono-Regular, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(hand.displayName || hand.id, ex, ey + glowR + 14);
-      ctx.fillStyle = '#9ca3af';
-      ctx.font = '9px system-ui, sans-serif';
-      ctx.fillText(`${hand.capabilities.length} tools`, ex, ey + glowR + 26);
     }
 
-    // Octopus head (body)
+    // --- Head ---
     ctx.beginPath();
-    ctx.ellipse(cx, cy, headRx, headRy, 0, 0, Math.PI * 2);
-    const headGrad = ctx.createRadialGradient(cx - headRx * 0.3, cy - headRy * 0.3, 0, cx, cy, headRy);
-    headGrad.addColorStop(0, 'rgba(99, 102, 241, 0.95)');
-    headGrad.addColorStop(0.7, 'rgba(79, 70, 229, 0.9)');
-    headGrad.addColorStop(1, 'rgba(55, 48, 163, 0.85)');
+    ctx.ellipse(cx, cy, headW, headH, 0, 0, Math.PI * 2);
+    const headGrad = ctx.createRadialGradient(cx - headW * 0.3, cy - headH * 0.3, 0, cx, cy, headH);
+    headGrad.addColorStop(0, '#2d2b55');
+    headGrad.addColorStop(0.6, '#1e1b4b');
+    headGrad.addColorStop(1, '#0f0a2e');
     ctx.fillStyle = headGrad;
     ctx.fill();
 
-    // Head glow
+    // Head highlight
     ctx.beginPath();
-    ctx.ellipse(cx, cy, headRx + 4, headRy + 4, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(99, 102, 241, 0.3)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    ctx.ellipse(cx - headW * 0.25, cy - headH * 0.35, headW * 0.25, headH * 0.2, -0.3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fill();
 
-    // Eyes
-    const eyeOff = headRx * 0.35;
-    const eyeR = 4;
+    // --- Glasses ---
+    const glassY = cy - headH * 0.05;
+    const glassR = headW * 0.28;
+    const glassGap = headW * 0.55;
+    // Frames
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(cx - eyeOff, cy - headRy * 0.15, eyeR, 0, Math.PI * 2);
+    ctx.arc(cx - glassGap / 2, glassY, glassR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx + glassGap / 2, glassY, glassR, 0, Math.PI * 2);
+    ctx.stroke();
+    // Bridge
+    ctx.beginPath();
+    ctx.moveTo(cx - glassGap / 2 + glassR, glassY);
+    ctx.lineTo(cx + glassGap / 2 - glassR, glassY);
+    ctx.stroke();
+    // Lens shine
+    ctx.beginPath();
+    ctx.arc(cx - glassGap / 2, glassY, glassR - 1, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + glassGap / 2, glassY, glassR - 1, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fill();
+
+    // --- Eyes (inside glasses) ---
+    const pupilShift = Math.sin(t * 0.001) * 1.5;
+    // Left eye
+    ctx.beginPath();
+    ctx.arc(cx - glassGap / 2 + pupilShift, glassY, glassR * 0.45, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(cx + eyeOff, cy - headRy * 0.15, eyeR, 0, Math.PI * 2);
+    ctx.arc(cx - glassGap / 2 + pupilShift, glassY, glassR * 0.25, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e1b4b';
+    ctx.fill();
+    // Right eye
+    ctx.beginPath();
+    ctx.arc(cx + glassGap / 2 + pupilShift, glassY, glassR * 0.45, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
-    // Pupils
-    const blinkPhase = Math.sin(t * 0.001);
-    const pupilR = 2.2;
     ctx.beginPath();
-    ctx.arc(cx - eyeOff + blinkPhase * 0.5, cy - headRy * 0.15, pupilR, 0, Math.PI * 2);
-    ctx.fillStyle = '#1e1b4b';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + eyeOff + blinkPhase * 0.5, cy - headRy * 0.15, pupilR, 0, Math.PI * 2);
+    ctx.arc(cx + glassGap / 2 + pupilShift, glassY, glassR * 0.25, 0, Math.PI * 2);
     ctx.fillStyle = '#1e1b4b';
     ctx.fill();
 
-    // Status indicator
-    const statusColor = STATUS_COLORS[brain.status ?? 'idle'] ?? STATUS_COLORS.idle;
-    ctx.beginPath();
-    ctx.arc(cx + headRx * 0.8, cy - headRy * 0.8, 5, 0, Math.PI * 2);
-    ctx.fillStyle = statusColor;
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    // --- Capability bubbles (orbit around octopus) ---
+    const n = hands.length;
+    const orbitR = size * 0.36;
+    const bubbleR = size * 0.045;
+    for (let i = 0; i < n; i++) {
+      const hand = hands[i];
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
+      const wobble = Math.sin(t * 0.002 + i * 1.5) * 4;
+      const bx = cx + Math.cos(angle) * (orbitR + wobble);
+      const by = cy + Math.sin(angle) * (orbitR + wobble) * 0.85;
 
-    // Model name below head
+      // Bubble
+      ctx.beginPath();
+      ctx.arc(bx, by, bubbleR, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.strokeStyle = kindColor(hand.kind);
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Shadow under bubble
+      ctx.beginPath();
+      ctx.ellipse(bx, by + bubbleR + 3, bubbleR * 0.6, 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.04)';
+      ctx.fill();
+
+      // Icon inside bubble
+      ctx.font = `${bubbleR * 0.9}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const icon = hand.capabilities.length > 0 ? capIcon(hand.capabilities[0]) : '⚙️';
+      ctx.fillText(icon, bx, by + 1);
+
+      // Label below bubble
+      ctx.fillStyle = '#374151';
+      ctx.font = `bold 10px system-ui, sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(hand.displayName || hand.id, bx, by + bubbleR + 8);
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = `9px system-ui, sans-serif`;
+      ctx.fillText(`${hand.capabilities.length} tools`, bx, by + bubbleR + 21);
+
+      // Dotted connection line from head to bubble
+      const lineStartX = cx + Math.cos(angle) * (headW + 5);
+      const lineStartY = cy + Math.sin(angle) * (headH + 5);
+      const lineEndX = bx - Math.cos(angle) * (bubbleR + 3);
+      const lineEndY = by - Math.sin(angle) * (bubbleR + 3) * 0.85;
+      ctx.beginPath();
+      ctx.setLineDash([3, 4]);
+      ctx.moveTo(lineStartX, lineStartY);
+      ctx.lineTo(lineEndX, lineEndY);
+      ctx.strokeStyle = `${kindColor(hand.kind)}66`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Model label under octopus
     ctx.fillStyle = '#6366f1';
-    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(shortModel(brain.model), cx, cy + headRy + 18);
-  }, [brain, handLayout, cx, cy, size]);
+    ctx.textBaseline = 'top';
+    ctx.fillText(shortModel(brain.model), cx, cy + headH + size * 0.06);
+
+  }, [brain, hands, size]);
 
   useEffect(() => {
     let running = true;
     const loop = (timestamp: number) => {
       if (!running) return;
-      timeRef.current = timestamp;
       draw(timestamp);
       animRef.current = requestAnimationFrame(loop);
     };
@@ -263,15 +314,34 @@ export function OctopusView({ data, size = 420, className }: OctopusViewProps) {
   );
 }
 
+// Cubic bezier point
+function bezier3(
+  t: number,
+  x0: number, y0: number,
+  x1: number, y1: number,
+  x2: number, y2: number,
+  x3: number, y3: number,
+): [number, number] {
+  const u = 1 - t;
+  const tt = t * t;
+  const uu = u * u;
+  const uuu = uu * u;
+  const ttt = tt * t;
+  return [
+    uuu * x0 + 3 * uu * t * x1 + 3 * u * tt * x2 + ttt * x3,
+    uuu * y0 + 3 * uu * t * y1 + 3 * u * tt * y2 + ttt * y3,
+  ];
+}
+
 function shortModel(model: string): string {
   const parts = model.split('/');
   const name = parts[parts.length - 1];
-  if (name.length > 18) return name.slice(0, 16) + '…';
+  if (name.length > 20) return name.slice(0, 18) + '…';
   return name;
 }
 
 // ============================================================
-// OctopusPreview — wizard Step 4 preview
+// OctopusPreview — wizard use (shows octopus growing as you add Hands)
 // ============================================================
 
 export interface OctopusPreviewProps {
@@ -294,5 +364,5 @@ export function OctopusPreview({ model, hands }: OctopusPreviewProps) {
       ],
     })),
   };
-  return <OctopusView data={data} size={300} />;
+  return <OctopusView data={data} size={320} />;
 }

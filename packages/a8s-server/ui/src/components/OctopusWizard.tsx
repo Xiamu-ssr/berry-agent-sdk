@@ -131,7 +131,7 @@ export function OctopusWizard({ existingIds, adminMode, onClose, onCreated }: Oc
       visible
       title={adminMode ? '初始化 Admin Agent' : '创建 Agent'}
       onCancel={onClose}
-      style={{ width: 720 }}
+      style={{ width: 900 }}
       footer={
         <div className="flex justify-between items-center">
           <span className="text-xs" style={{ color: 'var(--color-text-3)' }}>
@@ -151,47 +151,58 @@ export function OctopusWizard({ existingIds, adminMode, onClose, onCreated }: Oc
         <Steps.Step title="身份" description="命名" />
         <Steps.Step title="大脑" description="选模型" />
         <Steps.Step title="触手" description="配 Hand" />
-        <Steps.Step title="确认" description="八爪鱼预览" />
+        <Steps.Step title="确认" description="完成" />
       </Steps>
 
-      {step === 0 && (
-        <StepIdentity
-          agentId={agentId}
-          setAgentId={setAgentId}
-          idValid={idValid}
-          idCollides={idCollides}
-          locked={!!adminMode}
-          workerCount={activeWorkers.length}
-        />
-      )}
-      {step === 1 && (
-        <StepBrain
-          model={model}
-          setModel={setModel}
-          classifierModel={classifierModel}
-          setClassifierModel={setClassifierModel}
-          templateReady={templateReady}
-        />
-      )}
-      {step === 2 && (
-        <StepHands
-          allHands={adminMode ? adminLocalHands : allHands}
-          activeMachines={adminMode ? localMachines : activeMachines}
-          selectedIds={selectedHandIds}
-          setSelectedIds={setSelectedHandIds}
-          adminMode={!!adminMode}
-        />
-      )}
-      {step === 3 && (
-        <StepConfirm
-          agentId={agentId}
-          model={model}
-          classifierModel={classifierModel}
-          selectedHands={selectedHands}
-        />
-      )}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
+        <div className="min-w-0">
+          {step === 0 && (
+            <StepIdentity
+              agentId={agentId}
+              setAgentId={setAgentId}
+              idValid={idValid}
+              idCollides={idCollides}
+              locked={!!adminMode}
+              workerCount={activeWorkers.length}
+            />
+          )}
+          {step === 1 && (
+            <StepBrain
+              model={model}
+              setModel={setModel}
+              classifierModel={classifierModel}
+              setClassifierModel={setClassifierModel}
+              templateReady={templateReady}
+            />
+          )}
+          {step === 2 && (
+            <StepHands
+              allHands={adminMode ? adminLocalHands : allHands}
+              activeMachines={adminMode ? localMachines : activeMachines}
+              selectedIds={selectedHandIds}
+              setSelectedIds={setSelectedHandIds}
+              adminMode={!!adminMode}
+            />
+          )}
+          {step === 3 && (
+            <StepConfirm
+              agentId={agentId}
+              model={model}
+              classifierModel={classifierModel}
+              selectedHands={selectedHands}
+            />
+          )}
+          {error && <div className="mt-3"><ErrorBanner error={error} /></div>}
+        </div>
 
-      {error && <div className="mt-3"><ErrorBanner error={error} /></div>}
+        {/* Live octopus preview — grows as user adds brain/hands */}
+        <div className="hidden lg:flex flex-col items-center justify-center">
+          <OctopusPreview
+            model={model || 'tier:strong'}
+            hands={selectedHands}
+          />
+        </div>
+      </div>
     </Modal>
   );
 }
