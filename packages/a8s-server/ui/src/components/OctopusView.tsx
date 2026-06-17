@@ -1,10 +1,8 @@
-import { useEffect, useRef, useCallback } from 'react';
 import { Tag, Tooltip } from '@arco-design/web-react';
 
 // ============================================================
-// OctopusView — Canvas 2D 真八爪鱼角色插画(mascot 风格)
+// OctopusView — 高质量矢量八爪鱼 mascot + CSS 动画
 // ============================================================
-// 灵感:戴眼镜的八爪鱼 mascot + 环绕能力气泡
 
 export interface OctopusHand {
   id: string;
@@ -38,271 +36,136 @@ function kindColor(kind: string): string {
   return KIND_COLORS[kind] ?? '#6366f1';
 }
 
-const CAPABILITY_ICONS: Record<string, string> = {
-  shell: '⌨',
-  read_file: '📄',
-  write_file: '✏️',
-  edit_file: '✂️',
-  list_files: '📁',
-  grep: '🔍',
-  find_files: '🗂',
-  web_fetch: '🌐',
-  web_search: '🔎',
-  exec: '⚡',
-  save_memory: '💾',
-  memory_search: '🧠',
+const CAP_ICONS: Record<string, string> = {
+  shell: '⌨️', read_file: '📄', write_file: '✏️',
+  edit_file: '✂️', list_files: '📁', grep: '🔍',
+  find_files: '🗂', web_fetch: '🌐', web_search: '🔎',
+  exec: '⚡', save_memory: '💾', memory_search: '🧠',
   memory_get: '📥',
-  process_list: '📋',
-  process_kill: '❌',
 };
 
 function capIcon(name: string): string {
   if (name.startsWith('mcp:')) return '🔌';
-  return CAPABILITY_ICONS[name] ?? '⚙️';
+  return CAP_ICONS[name] ?? '⚙️';
 }
 
-export function OctopusView({ data, size = 450, className }: OctopusViewProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animRef = useRef<number>(0);
-
+export function OctopusView({ data, size = 420, className }: OctopusViewProps) {
   const { brain, hands, skills } = data;
-
-  const draw = useCallback((t: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== size * dpr) {
-      canvas.width = size * dpr;
-      canvas.height = size * dpr;
-      ctx.scale(dpr, dpr);
-    }
-    ctx.clearRect(0, 0, size, size);
-
-    const cx = size / 2;
-    const cy = size * 0.42;
-    const breathe = 1 + Math.sin(t * 0.0015) * 0.02;
-
-    // --- Octopus body (head) ---
-    const headW = size * 0.13 * breathe;
-    const headH = size * 0.16 * breathe;
-
-    // Shadow
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + headH * 1.1, headW * 0.8, headH * 0.15, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.06)';
-    ctx.fill();
-
-    // Tentacles (8, curvy organic shapes)
-    const tentacleCount = 8;
-    const tentacleLen = size * 0.22;
-    for (let i = 0; i < tentacleCount; i++) {
-      const baseAngle = (Math.PI * 0.15) + (Math.PI * 0.7 / (tentacleCount - 1)) * i;
-      const angle = baseAngle + Math.PI * 0.15;
-      const startX = cx + Math.cos(angle - Math.PI / 2) * headW * 0.6;
-      const startY = cy + headH * 0.7;
-
-      const wave1 = Math.sin(t * 0.002 + i * 1.2) * 15;
-      const wave2 = Math.cos(t * 0.0015 + i * 0.8) * 8;
-
-      const endAngle = angle;
-      const endX = startX + Math.cos(endAngle) * tentacleLen + wave1;
-      const endY = startY + Math.sin(endAngle) * tentacleLen + Math.abs(wave2);
-
-      const cp1x = startX + Math.cos(endAngle) * tentacleLen * 0.3 + wave2;
-      const cp1y = startY + Math.sin(endAngle) * tentacleLen * 0.4;
-      const cp2x = startX + Math.cos(endAngle) * tentacleLen * 0.65 + wave1 * 0.5;
-      const cp2y = startY + Math.sin(endAngle) * tentacleLen * 0.8 + wave2;
-
-      // Draw tapered tentacle
-      const steps = 16;
-      for (let s = 0; s < steps; s++) {
-        const t1 = s / steps;
-        const t2 = (s + 1) / steps;
-        const [x1, y1] = bezier3(t1, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
-        const [x2, y2] = bezier3(t2, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
-        const width = (7 - t1 * 5.5) * breathe;
-
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = `rgba(30, 30, 60, ${0.85 - t1 * 0.4})`;
-        ctx.lineWidth = width;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-      }
-
-      // Suction cups (lighter circles on tentacles)
-      for (let s = 2; s < steps - 2; s += 3) {
-        const tf = s / steps;
-        const [sx, sy] = bezier3(tf, startX, startY, cp1x, cp1y, cp2x, cp2y, endX, endY);
-        const r = (2.5 - tf * 1.5) * breathe;
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(80, 80, 120, ${0.3 - tf * 0.15})`;
-        ctx.fill();
-      }
-
-      // Tentacle tip curl
-      const tipCurl = Math.sin(t * 0.003 + i) * 5;
-      ctx.beginPath();
-      ctx.arc(endX + tipCurl, endY, 2 * breathe, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(30, 30, 60, 0.5)';
-      ctx.fill();
-    }
-
-    // --- Head ---
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, headW, headH, 0, 0, Math.PI * 2);
-    const headGrad = ctx.createRadialGradient(cx - headW * 0.3, cy - headH * 0.3, 0, cx, cy, headH);
-    headGrad.addColorStop(0, '#2d2b55');
-    headGrad.addColorStop(0.6, '#1e1b4b');
-    headGrad.addColorStop(1, '#0f0a2e');
-    ctx.fillStyle = headGrad;
-    ctx.fill();
-
-    // Head highlight
-    ctx.beginPath();
-    ctx.ellipse(cx - headW * 0.25, cy - headH * 0.35, headW * 0.25, headH * 0.2, -0.3, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    ctx.fill();
-
-    // --- Glasses ---
-    const glassY = cy - headH * 0.05;
-    const glassR = headW * 0.28;
-    const glassGap = headW * 0.55;
-    // Frames
-    ctx.strokeStyle = '#374151';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(cx - glassGap / 2, glassY, glassR, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx + glassGap / 2, glassY, glassR, 0, Math.PI * 2);
-    ctx.stroke();
-    // Bridge
-    ctx.beginPath();
-    ctx.moveTo(cx - glassGap / 2 + glassR, glassY);
-    ctx.lineTo(cx + glassGap / 2 - glassR, glassY);
-    ctx.stroke();
-    // Lens shine
-    ctx.beginPath();
-    ctx.arc(cx - glassGap / 2, glassY, glassR - 1, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + glassGap / 2, glassY, glassR - 1, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fill();
-
-    // --- Eyes (inside glasses) ---
-    const pupilShift = Math.sin(t * 0.001) * 1.5;
-    // Left eye
-    ctx.beginPath();
-    ctx.arc(cx - glassGap / 2 + pupilShift, glassY, glassR * 0.45, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx - glassGap / 2 + pupilShift, glassY, glassR * 0.25, 0, Math.PI * 2);
-    ctx.fillStyle = '#1e1b4b';
-    ctx.fill();
-    // Right eye
-    ctx.beginPath();
-    ctx.arc(cx + glassGap / 2 + pupilShift, glassY, glassR * 0.45, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + glassGap / 2 + pupilShift, glassY, glassR * 0.25, 0, Math.PI * 2);
-    ctx.fillStyle = '#1e1b4b';
-    ctx.fill();
-
-    // --- Capability bubbles (orbit around octopus) ---
-    const n = hands.length;
-    const orbitR = size * 0.36;
-    const bubbleR = size * 0.045;
-    for (let i = 0; i < n; i++) {
-      const hand = hands[i];
-      const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
-      const wobble = Math.sin(t * 0.002 + i * 1.5) * 4;
-      const bx = cx + Math.cos(angle) * (orbitR + wobble);
-      const by = cy + Math.sin(angle) * (orbitR + wobble) * 0.85;
-
-      // Bubble
-      ctx.beginPath();
-      ctx.arc(bx, by, bubbleR, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.strokeStyle = kindColor(hand.kind);
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      // Shadow under bubble
-      ctx.beginPath();
-      ctx.ellipse(bx, by + bubbleR + 3, bubbleR * 0.6, 2, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.04)';
-      ctx.fill();
-
-      // Icon inside bubble
-      ctx.font = `${bubbleR * 0.9}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const icon = hand.capabilities.length > 0 ? capIcon(hand.capabilities[0]) : '⚙️';
-      ctx.fillText(icon, bx, by + 1);
-
-      // Label below bubble
-      ctx.fillStyle = '#374151';
-      ctx.font = `bold 10px system-ui, sans-serif`;
-      ctx.textBaseline = 'top';
-      ctx.fillText(hand.displayName || hand.id, bx, by + bubbleR + 8);
-      ctx.fillStyle = '#9ca3af';
-      ctx.font = `9px system-ui, sans-serif`;
-      ctx.fillText(`${hand.capabilities.length} tools`, bx, by + bubbleR + 21);
-
-      // Dotted connection line from head to bubble
-      const lineStartX = cx + Math.cos(angle) * (headW + 5);
-      const lineStartY = cy + Math.sin(angle) * (headH + 5);
-      const lineEndX = bx - Math.cos(angle) * (bubbleR + 3);
-      const lineEndY = by - Math.sin(angle) * (bubbleR + 3) * 0.85;
-      ctx.beginPath();
-      ctx.setLineDash([3, 4]);
-      ctx.moveTo(lineStartX, lineStartY);
-      ctx.lineTo(lineEndX, lineEndY);
-      ctx.strokeStyle = `${kindColor(hand.kind)}66`;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Model label under octopus
-    ctx.fillStyle = '#6366f1';
-    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(shortModel(brain.model), cx, cy + headH + size * 0.06);
-
-  }, [brain, hands, size]);
-
-  useEffect(() => {
-    let running = true;
-    const loop = (timestamp: number) => {
-      if (!running) return;
-      draw(timestamp);
-      animRef.current = requestAnimationFrame(loop);
-    };
-    animRef.current = requestAnimationFrame(loop);
-    return () => { running = false; cancelAnimationFrame(animRef.current); };
-  }, [draw]);
+  const n = hands.length;
 
   return (
-    <div className={`inline-flex flex-col items-center gap-2 ${className ?? ''}`}>
-      <canvas
-        ref={canvasRef}
-        style={{ width: size, height: size }}
-      />
+    <div className={`octopus-container ${className ?? ''}`} style={{ width: size, height: size, position: 'relative' }}>
+      <style>{octopusStyles}</style>
+
+      {/* SVG octopus mascot (center) */}
+      <div className="octopus-body" style={{ position: 'absolute', left: '50%', top: '38%', transform: 'translate(-50%, -50%)' }}>
+        <svg width={size * 0.35} height={size * 0.5} viewBox="0 0 140 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+          {/* Head */}
+          <ellipse cx="70" cy="55" rx="45" ry="52" fill="url(#headGrad)" className="octo-head" />
+          <ellipse cx="55" cy="38" rx="12" ry="8" fill="rgba(255,255,255,0.08)" transform="rotate(-15 55 38)" />
+
+          {/* Glasses */}
+          <circle cx="55" cy="52" r="12" stroke="#374151" strokeWidth="2.5" fill="rgba(255,255,255,0.05)" />
+          <circle cx="85" cy="52" r="12" stroke="#374151" strokeWidth="2.5" fill="rgba(255,255,255,0.05)" />
+          <line x1="67" y1="52" x2="73" y2="52" stroke="#374151" strokeWidth="2.5" />
+          <line x1="43" y1="52" x2="38" y2="48" stroke="#374151" strokeWidth="2" strokeLinecap="round" />
+          <line x1="97" y1="52" x2="102" y2="48" stroke="#374151" strokeWidth="2" strokeLinecap="round" />
+
+          {/* Eyes */}
+          <circle cx="55" cy="52" r="5" fill="white" />
+          <circle cx="85" cy="52" r="5" fill="white" />
+          <circle cx="56" cy="52" r="2.8" fill="#1e1b4b" className="octo-pupil" />
+          <circle cx="86" cy="52" r="2.8" fill="#1e1b4b" className="octo-pupil" />
+          <circle cx="57" cy="50.5" r="1" fill="white" />
+          <circle cx="87" cy="50.5" r="1" fill="white" />
+
+          {/* Tentacles (8, with organic curves) */}
+          <path d="M35 95 Q25 130 20 160 Q18 175 25 180 Q30 172 28 155 Q32 125 40 100" fill="#1e1b4b" opacity="0.9" className="octo-tentacle t1" />
+          <path d="M42 100 Q35 135 33 165 Q32 180 38 182 Q42 174 40 158 Q42 128 48 105" fill="#1a1845" opacity="0.85" className="octo-tentacle t2" />
+          <path d="M50 103 Q47 140 48 168 Q48 184 54 185 Q57 177 55 162 Q54 132 56 108" fill="#1e1b4b" opacity="0.9" className="octo-tentacle t3" />
+          <path d="M58 105 Q58 142 60 170 Q61 186 67 186 Q69 178 67 164 Q66 134 64 108" fill="#1a1845" opacity="0.85" className="octo-tentacle t4" />
+          <path d="M72 105 Q74 142 76 170 Q77 186 83 185 Q84 177 82 163 Q80 133 78 108" fill="#1e1b4b" opacity="0.9" className="octo-tentacle t5" />
+          <path d="M84 103 Q88 138 90 165 Q91 182 97 180 Q99 172 96 157 Q93 128 90 105" fill="#1a1845" opacity="0.85" className="octo-tentacle t6" />
+          <path d="M94 100 Q100 132 105 160 Q107 176 113 173 Q114 165 110 150 Q104 122 98 98" fill="#1e1b4b" opacity="0.9" className="octo-tentacle t7" />
+          <path d="M102 95 Q112 125 118 152 Q121 168 127 164 Q127 156 122 142 Q114 115 106 93" fill="#1a1845" opacity="0.85" className="octo-tentacle t8" />
+
+          {/* Suction cups on tentacles */}
+          <circle cx="24" cy="150" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="26" cy="140" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="36" cy="148" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="38" cy="138" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="50" cy="150" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="52" cy="140" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="62" cy="152" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="64" cy="142" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="78" cy="152" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="80" cy="142" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="92" cy="148" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="94" cy="138" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="107" cy="145" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="109" cy="135" r="2.2" fill="rgba(100,100,140,0.25)" />
+          <circle cx="120" cy="140" r="2" fill="rgba(100,100,140,0.3)" />
+          <circle cx="118" cy="130" r="2.2" fill="rgba(100,100,140,0.25)" />
+
+          <defs>
+            <radialGradient id="headGrad" cx="0.4" cy="0.35" r="0.65">
+              <stop offset="0%" stopColor="#2d2b55" />
+              <stop offset="60%" stopColor="#1e1b4b" />
+              <stop offset="100%" stopColor="#0f0a2e" />
+            </radialGradient>
+          </defs>
+        </svg>
+      </div>
+
+      {/* Model label */}
+      <div
+        className="text-center"
+        style={{
+          position: 'absolute', left: '50%', bottom: size * 0.08,
+          transform: 'translateX(-50%)',
+          fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+          fontSize: 12, fontWeight: 600, color: '#6366f1',
+        }}
+      >
+        {shortModel(brain.model)}
+      </div>
+
+      {/* Capability bubbles orbiting */}
+      {hands.map((hand, i) => {
+        const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
+        const orbitR = size * 0.38;
+        const bx = 50 + Math.cos(angle) * 38;
+        const by = 42 + Math.sin(angle) * 34;
+        const color = kindColor(hand.kind);
+        const icon = hand.capabilities.length > 0 ? capIcon(hand.capabilities[0]) : '⚙️';
+
+        return (
+          <div
+            key={hand.id}
+            className="octo-bubble"
+            style={{
+              position: 'absolute',
+              left: `${bx}%`,
+              top: `${by}%`,
+              transform: 'translate(-50%, -50%)',
+              animationDelay: `${i * 0.3}s`,
+            }}
+          >
+            <div
+              className="octo-bubble-circle"
+              style={{ borderColor: color }}
+            >
+              <span style={{ fontSize: 18 }}>{icon}</span>
+            </div>
+            <div className="octo-bubble-label">{hand.displayName || hand.id}</div>
+            <div className="octo-bubble-count">{hand.capabilities.length} tools</div>
+          </div>
+        );
+      })}
+
+      {/* Skills below */}
       {skills && skills.length > 0 && (
-        <div className="flex flex-wrap gap-1 justify-center max-w-xs">
+        <div className="flex flex-wrap gap-1 justify-center" style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}>
           {skills.map((s) => (
             <Tooltip key={s.name} content={s.description} mini>
               <Tag size="small" color="purple">{s.name}</Tag>
@@ -314,24 +177,81 @@ export function OctopusView({ data, size = 450, className }: OctopusViewProps) {
   );
 }
 
-// Cubic bezier point
-function bezier3(
-  t: number,
-  x0: number, y0: number,
-  x1: number, y1: number,
-  x2: number, y2: number,
-  x3: number, y3: number,
-): [number, number] {
-  const u = 1 - t;
-  const tt = t * t;
-  const uu = u * u;
-  const uuu = uu * u;
-  const ttt = tt * t;
-  return [
-    uuu * x0 + 3 * uu * t * x1 + 3 * u * tt * x2 + ttt * x3,
-    uuu * y0 + 3 * uu * t * y1 + 3 * u * tt * y2 + ttt * y3,
-  ];
-}
+const octopusStyles = `
+  .octopus-container { overflow: visible; }
+
+  .octo-head {
+    animation: octo-breathe 3s ease-in-out infinite;
+    transform-origin: center 55px;
+  }
+  @keyframes octo-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+  }
+
+  .octo-pupil {
+    animation: octo-look 4s ease-in-out infinite;
+  }
+  @keyframes octo-look {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(1px); }
+    75% { transform: translateX(-1px); }
+  }
+
+  .octo-tentacle {
+    animation: octo-wave 2.5s ease-in-out infinite;
+    transform-origin: top center;
+  }
+  .octo-tentacle.t1 { animation-delay: 0s; }
+  .octo-tentacle.t2 { animation-delay: 0.15s; }
+  .octo-tentacle.t3 { animation-delay: 0.3s; }
+  .octo-tentacle.t4 { animation-delay: 0.45s; }
+  .octo-tentacle.t5 { animation-delay: 0.6s; }
+  .octo-tentacle.t6 { animation-delay: 0.75s; }
+  .octo-tentacle.t7 { animation-delay: 0.9s; }
+  .octo-tentacle.t8 { animation-delay: 1.05s; }
+  @keyframes octo-wave {
+    0%, 100% { transform: rotate(0deg) scaleY(1); }
+    25% { transform: rotate(2deg) scaleY(1.02); }
+    75% { transform: rotate(-2deg) scaleY(0.98); }
+  }
+
+  .octo-bubble {
+    animation: octo-float 3s ease-in-out infinite;
+  }
+  @keyframes octo-float {
+    0%, 100% { transform: translate(-50%, -50%) translateY(0); }
+    50% { transform: translate(-50%, -50%) translateY(-6px); }
+  }
+
+  .octo-bubble-circle {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: white;
+    border: 2.5px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin: 0 auto;
+  }
+
+  .octo-bubble-label {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #374151;
+    margin-top: 6px;
+    white-space: nowrap;
+  }
+
+  .octo-bubble-count {
+    text-align: center;
+    font-size: 9px;
+    color: #9ca3af;
+  }
+`;
 
 function shortModel(model: string): string {
   const parts = model.split('/');
@@ -341,7 +261,7 @@ function shortModel(model: string): string {
 }
 
 // ============================================================
-// OctopusPreview — wizard use (shows octopus growing as you add Hands)
+// OctopusPreview — wizard live preview
 // ============================================================
 
 export interface OctopusPreviewProps {
@@ -364,5 +284,5 @@ export function OctopusPreview({ model, hands }: OctopusPreviewProps) {
       ],
     })),
   };
-  return <OctopusView data={data} size={320} />;
+  return <OctopusView data={data} size={300} />;
 }
