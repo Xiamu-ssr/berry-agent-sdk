@@ -33,10 +33,10 @@ export function OctopusWizard({ existingIds, adminMode, onClose, onCreated }: Oc
   const createAgent = useCreateAgent();
   const ensureAdmin = useEnsureAdminAgent();
 
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(adminMode ? 1 : 0);
 
-  // Step 0: Identity
-  const [agentId, setAgentId] = useState(adminMode ? 'berry-admin' : '');
+  // Step 0: Identity — auto-generate, user can override
+  const [agentId, setAgentId] = useState(adminMode ? 'berry-admin' : `agent-${Math.random().toString(36).slice(2, 7)}`);
 
   // Step 1: Brain
   const [model, setModel] = useState('');
